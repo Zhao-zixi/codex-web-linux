@@ -2,6 +2,7 @@ import { FolderOpen } from "lucide-react"
 import type { EditorPreset } from "../../shared/protocol"
 import { EDITOR_PRESETS, getEditorPresetLabel } from "../../shared/editor-presets"
 import type { TerminalPreset } from "../../shared/terminal-presets"
+import { publicAssetUrl } from "../lib/publicAsset"
 
 export const EDITOR_OPTIONS: Array<{ value: EditorPreset; label: string }> = EDITOR_PRESETS.map((value) => ({
   value,
@@ -9,18 +10,18 @@ export const EDITOR_OPTIONS: Array<{ value: EditorPreset; label: string }> = EDI
 }))
 
 const ICON_SRC: Record<EditorPreset | "finder" | "preview" | "defaultApp" | "terminal" | "iterm" | "ghostty", string> = {
-  cursor: "/editor-icons/cursor.png",
-  vscode: "/editor-icons/vscode.png",
-  zed: "/editor-icons/zed.png",
-  defaultApp: "/editor-icons/default-app.png",
-  finder: "/editor-icons/finder.png",
-  preview: "/editor-icons/preview.png",
-  xcode: "/editor-icons/xcode.png",
-  terminal: "/editor-icons/terminal.png",
-  iterm: "/editor-icons/iterm.png",
-  ghostty: "/editor-icons/ghostty.png",
-  windsurf: "/editor-icons/windsurf.png",
-  custom: "/editor-icons/custom.png",
+  cursor: publicAssetUrl("/editor-icons/cursor.png"),
+  vscode: publicAssetUrl("/editor-icons/vscode.png"),
+  zed: publicAssetUrl("/editor-icons/zed.png"),
+  defaultApp: publicAssetUrl("/editor-icons/default-app.png"),
+  finder: publicAssetUrl("/editor-icons/finder.png"),
+  preview: publicAssetUrl("/editor-icons/preview.png"),
+  xcode: publicAssetUrl("/editor-icons/xcode.png"),
+  terminal: publicAssetUrl("/editor-icons/terminal.png"),
+  iterm: publicAssetUrl("/editor-icons/iterm.png"),
+  ghostty: publicAssetUrl("/editor-icons/ghostty.png"),
+  windsurf: publicAssetUrl("/editor-icons/windsurf.png"),
+  custom: publicAssetUrl("/editor-icons/custom.png"),
 }
 
 function AppIcon({ src, className }: { src: string; className?: string }) {

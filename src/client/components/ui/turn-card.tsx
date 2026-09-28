@@ -73,17 +73,16 @@ export function TurnCardMessage({
       type="button"
       aria-label={label}
       onClick={onSelect}
-      // Deliberately no display utility here: `line-clamp-*` works by setting
-      // `display: -webkit-box`, so adding `block` would race it in the
-      // stylesheet and could unclamp the text.
       className={cn(
-        className,
         TURN_CARD_ROW_INSET,
-        "w-full cursor-pointer rounded text-left transition-colors",
+        "block w-full cursor-pointer rounded text-left transition-colors",
         "hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
       )}
     >
-      {children}
+      {/* The caller's classes go on an inner span, not the button. A button
+          lays out its text in an anonymous inner box, so `line-clamp-*` on the
+          button itself does not clamp anything and long text runs unclipped. */}
+      <span className={className}>{children}</span>
     </button>
   )
 }

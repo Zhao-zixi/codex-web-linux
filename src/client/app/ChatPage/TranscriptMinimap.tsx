@@ -91,10 +91,10 @@ const CARD_GAP_PX = 16
  * Roughly how tall the card gets, used only to keep it inside the pane.
  *
  * Not a cap on the card itself: its height is already bounded by the line
- * clamps (4 lines per message, plus one meta row), and capping it as well
+ * clamps (5 lines per message, plus one meta row), and capping it as well
  * only risks shearing off the bottom padding when the content runs long.
  */
-const CARD_ESTIMATED_HEIGHT_PX = 212
+const CARD_ESTIMATED_HEIGHT_PX = 252
 
 interface TranscriptMinimapProps {
   turns: TranscriptTurn[]
@@ -395,7 +395,7 @@ export const TranscriptMinimap = memo(function TranscriptMinimap({
               which is this card, applied to the other list of turns you scan. */}
           <div className="space-y-1">
             <TurnCardMessage
-              className="line-clamp-4 text-sm font-medium text-popover-foreground"
+              className="line-clamp-5 text-sm font-medium text-popover-foreground"
               label="Jump to this prompt"
               onSelect={() => handleSelect(activeTurn, "prompt")}
             >
@@ -410,7 +410,7 @@ export const TranscriptMinimap = memo(function TranscriptMinimap({
               // slot and it's the turn's outcome, so it lands where the turn
               // ended — which is exactly where you'd go to read the failure.
               <TurnCardMessage
-                className="line-clamp-4 text-sm text-destructive"
+                className="line-clamp-5 text-sm text-destructive"
                 label="Jump to this failure"
                 onSelect={() => handleSelect(activeTurn, "reply")}
               >
@@ -418,7 +418,7 @@ export const TranscriptMinimap = memo(function TranscriptMinimap({
               </TurnCardMessage>
             ) : activeTurn.response ? (
               <TurnCardMessage
-                className="line-clamp-4 text-sm text-muted-foreground"
+                className="line-clamp-5 text-sm text-muted-foreground"
                 label="Jump to this reply"
                 onSelect={() => handleSelect(activeTurn, "reply")}
               >

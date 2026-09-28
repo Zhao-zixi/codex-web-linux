@@ -132,6 +132,7 @@ export function resolveCommandPath(command: string, homeDir = homedir()): string
 }
 
 const SHELL_PATH_MARKER = "__KANNA_SHELL_PATH__"
+export const SHELL_ENV_IMPORTED_ENV_VAR = "KANNA_SHELL_ENV_IMPORTED"
 const SHELL_PATH_TIMEOUT_MS = 5_000
 
 /**
@@ -164,6 +165,10 @@ export function parseShellPathOutput(output: string) {
  */
 export async function inheritShellPath() {
   if (process.platform === "win32") return
+  // The Mac app already started this process with the whole login-shell
+  // environment (macos/Kanna/ServerAgent.swift); a heavy ~/.zshrc costs
+  // seconds, so don't pay for it twice.
+  if (process.env[SHELL_ENV_IMPORTED_ENV_VAR] === "1") return
   const shell = process.env.SHELL || (process.platform === "darwin" ? "/bin/zsh" : "/bin/sh")
   const script = `echo ${SHELL_PATH_MARKER}; printenv PATH; echo ${SHELL_PATH_MARKER}`
   const output = await new Promise<string>((resolve) => {

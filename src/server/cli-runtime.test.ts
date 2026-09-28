@@ -876,3 +876,67 @@ describe("runCli single-instance guard + hosted open", () => {
   })
 })
 
+describe("runCli with the Mac app", () => {
+  function withMacApp(installed: boolean) {
+    const opened: string[] = []
+    return {
+      opened,
+      openInMacApp: async (localUrl: string) => {
+        opened.push(localUrl)
+        return installed
+      },
+    }
+  }
+
+  test("installed app gets the local URL and no browser opens, paired or not", async () => {
+    const app = withMacApp(true)
+    const fake = createFakeCloudRuntime()
+    let capturedOnTunnelUp: ((kind: "started" | "recovered") => void) | undefined
+    fake.runtime.start = (args: { localUrl: string; onTunnelUp?: (kind: "started" | "recovered") => void }) => {
+      capturedOnTunnelUp = args.onTunnelUp
+    }
+    const { calls, deps } = createDeps({
+      openInMacApp: app.openInMacApp,
+      readCloudIdentityImpl: async () => ({ ...CLOUD_IDENTITY }),
+      createCloudRuntimeImpl: () => fake.runtime,
+    })
+
+    const result = await runCli([], deps)
+    capturedOnTunnelUp?.("started")
+
+    expect(app.opened).toEqual(["http://localhost:3210"])
+    expect(calls.openUrl).toEqual([])
+    if (result.kind === "started") await result.stop()
+  })
+
+  test("already running → the app, not the browser", async () => {
+    const app = withMacApp(true)
+    const { calls, deps } = createDeps({
+      openInMacApp: app.openInMacApp,
+      probeExistingInstanceImpl: async () => ({ localUrl: "http://localhost:3210", port: 3210 }),
+    })
+
+    await runCli([], deps)
+
+    expect(app.opened).toEqual(["http://localhost:3210"])
+    expect(calls.openUrl).toEqual([])
+  })
+
+  test("no app installed → browser as before", async () => {
+    const app = withMacApp(false)
+    const { calls, deps } = createDeps({ openInMacApp: app.openInMacApp })
+    const result = await runCli([], deps)
+    expect(calls.openUrl).toEqual(["http://localhost:3210"])
+    if (result.kind === "started") await result.stop()
+  })
+
+  test("--no-open (how the app starts its own server) opens nothing", async () => {
+    const app = withMacApp(true)
+    const { calls, deps } = createDeps({ openInMacApp: app.openInMacApp })
+    const result = await runCli(["--no-open"], deps)
+    expect(app.opened).toEqual([])
+    expect(calls.openUrl).toEqual([])
+    if (result.kind === "started") await result.stop()
+  })
+})
+

@@ -13,6 +13,7 @@ import {
   sanitizeRestartArgv,
   shouldRestartCliProcess,
 } from "./restart"
+import { exitWithParent } from "./mac-app"
 
 interface ChildExit {
   code: number | null
@@ -41,6 +42,8 @@ function spawnChild(argv: string[]) {
         ...(skipUpdateThisChild ? { KANNA_DISABLE_SELF_UPDATE: "1" } : {}),
       },
     })
+
+    currentChild = child
 
     const forwardSignal = (signal: NodeJS.Signals) => {
       if (child.exitCode !== null) return
@@ -71,6 +74,16 @@ function spawnChild(argv: string[]) {
   })
 }
 
+let currentChild: ReturnType<typeof spawn> | null = null
+let orphaned = false
+// Started by the Mac app, which then crashed: stop the server cleanly and
+// don't restart it.
+exitWithParent(() => {
+  if (orphaned) return
+  orphaned = true
+  if (currentChild && currentChild.exitCode === null) currentChild.kill("SIGTERM")
+})
+
 const argv = process.argv.slice(2)
 // The original argv only applies to the first spawn: a `pair <code>` launch
 // must not replay the (single-use) pairing on update restarts.
@@ -81,6 +94,7 @@ let lastStartupUpdateRestart = false
 
 while (true) {
   const result = await spawnChild(currentArgv)
+  if (orphaned) process.exit(0)
   currentArgv = sanitizeRestartArgv(currentArgv)
   if (shouldRestartCliProcess(result.code, result.signal)) {
     const isStartupUpdate = result.signal === null && result.code === CLI_STARTUP_UPDATE_RESTART_EXIT_CODE

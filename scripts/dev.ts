@@ -5,6 +5,7 @@ import { LOG_PREFIX } from "../src/shared/branding"
 import { parseDevArgs } from "../src/shared/dev-ports"
 import { isShareEnabled, isTokenShareMode } from "../src/shared/share"
 import { logShareDetails, startShareTunnel } from "../src/server/share"
+import { exitWithParent } from "../src/server/mac-app"
 
 const cwd = process.cwd()
 const forwardedArgs = process.argv.slice(2)
@@ -98,6 +99,9 @@ process.on("SIGINT", () => {
 process.on("SIGTERM", () => {
   shutdown(0)
 })
+
+// Started by the Mac app in Development mode, which then crashed.
+exitWithParent(() => shutdown(0))
 
 console.log(`${LOG_PREFIX} dev client: http://localhost:${clientPort}`)
 console.log(`${LOG_PREFIX} dev server: http://localhost:${serverPort}`)

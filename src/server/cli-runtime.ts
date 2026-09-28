@@ -74,6 +74,8 @@ export interface CliRuntimeDeps {
   installVersion: (packageName: string, version: string) => UpdateInstallAttemptResult
   installNightly?: () => Promise<NightlyInstallResult>
   openUrl: (url: string) => void
+  /** Show the local URL in the Mac app; false when it isn't installed (see mac-app.ts). */
+  openInMacApp?: (localUrl: string) => Promise<boolean>
   log: (message: string) => void
   warn: (message: string) => void
   renderShareQr?: (url: string) => Promise<string>
@@ -409,6 +411,7 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
     return { kind: "exited", code: 0 }
   }
   const runOptions = parsedArgs.options
+  const openInMacApp = deps.openInMacApp ?? (async () => false)
 
   if (compareVersions(deps.bunVersion, MINIMUM_BUN_VERSION) < 0) {
     deps.warn(`${LOG_PREFIX} Bun ${MINIMUM_BUN_VERSION}+ is required for the embedded terminal. Current Bun: ${deps.bunVersion}`)
@@ -445,7 +448,7 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
     if (hostedUrl) {
       deps.log(`${LOG_PREFIX} if the hosted URL shows offline, restart the running ${CLI_COMMAND} to pick up the pairing`)
     }
-    if (runOptions.openBrowser && !suppressOpenBrowser) {
+    if (runOptions.openBrowser && !suppressOpenBrowser && !(await openInMacApp(existing.localUrl))) {
       deps.openUrl(hostedUrl ?? existing.localUrl)
     }
     return { kind: "exited", code: 0 }
@@ -489,6 +492,12 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
   deps.log(`${LOG_PREFIX} listening on http://${bindHost}:${port}`)
   deps.log(`${LOG_PREFIX} data dir: ${getDataDirDisplay()}`)
 
+  // With the Mac app installed, a terminal `kanna` shows up in the app rather
+  // than a browser tab. The app loads the local URL, so a paired machine does
+  // not wait for its tunnel either.
+  const wantsOpen = runOptions.openBrowser && !isShareEnabled(runOptions.share) && !suppressOpenBrowser
+  const openedInMacApp = wantsOpen && await openInMacApp(launchUrl)
+
   if (isShareEnabled(runOptions.share)) {
     try {
       const shareTunnel = await (deps.startShareTunnel ?? ((localUrl, shareMode) => startShareTunnel(localUrl, shareMode, {
@@ -520,7 +529,7 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
     // Paired machines open the hosted URL — the one that works from every
     // device — once the tunnel is actually serving (opening it earlier would
     // land on the offline page).
-    const openHostedOnConnect = runOptions.openBrowser && !suppressOpenBrowser
+    const openHostedOnConnect = runOptions.openBrowser && !suppressOpenBrowser && !openedInMacApp
     let openedHosted = false
     runtime.start({
       localUrl: launchUrl,
@@ -539,7 +548,7 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
     deps.log(`${LOG_PREFIX} cloud: waiting for ${runtime.identity.appOrigin} to come online… (disable with \`${CLI_COMMAND} pair --disable\`)`)
   }
 
-  if (runOptions.openBrowser && !isShareEnabled(runOptions.share) && !suppressOpenBrowser && !cloudRuntime) {
+  if (wantsOpen && !openedInMacApp && !cloudRuntime) {
     deps.openUrl(launchUrl)
   }
 

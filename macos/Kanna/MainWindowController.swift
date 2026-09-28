@@ -55,6 +55,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     configuration.websiteDataStore = .default()
     configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
     configuration.preferences.isElementFullscreenEnabled = true
+    HighFrameRate.unlock(configuration.preferences)
     bridge.install(on: configuration)
     configuration.userContentController.addUserScript(WKUserScript(
       source: Self.chromeScript(metrics.css(fullScreen: false)),
@@ -637,6 +638,31 @@ struct ChromeMetrics {
     return """
     {"fullScreen": \(fullScreen), "vars": {"--mac-traffic-lights-inset": "\(Int(inset))px", "--mac-traffic-lights-center": "\(Int(trafficLightsCenter))px", "--mac-window-radius": "\(Int(radius))px"}}
     """
+  }
+}
+
+/// WebKit renders a WKWebView in any app but Safari at 60 fps, even on a
+/// 120 Hz display (WebKit bug 294338), which makes scrolling and typing feel
+/// behind. Safari lifts the cap with an internal WebKit feature; there is no
+/// public switch, so this flips the same one through the private `_features`
+/// list, measured at 61 → 120 fps on macOS 26. It is looked up by name and
+/// skipped if it's gone, so a WebKit that drops it just stays at 60. Not an
+/// option for the Mac App Store, which this app isn't in.
+enum HighFrameRate {
+  static func unlock(_ preferences: WKPreferences) {
+    let featuresSelector = NSSelectorFromString("_features")
+    let setSelector = NSSelectorFromString("_setEnabled:forFeature:")
+    guard WKPreferences.responds(to: featuresSelector),
+          preferences.responds(to: setSelector),
+          let features = (WKPreferences.self as AnyObject).perform(featuresSelector)?
+            .takeUnretainedValue() as? [NSObject],
+          let feature = features.first(where: {
+            ($0.value(forKey: "key") as? String) == "PreferPageRenderingUpdatesNear60FPSEnabled"
+          }),
+          let method = class_getInstanceMethod(WKPreferences.self, setSelector) else { return }
+    // A BOOL argument can't go through perform(_:with:with:); call it typed.
+    typealias SetEnabled = @convention(c) (AnyObject, Selector, Bool, AnyObject) -> Void
+    unsafeBitCast(method_getImplementation(method), to: SetEnabled.self)(preferences, setSelector, false, feature)
   }
 }
 

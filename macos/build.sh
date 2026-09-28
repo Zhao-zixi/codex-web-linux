@@ -94,6 +94,9 @@ rm -rf "$OUT/appcast" "$APP"
 
 # 6. Publish. The versioned DMG goes up before the files that point at it.
 if $PUBLISH; then
+  # The Cloudflare account kanna.sh and the bucket live in; without it, a
+  # login that can see several accounts refuses to pick one.
+  export CLOUDFLARE_ACCOUNT_ID=${CLOUDFLARE_ACCOUNT_ID:-7c389c8055f3e4aba40ec6500c07ff3b}
   for file in "Kanna-$VERSION.dmg" Kanna.dmg appcast.xml; do
     bunx wrangler@4 r2 object put "kanna-releases/mac/$file" --file "$OUT/$file" --remote
   done

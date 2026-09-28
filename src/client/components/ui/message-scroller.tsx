@@ -69,7 +69,14 @@ function MessageScrollerContent({
   return (
     <MessageScrollerPrimitive.Content
       data-slot="message-scroller-content"
-      className={cn("flex h-max min-h-full flex-col", className)}
+      // No `min-h-full` (the registry has it). WebKit re-lays out every
+      // percentage-height element whenever an ancestor lays out, and the
+      // composer resizing itself on each keystroke is such a layout: with
+      // `min-height: 100%` here, every keystroke laid out every message again.
+      // Measured in Safari 26 on a 203-row chat: 149 ms per keystroke with
+      // it, 9 ms without. Containment doesn't stop it. Nothing here needs the
+      // content to fill the viewport; rows stack from the top either way.
+      className={cn("flex h-max flex-col", className)}
       // The registry's trailing spacer, held at zero height.
       //
       // The primitive grows it on every `scrollToElement` by exactly the

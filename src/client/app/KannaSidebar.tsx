@@ -555,7 +555,7 @@ function KannaSidebarImpl({
       )}
 
       {collapsed && isUtilityPageActive && (
-        <div className="hidden md:flex fixed left-0 top-0 h-full z-40 items-start pt-4 pl-5 border-l border-border/0">
+        <div className="hidden md:flex fixed left-0 top-0 h-full z-40 items-start pt-4 pl-5 border-l border-border/0 mac-app:!hidden transition-opacity duration-200 ease-out starting:opacity-0">
           <div className="flex items-center gap-1">
             <Flower className="size-6 text-logo" />
             <Button
@@ -575,12 +575,30 @@ function KannaSidebarImpl({
         className={cn(
           "fixed inset-0 z-50 bg-background dark:bg-card flex flex-col h-[100dvh] select-none",
           "md:relative md:inset-auto md:w-[var(--sidebar-width)] md:mr-0 md:h-[calc(100dvh-16px)] md:my-2 md:ml-2 md:border md:border-border md:rounded-2xl",
+          // Inset 8px from the window's edges, so concentric with its corners.
+          "mac-app:md:rounded-[calc(var(--mac-window-radius)-8px)]",
           isRootActive ? "flex" : "hidden md:flex",
-          collapsed && "md:hidden"
+          // Collapsing slides the card out by its own margin: at -width it sits
+          // just off the left edge and takes no room, so the chat widens in
+          // the same frames it slides, and the card never changes width, so its
+          // contents never reflow. A drawer curve, quicker out than in.
+          // visibility rides along: visible for the slide, hidden once gone.
+          "md:transition-[margin-left,visibility] md:duration-300 md:ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none",
+          collapsed && "md:!ml-[calc(var(--sidebar-width)*-1)] md:!duration-[240ms] md:invisible"
         )}
+        inert={collapsed}
         style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
       >
-        <div className="px-2.5 h-[64px] md:h-auto md:py-1 border-b grid grid-cols-[84px_minmax(0,1fr)_84px] items-center md:pl-3 md:pr-1 md:flex md:justify-between">
+        {/* In the Mac app this row is the window's title bar: it drags the
+            window, has no divider under it (a title bar runs into the
+            content), and its content centers on the traffic lights. The card
+            starts 9px down (8px margin, 1px border), so a center C needs a
+            height of 2 × (C − 9). The traffic lights and the sidebar toggle
+            (below) take the left end. */}
+        <div
+          data-window-drag
+          className="px-2.5 h-[64px] md:h-auto md:py-1 border-b grid grid-cols-[84px_minmax(0,1fr)_84px] items-center md:pl-3 md:pr-1 md:flex md:justify-between mac-app:md:h-[calc(var(--mac-traffic-lights-center)*2-18px)] mac-app:md:border-b-0 mac-app:md:py-0 mac-app:md:pl-[calc(var(--mac-traffic-lights-inset)+27px)]"
+        >
           <div className="md:hidden flex">
             <Button
               variant="ghost"
@@ -595,7 +613,7 @@ function KannaSidebarImpl({
               <Settings className="h-5 w-5" />
             </Button>
           </div>
-          <div className="flex items-center justify-self-center gap-2 md:justify-self-auto">
+          <div className="flex items-center justify-self-center gap-2 md:justify-self-auto mac-app:md:hidden">
             <button
               type="button"
               onClick={onCollapse}
@@ -618,7 +636,9 @@ function KannaSidebarImpl({
               {APP_NAME}
             </button>
           </div>
-          <div className="flex items-center justify-self-end md:justify-self-auto">
+          {/* In the app the flower group is hidden, which leaves this the
+              row's only item; justify-between would put it at the start. */}
+          <div className="flex items-center justify-self-end md:justify-self-auto mac-app:md:ml-auto">
             {!newSidebarEnabled ? (
               <Button
                 variant="ghost"
@@ -655,10 +675,14 @@ function KannaSidebarImpl({
             ) : null}
             {showDevBadge ? (
               <span
-                className="mr-1 hidden md:inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] font-bold tracking-wider text-muted-foreground"
+                className="mr-1 hidden md:inline-flex h-5 items-center rounded-full border border-border bg-muted px-2 text-[11px] font-bold tracking-wider text-muted-foreground"
                 title="Development build"
               >
-                DEV
+                {/* All caps sit above the middle of a line box, and tracking
+                    adds space after the last letter too. Trimming the box to
+                    the cap height and taking the trailing tracking back
+                    centers the word both ways. */}
+                <span className="block leading-none -mr-[0.05em] [text-box:trim-both_cap_alphabetic]">DEV</span>
               </span>
             ) : showUpdateButton ? (
               <Button
@@ -685,7 +709,7 @@ function KannaSidebarImpl({
                 variant="ghost"
                 size="icon"
                 onClick={() => openCommandPalette("add-project")}
-                className="hidden md:inline-flex h-10 w-auto rounded-lg px-1.5 pl-2 hover:!border-border/0"
+                className="hidden md:inline-flex h-10 w-auto rounded-lg px-1.5 pl-2 hover:!border-border/0 mac-app:md:h-8"
                 title="Add project"
               >
                 <Plus className="size-4" />
@@ -696,7 +720,7 @@ function KannaSidebarImpl({
               size="icon"
               onClick={newSidebarEnabled ? () => openCommandPalette() : () => navigate("/home")}
               className={cn(
-                "hidden md:inline-flex h-10 w-auto rounded-lg pl-1.5 pr-3 hover:!border-border/0",
+                "hidden md:inline-flex h-10 w-auto rounded-lg pl-1.5 pr-3 hover:!border-border/0 mac-app:md:h-8",
                 !newSidebarEnabled && "pl-2"
               )}
               title={newSidebarEnabled ? "Search" : "New project"}
@@ -714,14 +738,16 @@ function KannaSidebarImpl({
             touchAction: "pan-y",
           }}
         >
-          <div className="p-[7px]">
+          {/* The app's title bar has no divider, so the New Chat block sits
+              tighter under it: 4px off the top, all 8px off the bottom. */}
+          <div className="p-[7px] mac-app:md:pt-[3px]">
             {/* The focus row joins this block rather than sitting below it, so
                 it inherits the same width, padding and row rhythm as the
                 buttons — which is the whole of its treatment. It leads the
                 block, and the block leads both views, so focus mode is the
                 first thing the sidebar says either way. */}
             {newSidebarEnabled || focusedProjectGroup ? (
-              <div className="flex flex-col gap-[1px] pb-2">
+              <div className="flex flex-col gap-[1px] pb-2 mac-app:md:pb-0">
                 {focusedProjectGroup ? (
                   <FocusModePill
                     projectTitle={focusedProjectGroup.title}
@@ -946,6 +972,21 @@ function KannaSidebarImpl({
           }}
         />
       </div>
+
+      {/* The Mac app's sidebar toggle: one button pinned beside the traffic
+          lights, so it is the same size in the same spot whether the sidebar
+          is open (collapse) or closed (expand). The sidebar header and the
+          chat navbar leave room for it. After the card, so it stacks above
+          it; dialogs portal in later and stack above both. */}
+      <Button
+        variant="ghost"
+        size="icon"
+        onClick={collapsed ? onExpand : onCollapse}
+        title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+        className="hidden mac-app:md:inline-flex fixed z-50 size-7 rounded-lg text-muted-foreground hover:!border-border/0 left-[var(--mac-traffic-lights-inset)] top-[calc(var(--mac-traffic-lights-center)-14px)]"
+      >
+        <PanelLeft className="size-4" />
+      </Button>
 
       <ArchivedChatsDialog
         open={Boolean(archivedProject)}

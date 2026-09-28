@@ -1,5 +1,11 @@
 @import "tailwindcss";
 @custom-variant dark (&:where(.dark, .dark *));
+/* Inside Kanna for Mac (macos/). The app marks <html> with .kanna-mac-app and
+   sets --mac-window-radius, --mac-traffic-lights-inset and
+   --mac-traffic-lights-center from the real window
+   (macos/Kanna/MainWindowController.swift), so the sidebar can sit under the
+   traffic lights with corners concentric to the window's. */
+@custom-variant mac-app (&:where(.kanna-mac-app, .kanna-mac-app *));
 
 @font-face {
   font-family: "Body";

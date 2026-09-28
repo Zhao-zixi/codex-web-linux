@@ -181,8 +181,12 @@ function ChatNavbarImpl({
 
   return (
     <CardHeader
+      // In the Mac app the navbar's bare background drags the window, and its
+      // row is exactly twice the traffic lights' center tall, so whatever its
+      // controls measure (bordered groups are 32px), they center on the lights.
+      data-window-drag
       className={cn(
-        "absolute top-0 left-0 right-0 z-10 md:pt-[9px] max-md:px-2 md:pl-1 md:pr-2 border-border/0 flex items-center justify-center"
+        "absolute top-0 left-0 right-0 z-10 md:pt-[9px] max-md:px-2 md:pl-1 md:pr-2 border-border/0 flex items-center justify-center mac-app:md:pt-0"
       )}
     >
       {/* Both washes stop at the transcript's scrollbar gutter instead of
@@ -193,8 +197,15 @@ function ChatNavbarImpl({
           they cover nothing but bare background out there anyway. */}
       <div className="absolute inset-y-0 left-0 right-[var(--transcript-scrollbar-w,0px)] z-0 bg-gradient-to-b from-background lg:from-background/0 pointer-events-none"></div>
       <div className="absolute top-0 left-0 right-[var(--transcript-scrollbar-w,0px)] z-0 h-[100px] bg-gradient-to-b from-background via-background/50 to-background/10 md:to-background/0 pointer-events-none block"></div>
-      <div className="relative flex items-center gap-2 w-full">
-        <div className={`md:h-[30px] flex items-center gap-0 flex-shrink-0 border border-border/0 rounded-[9px] ${sidebarCollapsed ? 'px-1.5  border-border' : ''} md:px-[2px]`}>
+      <div className="relative flex items-center gap-2 w-full mac-app:md:h-[calc(var(--mac-traffic-lights-center)*2)]">
+        <div className={cn(
+          "md:h-[30px] flex items-center gap-0 flex-shrink-0 border border-border/0 rounded-[9px] md:px-[2px]",
+          // The app pins its sidebar toggle beside the traffic lights
+          // (KannaSidebar); clear both: 28px toggle + 8px gap, less pl-1.
+          // Its border framed the flower and expand button, which the app
+          // replaces with that toggle.
+          sidebarCollapsed && "px-1.5 border-border mac-app:md:ml-[calc(var(--mac-traffic-lights-inset)+32px)] mac-app:md:border-border/0"
+        )}>
           <Button
             variant="ghost"
             size="icon"
@@ -206,13 +217,14 @@ function ChatNavbarImpl({
           </Button>
           {sidebarCollapsed && (
             <>
-              <div className="hidden md:flex items-center justify-center w-[36px] h-[36px]">
+              {/* Both fade in as the sidebar slides away (KannaSidebar). */}
+              <div className="hidden md:flex items-center justify-center w-[36px] h-[36px] mac-app:md:hidden transition-opacity duration-200 ease-out starting:opacity-0">
                 <Flower className="h-4 w-4 sm:h-5 sm:w-5 text-logo ml-1 hidden md:block" />
               </div>
               <Button
                 variant="ghost"
                 size="icon"
-                className="hidden md:flex  hover:!border-border/0 hover:!bg-transparent"
+                className="hidden md:flex  hover:!border-border/0 hover:!bg-transparent mac-app:md:hidden transition-opacity duration-200 ease-out starting:opacity-0"
                 onClick={onExpandSidebar}
                 title="Expand sidebar"
               >

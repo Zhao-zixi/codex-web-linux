@@ -1,4 +1,5 @@
 import { query } from "@anthropic-ai/claude-agent-sdk"
+import { requireClaudeExecutable } from "./claude-executable"
 import { homedir } from "node:os"
 import OpenAI from "openai"
 import { getDataRootDir } from "../shared/branding"
@@ -98,6 +99,7 @@ export async function runClaudeStructured(args: Omit<StructuredQuickResponseArgs
     prompt: args.prompt,
     options: {
       cwd: args.cwd,
+      pathToClaudeCodeExecutable: await requireClaudeExecutable(),
       // Family alias — the harness resolves it to the latest haiku release.
       model: "haiku",
       tools: [],

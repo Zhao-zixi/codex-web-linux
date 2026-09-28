@@ -10,6 +10,13 @@ import {
   type LlmProviderSnapshot,
   type ProviderAuthSnapshot,
 } from "../shared/types"
+import {
+  claudeCodeMinimumVersion,
+  claudeExecutableOverride,
+  isClaudeVersionSupported,
+  outdatedClaudeMessage,
+  parseClaudeVersion,
+} from "./claude-executable"
 import { compareVersions } from "./cli-runtime"
 import { parseGrokAuthStatus, parseGrokDeviceLogin, parseGrokVersion } from "./grok-cli"
 
@@ -71,9 +78,7 @@ export function stripAnsi(text: string): string {
     .replace(/\x1b[@-_]/g, "")
 }
 
-export function parseClaudeVersion(output: string): string | null {
-  return /(\d+\.\d+\.\d+)/.exec(output)?.[1] ?? null
-}
+export { parseClaudeVersion }
 
 /**
  * Derive a git commit identity from a `gh api user` payload.
@@ -234,6 +239,8 @@ export interface ProviderAuthManagerDeps {
   fetchFn?: typeof fetch
   fetchLatestNpmVersion?: (packageName: string) => Promise<string>
   resolveCommandPath?: (command: string) => string | null
+  /** Oldest Claude Code Kanna runs turns on (default: the Agent SDK's pairing). */
+  claudeMinimumVersion?: string
   onSignedIn?: (service: AuthServiceId) => void
   trackEvent?: (eventName: string, properties?: Record<string, unknown>) => void
   sleep?: (ms: number) => Promise<void>
@@ -407,7 +414,9 @@ export class ProviderAuthManager {
   }
 
   private async probeCliService(service: Exclude<AuthServiceId, "openrouter">) {
-    const binaryPath = this.resolvePath(CLI_BINARIES[service])
+    // The card probes the same `claude` the turns run (claude-executable.ts).
+    const override = service === "claude" ? claudeExecutableOverride() : null
+    const binaryPath = override ?? this.resolvePath(CLI_BINARIES[service])
     if (!binaryPath) {
       this.patchService(service, {
         installed: false,
@@ -448,6 +457,13 @@ export class ProviderAuthManager {
       } else {
         authStatus = result.code === 0 ? "signed_out" : "error"
         statusDetail = result.code === 0 ? null : truncateOutput(result.stderr || result.stdout)
+      }
+      // Turns refuse a CLI older than the SDK's pairing, so the card says so
+      // first and offers the update. A wrapper (the override) is trusted.
+      const minimum = this.deps.claudeMinimumVersion ?? claudeCodeMinimumVersion()
+      if (!override && version && authStatus !== "outdated" && !isClaudeVersionSupported(version, minimum)) {
+        authStatus = "outdated"
+        statusDetail = outdatedClaudeMessage(version, minimum)
       }
     } else if (service === "codex") {
       const result = await this.deps.exec([binaryPath, "login", "status"], { timeoutMs: 20_000 })

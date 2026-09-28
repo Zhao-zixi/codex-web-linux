@@ -30,6 +30,7 @@ import type {
 import { normalizeToolCall } from "../shared/tools"
 import type { ClientCommand } from "../shared/protocol"
 import { AsyncQueue } from "./async-queue"
+import { requireClaudeExecutable } from "./claude-executable"
 import { KannaToolRuntime, KannaToolEventFilter, type KannaToolHost } from "./kanna-tools"
 import { createClaudeKannaTools } from "./kanna-tool-adapters"
 import { EventStore } from "./event-store"
@@ -910,6 +911,8 @@ async function startClaudeSession(args: {
     } satisfies PermissionResult
   }
 
+  // The user's own `claude`, never the SDK's pinned copy (claude-executable.ts).
+  const claudeExecutable = await requireClaudeExecutable()
   const promptQueue = new AsyncQueue<SDKUserMessage>()
   let promptQueueClosed = false
 
@@ -946,7 +949,7 @@ async function startClaudeSession(args: {
       // and an explicit false keeps a user-level settings.json from silently
       // enabling it while the UI shows "Standard".
       settings: { enableWorkflows: true, fastMode: args.serviceTier === "fast" },
-      pathToClaudeCodeExecutable: process.env.CLAUDE_EXECUTABLE?.replace(/^~(?=\/|$)/, homedir()) || undefined,
+      pathToClaudeCodeExecutable: claudeExecutable,
       env: (() => { const { CLAUDECODE: _, ...env } = process.env; return env })(),
     },
   })

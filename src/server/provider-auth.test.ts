@@ -206,6 +206,7 @@ interface HarnessOptions {
   llmProvider?: LlmProviderSnapshot
   fetchLatestNpmVersion?: (pkg: string) => Promise<string>
   platform?: NodeJS.Platform
+  claudeMinimumVersion?: string
 }
 
 function createHarness(options: HarnessOptions = {}) {
@@ -250,6 +251,8 @@ function createHarness(options: HarnessOptions = {}) {
     fetchFn: options.fetchFn ?? ((async () => new Response("{}", { status: 200 })) as unknown as typeof fetch),
     fetchLatestNpmVersion: options.fetchLatestNpmVersion,
     resolveCommandPath: (command) => paths[command] ?? null,
+    // Below the fake CLI's 2.1.218; the floor has its own test.
+    claudeMinimumVersion: options.claudeMinimumVersion ?? "2.1.0",
     onSignedIn: (service) => signedIn.push(service),
     trackEvent: (name) => events.push(name),
     sleep: async () => {},
@@ -377,7 +380,31 @@ describe("ProviderAuthManager probing", () => {
     expect(() => harness.manager.startLogin("claude")).toThrow("too old")
   })
 
-  test("non-forced refresh is TTL-coalesced", async () => {
+  test("a Claude CLI older than the Agent SDK's pairing reads as outdated", async () => {
+    const harness = createHarness({
+      claudeMinimumVersion: "2.1.277",
+      exec: (argv) => {
+        if (argv[0].includes("claude") && argv.join(" ").includes("auth status --json")) {
+          return { code: 0, stdout: JSON.stringify({ loggedIn: true, email: "jake@example.com" }), stderr: "" }
+        }
+        return signedOutExec(argv)
+      },
+    })
+    await harness.manager.refresh({ force: true })
+    const claude = harness.manager.getSnapshot().services.find((s) => s.service === "claude")!
+    expect(claude.authStatus).toBe("outdated")
+    expect(claude.statusDetail).toContain("2.1.218")
+    expect(claude.statusDetail).toContain("2.1.277")
+  })
+
+  test("a Claude CLI at the pairing version is fine", async () => {
+    const harness = createHarness({ claudeMinimumVersion: "2.1.218", exec: signedOutExec })
+    await harness.manager.refresh({ force: true })
+    const claude = harness.manager.getSnapshot().services.find((s) => s.service === "claude")!
+    expect(claude.authStatus).toBe("signed_out")
+  })
+
+    test("non-forced refresh is TTL-coalesced", async () => {
     const harness = createHarness({ exec: signedOutExec })
     await harness.manager.refresh()
     const callsAfterFirst = harness.execCalls.length

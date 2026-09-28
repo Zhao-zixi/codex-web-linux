@@ -113,6 +113,14 @@ interface KannaSidebarProps {
   onOpenChangelog: () => void
 }
 
+/**
+ * The word in the header's DEV / Nightly / UPDATE pills. Caps sit above the
+ * middle of a line box, and tracking adds space after the last letter too, so
+ * the box is trimmed to the cap height and the trailing tracking taken back:
+ * centered both ways in the pill's fixed height.
+ */
+const PILL_WORD = "block leading-none -mr-[0.05em] [text-box:trim-both_cap_alphabetic]"
+
 function KannaSidebarImpl({
   activeChatId,
   connectionStatus,
@@ -678,18 +686,14 @@ function KannaSidebarImpl({
                 className="mr-1 hidden md:inline-flex h-5 items-center rounded-full border border-border bg-muted px-2 text-[11px] font-bold tracking-wider text-muted-foreground"
                 title="Development build"
               >
-                {/* All caps sit above the middle of a line box, and tracking
-                    adds space after the last letter too. Trimming the box to
-                    the cap height and taking the trailing tracking back
-                    centers the word both ways. */}
-                <span className="block leading-none -mr-[0.05em] [text-box:trim-both_cap_alphabetic]">DEV</span>
+                <span className={PILL_WORD}>DEV</span>
               </span>
             ) : showUpdateButton ? (
               <Button
                 variant="outline"
                 size="sm"
                 className={cn(
-                  "hidden md:inline-flex rounded-full !h-auto mr-1 py-0.5 px-2 text-[11px] font-bold tracking-wider",
+                  "hidden md:inline-flex rounded-full !h-5 mr-1 py-0 px-2 text-[11px] font-bold tracking-wider",
                   showNightlyUpdate
                     ? "bg-blue-500/15 border-blue-500/25 text-blue-600 hover:bg-blue-500 hover:text-white hover:border-blue-500 dark:text-blue-400 dark:hover:text-white"
                     : "bg-logo/20 hover:bg-logo text-logo border-logo/20 hover:text-foreground hover:border-logo/20"
@@ -701,7 +705,7 @@ function KannaSidebarImpl({
                   : updateSnapshot?.latestVersion ? `Update to ${updateSnapshot.latestVersion}` : "Update Kanna"}
               >
                 {isUpdating ? <Loader2 className="mr-1.5 h-3 w-3 animate-spin" /> : null}
-                {showNightlyUpdate ? "Nightly" : "UPDATE"}
+                <span className={PILL_WORD}>{showNightlyUpdate ? "Nightly" : "UPDATE"}</span>
               </Button>
             ) : null}
             {newSidebarEnabled ? (

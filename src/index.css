@@ -302,6 +302,42 @@
   }
 }
 
+/*
+ * WebKit (Safari, and the Mac app's WKWebView) only. `font: -apple-system-body`
+ * is a WebKit-only value, so Chrome and Firefox keep everything above.
+ *
+ * The stepped animations above are stepped for Chrome, which composites
+ * them. Core Animation has no stepped timing, so WebKit ticks steps() on the
+ * main thread instead, restyling and laying out the whole page every frame:
+ * with a long chat open, a running chat's shimmer alone makes typing lag.
+ * WebKit gets smooth curves Core Animation runs on its own.
+ *
+ * Safari 26 draws a rotating <svg> at sub-pixel offsets, so spinners drift
+ * side to side as they turn. In WebKit the svg holds still and its shapes turn
+ * around the viewBox center instead; that only repaints the spinner.
+ */
+@supports (font: -apple-system-body) {
+  .kanna-shiny-track,
+  .kanna-shiny-copy,
+  .kanna-table-wave {
+    animation-timing-function: linear;
+  }
+
+  .kanna-ping {
+    animation-timing-function: cubic-bezier(0, 0, 0.2, 1);
+  }
+
+  svg.animate-spin {
+    animation: none;
+  }
+
+  svg.animate-spin > * {
+    transform-box: view-box;
+    transform-origin: 50% 50%;
+    animation: spin 1s linear infinite;
+  }
+}
+
 @layer base {
   * {
     border-color: var(--color-border);

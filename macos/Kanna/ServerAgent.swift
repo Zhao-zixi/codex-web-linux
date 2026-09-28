@@ -22,6 +22,9 @@ final class ServerAgent {
     case running(URL)
     case notInstalled
     case installing(String)
+    /// A custom server (ServerMode.custom) that isn't answering yet. The app
+    /// doesn't run it, so it keeps checking until it does.
+    case waiting(URL)
     case failed(String)
   }
 
@@ -68,12 +71,16 @@ final class ServerAgent {
 
   private func connect(preferring preferred: URL?) async {
     stopping = false
+    if case .custom(let url) = mode {
+      await connectToCustom(url)
+      return
+    }
     if case .failed = state {} else { state = .starting }
     var candidates = [URL]()
     // A terminal `kanna` names the installed server; it means nothing to a
     // window showing the dev one.
     if let preferred, mode == .installed { candidates.append(preferred) }
-    candidates.append(Self.localURL(port: mode.port))
+    candidates.append(mode.pageURL)
     for candidate in candidates {
       if let url = await Self.probe(candidate, fingerprint: mode.fingerprint) {
         adopt(url)
@@ -92,7 +99,25 @@ final class ServerAgent {
     }
   }
 
-  /// Developer › Server. Stops a server the app started for the old mode.
+  /// Someone else runs a custom server, so there's nothing to launch: show it
+  /// once it answers, and look again every couple of seconds until then.
+  private func connectToCustom(_ url: URL) async {
+    if let ready = await Self.probe(url, fingerprint: nil) {
+      adopt(ready)
+      return
+    }
+    state = .waiting(url)
+    // A fresh start() rather than looping here: start() ignores calls while a
+    // connect is in flight, and a Server menu switch must not be one of them.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+      MainActor.assumeIsolated {
+        guard let self, !self.stopping, self.mode == .custom(url), case .waiting = self.state else { return }
+        self.start()
+      }
+    }
+  }
+
+  /// The Server menu. Stops a server the app started for the old mode.
   func switchMode(to mode: ServerMode) {
     ServerMode.current = mode
     guard mode != self.mode else { return }
@@ -192,7 +217,7 @@ final class ServerAgent {
 
   private func awaitPage(of process: Process) {
     readiness?.cancel()
-    let url = Self.localURL(port: mode.port)
+    let url = mode.pageURL
     let fingerprint = mode.fingerprint
     readiness = Task {
       while !Task.isCancelled, process.isRunning, self.process === process {
@@ -343,10 +368,13 @@ final class ServerAgent {
     URL(string: "http://localhost:\(port)")!
   }
 
-  /// The server's URL if one answering at `url` serves the data dir with this
-  /// fingerprint. Only loopback URLs count, so a kanna-app:// link cannot
-  /// point the window anywhere else.
-  static func probe(_ url: URL, fingerprint: String) async -> URL? {
+  /// The server's URL if a Kanna answers /health at `url`. With a
+  /// fingerprint, only a local one serving that data dir counts: that's how
+  /// the installed server and the dev one are told apart, and why a
+  /// kanna-app:// link can't point the window anywhere else. Without one (a
+  /// custom server the user typed in), any Kanna at that address does.
+  static func probe(_ url: URL, fingerprint: String?) async -> URL? {
+    guard let fingerprint else { return await probeAny(url) }
     guard let host = url.host, isLoopback(host), let port = url.port else { return nil }
     var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/health")!)
     request.timeoutInterval = 1
@@ -356,6 +384,17 @@ final class ServerAgent {
           body["ok"] as? Bool == true,
           body["instance"] as? String == fingerprint else { return nil }
     return localURL(port: port)
+  }
+
+  private static func probeAny(_ url: URL) async -> URL? {
+    guard let health = URL(string: "/health", relativeTo: url) else { return nil }
+    var request = URLRequest(url: health)
+    request.timeoutInterval = 2
+    guard let (data, response) = try? await URLSession.shared.data(for: request),
+          (response as? HTTPURLResponse)?.statusCode == 200,
+          let body = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          body["ok"] as? Bool == true else { return nil }
+    return url
   }
 
   static func isLoopback(_ host: String) -> Bool {
@@ -398,7 +437,7 @@ nonisolated struct Runtime {
       ))
     case .development:
       guard let checkout = DevCheckout.url else {
-        return .unavailable("Development mode needs a Kanna checkout. Choose one with Developer › Choose Checkout…, or switch to Developer › Installed Kanna.")
+        return .unavailable("Development mode needs a Kanna checkout. Choose one with Server › Choose Checkout…, or switch to Server › Installed Kanna.")
       }
       guard let bun = ShellEnvironment.which("bun", in: environment) else {
         return .unavailable("Development mode runs `bun run dev`, and Bun isn't on your PATH.")
@@ -409,6 +448,9 @@ nonisolated struct Runtime {
         directory: checkout,
         environment: environment
       ))
+    case .custom:
+      // connectToCustom never launches anything.
+      return .unavailable("A custom server is started by whoever runs it.")
     }
   }
 }

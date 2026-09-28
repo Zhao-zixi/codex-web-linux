@@ -180,6 +180,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
       )
     case .installing(let line):
       overlay.show(busy: true, title: "Installing Kanna…", detail: line, monospaced: true, actions: [showLog])
+    case .waiting(let url):
+      overlay.show(
+        busy: true,
+        title: "Waiting for \(url.host ?? url.absoluteString)\(url.port.map { ":\($0)" } ?? "")…",
+        detail: "Nothing is answering at \(url.absoluteString) yet. The window opens as soon as that Kanna starts, or choose another server from the Server menu.",
+        actions: [.init(title: "Use Installed Kanna", isDefault: false) { agent.switchMode(to: .installed) }]
+      )
     case .failed(let message):
       overlay.show(
         busy: false,
@@ -262,9 +269,18 @@ final class NavigationHandler: NSObject, WKNavigationDelegate, WKUIDelegate, WKD
     self.owner = owner
   }
 
+  /// The server's own origin: the one the window loaded (localhost for the
+  /// installed and dev servers, anything for a custom one). localhost,
+  /// 127.0.0.1 and ::1 count as one host.
   private func isApp(_ url: URL) -> Bool {
-    guard let origin = owner?.serverOrigin else { return false }
-    return url.host.map(ServerAgent.isLoopback) == true && url.port == origin.port
+    guard let origin = owner?.serverOrigin, url.scheme == origin.scheme, url.port == origin.port,
+          let host = url.host else { return false }
+    return isServerHost(host)
+  }
+
+  private func isServerHost(_ host: String) -> Bool {
+    guard let serverHost = owner?.serverOrigin?.host else { return false }
+    return host == serverHost || (ServerAgent.isLoopback(host) && ServerAgent.isLoopback(serverHost))
   }
 
   func webView(
@@ -340,7 +356,7 @@ final class NavigationHandler: NSObject, WKNavigationDelegate, WKUIDelegate, WKD
     decisionHandler: @escaping (WKPermissionDecision) -> Void
   ) {
     // Dictation. macOS still asks the user once for the app.
-    decisionHandler(ServerAgent.isLoopback(origin.host) && type == .microphone ? .grant : .deny)
+    decisionHandler(isServerHost(origin.host) && type == .microphone ? .grant : .deny)
   }
 
   func webView(

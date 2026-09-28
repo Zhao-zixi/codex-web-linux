@@ -50,7 +50,7 @@ targets:
         # The app's own version, independent of kanna-code's. build.sh sets the
         # build number (CFBundleVersion, which Sparkle compares) from the
         # commit count, so it only goes up.
-        MARKETING_VERSION: "1.0.0"
+        MARKETING_VERSION: "1.0.1"
         CURRENT_PROJECT_VERSION: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_VERSION: "5.0"
@@ -58,9 +58,19 @@ targets:
         # Sparkle: an empty key leaves the updater off (Debug builds).
         KANNA_APPCAST_URL: "https://kanna.sh/downloads/mac/appcast.xml"
         SPARKLE_PUBLIC_KEY: ""
-        # Debug builds run this checkout's `bun run dev` in Development mode
-        # and show the Developer menu (macos/Kanna/ServerMode.swift).
+        # Debug builds start in this checkout's `bun run dev`
+        # (macos/Kanna/ServerMode.swift); every build can switch.
         KANNA_DEV_CHECKOUT: ""
       configs:
         Debug:
           KANNA_DEV_CHECKOUT: "$(PROJECT_DIR)/.."
+          # Its own app, so its settings, login item and Full Disk Access never
+          # mix with an installed Kanna's, and `kanna-app://` links from a
+          # terminal reach the installed one.
+          PRODUCT_BUNDLE_IDENTIFIER: sh.kanna.mac.dev
+          PRODUCT_NAME: Kanna Dev
+        Release:
+          # Public half of the update-signing key (Sparkle generate_keys
+          # --account kanna); the private half is in the release machine's
+          # keychain.
+          SPARKLE_PUBLIC_KEY: "NTS707jtsned9EGqMowFmrAAWLokq433gLD8n5Rz6CE="

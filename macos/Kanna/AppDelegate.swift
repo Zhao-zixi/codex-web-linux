@@ -55,6 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     agent.onChange = { [weak self] state in
       guard let self else { return }
       main.show(state)
+      updateDockBadge()
       // Setup needs a running server (Kanna Cloud pairs through it), and
       // installing Kanna comes first.
       if case .running = state, !offeredSetup, let window = main.window {
@@ -140,6 +141,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
       menuItem.state = ServerAgent.shared.mode == .installed ? .on : .off
     case #selector(useDevelopmentCheckout(_:)):
       menuItem.state = ServerAgent.shared.mode == .development ? .on : .off
+    case #selector(useCustomServer(_:)):
+      if case .custom(let url) = ServerAgent.shared.mode {
+        menuItem.state = .on
+        menuItem.title = "Custom URL: \(url.absoluteString)…"
+      } else {
+        menuItem.state = .off
+        menuItem.title = "Custom URL…"
+      }
     case #selector(chooseCheckout(_:)):
       let path = DevCheckout.url.map { ($0.path as NSString).abbreviatingWithTildeInPath }
       menuItem.title = path.map { "Checkout: \($0)…" } ?? "Choose Checkout…"
@@ -149,7 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     return true
   }
 
-  // MARK: Developer menu
+  // MARK: Server menu
 
   @objc func useInstalledKanna(_ sender: Any?) {
     switchServer(to: .installed)
@@ -185,13 +194,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     }
   }
 
+  /// Any Kanna server by address: a fork on its own port or data dir, a
+  /// server on another Mac. The app connects and never starts it.
+  @objc func useCustomServer(_ sender: Any?) {
+    let alert = NSAlert()
+    alert.messageText = "Connect to a Kanna server"
+    alert.informativeText = "The address of a running Kanna, like http://localhost:3211 or another Mac's http://name.tailnet.ts.net:3210. Kanna shows it once it answers."
+    let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 320, height: 24))
+    field.placeholderString = "http://localhost:3211"
+    field.stringValue = ServerMode.lastCustomURL?.absoluteString ?? ""
+    alert.accessoryView = field
+    alert.addButton(withTitle: "Connect")
+    alert.addButton(withTitle: "Cancel")
+    alert.window.initialFirstResponder = field
+    guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+    var text = field.stringValue.trimmingCharacters(in: .whitespaces)
+    if !text.contains("://") { text = "http://\(text)" }
+    guard var components = URLComponents(string: text),
+          ["http", "https"].contains(components.scheme?.lowercased() ?? ""),
+          components.host?.isEmpty == false else {
+      let error = NSAlert()
+      error.messageText = "That isn't a server address"
+      error.informativeText = "Use http:// or https://, a host and, usually, a port."
+      error.runModal()
+      return
+    }
+    // The window loads the server's root; a pasted chat link still works.
+    components.path = ""
+    components.query = nil
+    components.fragment = nil
+    guard let url = components.url else { return }
+    switchServer(to: .custom(url))
+  }
+
   private func switchServer(to mode: ServerMode) {
     ServerAgent.shared.switchMode(to: mode)
-    updateDockBadge()
   }
 
   /// "DEV" on the Dock icon while the window shows a checkout's server, so a
-  /// dev window is never mistaken for the real one.
+  /// dev window is never mistaken for the real one. Follows every switch,
+  /// including the waiting screen's "Use Installed Kanna".
   private func updateDockBadge() {
     NSApp.dockTile.badgeLabel = ServerAgent.shared.mode == .development ? "DEV" : nil
   }
@@ -260,13 +303,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     history.addItem(item("Back", #selector(MainWindowController.goBack(_:)), key: "[", target: main))
     history.addItem(item("Forward", #selector(MainWindowController.goForward(_:)), key: "]", target: main))
 
-    if DevCheckout.showsDeveloperMenu {
-      let developer = submenu(in: menu, title: "Developer")
-      developer.addItem(item("Installed Kanna", #selector(useInstalledKanna(_:))))
-      developer.addItem(item("Development Checkout (bun run dev)", #selector(useDevelopmentCheckout(_:))))
-      developer.addItem(.separator())
-      developer.addItem(item("Choose Checkout…", #selector(chooseCheckout(_:))))
-    }
+    // In every build: forks, checkouts and second servers are ordinary.
+    let server = submenu(in: menu, title: "Server")
+    server.addItem(item("Installed Kanna", #selector(useInstalledKanna(_:))))
+    server.addItem(item("Development Checkout (bun run dev)", #selector(useDevelopmentCheckout(_:))))
+    server.addItem(item("Custom URL…", #selector(useCustomServer(_:))))
+    server.addItem(.separator())
+    server.addItem(item("Choose Checkout…", #selector(chooseCheckout(_:))))
 
     let window = submenu(in: menu, title: "Window")
     window.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")

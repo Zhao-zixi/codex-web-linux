@@ -53,8 +53,9 @@ final class CloudSignIn: NSObject, ASWebAuthenticationPresentationContextProvidi
   /// data root (~/.kanna, or ~/.kanna-dev in Development). The file also
   /// holds the machine's secrets; only these two fields are read.
   static func pairedOrigin() -> URL? {
-    let url = ServerMode.current.dataRoot.appendingPathComponent("cloud.json")
-    guard let data = try? Data(contentsOf: url),
+    // A custom server keeps its data wherever its owner put it.
+    guard let url = ServerMode.current.dataRoot?.appendingPathComponent("cloud.json"),
+          let data = try? Data(contentsOf: url),
           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           json["enabled"] as? Bool != false,
           let origin = json["appOrigin"] as? String else { return nil }

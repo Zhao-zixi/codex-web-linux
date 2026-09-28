@@ -614,6 +614,19 @@
     display: none;
   }
 
+  /* The right sidebar hides every scrollbar inside it, on desktop and in the
+     mobile overlay. One rule on the container rather than `scrollbar-hide` on
+     each scroller, so a widget added later can't bring a scrollbar back. */
+  [data-right-sidebar-visual],
+  [data-right-sidebar-visual] * {
+    scrollbar-width: none;
+  }
+
+  [data-right-sidebar-visual]::-webkit-scrollbar,
+  [data-right-sidebar-visual] *::-webkit-scrollbar {
+    display: none;
+  }
+
   /* Sonner toaster: auto-width + proper centering on desktop */
   @media (min-width: 641px) {
     [data-sonner-toaster] {

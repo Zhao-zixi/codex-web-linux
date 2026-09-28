@@ -433,12 +433,16 @@ export function WidgetStatic({ children, className }: { children: ReactNode; cla
  */
 export function WidgetFooter({ children, above }: {
   children: ReactNode
-  /** Fields the buttons act on, stacked over them (the commit message). */
+  /**
+   * Fields the buttons act on, stacked over them (the commit message). They
+   * are the footer too: unpadded, so they draw edge to edge like the buttons,
+   * with one rule under them. Rules between fields are theirs to draw.
+   */
   above?: ReactNode
 }) {
   return (
     <div>
-      {above ? <div className="border-b border-border p-2">{above}</div> : null}
+      {above ? <div className="border-b border-border">{above}</div> : null}
       <div className="flex h-10 min-w-0 items-stretch divide-x divide-border">{children}</div>
     </div>
   )

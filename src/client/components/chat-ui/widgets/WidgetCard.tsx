@@ -140,10 +140,15 @@ export function WidgetSection({
   )
 }
 
-/** The card surface that holds a widget's sections, divided from each other. */
+/**
+ * The card surface that holds a widget's sections, divided from each other.
+ *
+ * In the Mac app it takes the left sidebar's radius, so the cards on both
+ * sides of the chat have the same corners.
+ */
 export function WidgetGroup({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <section className={cn("divide-y divide-border overflow-hidden rounded-2xl border border-border bg-background dark:bg-card", className)}>
+    <section className={cn("divide-y divide-border overflow-hidden rounded-2xl border border-border bg-background dark:bg-card mac-app:rounded-[calc(var(--mac-window-radius)-8px)]", className)}>
       {children}
     </section>
   )

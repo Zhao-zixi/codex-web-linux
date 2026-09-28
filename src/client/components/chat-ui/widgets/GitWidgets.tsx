@@ -536,10 +536,13 @@ function GitWidgetsImpl({
     </WidgetFooter>
   ) : null
 
-  // The message fields, over the commit buttons while the pencil is on.
+  // The message fields, over the commit buttons while the pencil is on. They
+  // are the footer's surface, as the buttons are: borderless, edge to edge,
+  // one rule between each, and the sparkle an accessory at the message's end
+  // like the pencil at the button's, so the two icons stack in one column.
   const commitFields = (
     <div>
-      <div className="relative">
+      <div className="flex h-10 min-w-0 items-stretch border-b border-border">
         <Input
           ref={commitMessageInputRef}
           value={summary}
@@ -549,7 +552,7 @@ function GitWidgetsImpl({
           }}
           onKeyDown={handleCommitKeyDown}
           placeholder="Commit message"
-          className="rounded-t-xl rounded-b-none px-3 pr-10"
+          className="h-full min-w-0 flex-1 rounded-none border-0 bg-transparent px-3 py-0"
           disabled={isBusy}
         />
         <Tooltip delayDuration={0}>
@@ -557,7 +560,7 @@ function GitWidgetsImpl({
             <button
               type="button"
               aria-label="Generate commit message"
-              className="absolute right-1.5 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+              className="flex h-full w-10 shrink-0 items-center justify-center border-l border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
               disabled={!canGenerate}
               onClick={() => void handleGenerate()}
             >
@@ -578,9 +581,7 @@ function GitWidgetsImpl({
         onKeyDown={handleCommitKeyDown}
         placeholder="Description"
         rows={3}
-        // No ring (it would clash with the input's edge above), but the
-        // border still says which of the two fields has focus.
-        className="-mt-px rounded-t-none rounded-b-xl px-3 outline-none focus:outline-none focus-visible:outline-none focus:ring-0 focus-visible:ring-0 focus-visible:border-ring"
+        className="resize-none rounded-none border-0 bg-transparent px-3 py-2.5 outline-none focus:outline-none focus-visible:outline-none focus:ring-0 focus-visible:ring-0"
         disabled={isBusy}
       />
     </div>

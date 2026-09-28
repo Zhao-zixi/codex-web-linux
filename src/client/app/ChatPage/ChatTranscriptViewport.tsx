@@ -852,6 +852,64 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
     onReportReadAnchor(messageId, isAtEnd, () => measureReadAnchorLayout(viewportRef.current, row.id, headerOffsetPx))
   }, [headerOffsetPx, onReportReadAnchor])
 
+  /**
+   * The first loaded row and where it sat when older rows were asked for.
+   *
+   * The scroller keeps its position across prepends by watching its first
+   * child, but the first child here is the list header (which holds the
+   * button), so from its point of view nothing was prepended. The
+   * correction is done here instead: once older rows land, the row that was
+   * first is moved back to the same offset it had, in the same frame.
+   */
+  const prependAnchorRef = useRef<{ rowId: string; top: number } | null>(null)
+
+  const captureFirstRow = useCallback(() => {
+    const first = resolvedRowsRef.current[0]
+    const viewport = viewportRef.current
+    const row = first && viewport?.querySelector(`[data-message-id="${CSS.escape(first.id)}"]`)
+    if (!first || !viewport || !row) return
+    prependAnchorRef.current = { rowId: first.id, top: row.getBoundingClientRect().top - viewport.getBoundingClientRect().top }
+  }, [])
+
+  // Read from refs so the scroll listener is not re-attached every time a
+  // load starts or finishes.
+  const hasOlderMessagesRef = useRef(hasOlderMessages)
+  hasOlderMessagesRef.current = hasOlderMessages
+  const isLoadingOlderMessagesRef = useRef(isLoadingOlderMessages)
+  isLoadingOlderMessagesRef.current = isLoadingOlderMessages
+  const onLoadOlderMessagesRef = useRef(onLoadOlderMessages)
+  onLoadOlderMessagesRef.current = onLoadOlderMessages
+  /**
+   * The first row when the last automatic load was asked for.
+   *
+   * The older slice is pushed on the subscription, apart from the command's
+   * ack, so "not loading" does not yet mean the rows have landed. Until the
+   * first row changes, the reader is still at the same top and another scroll
+   * event would ask for the same page again. A load that fails or brings
+   * nothing leaves this set, so a failure is not retried on every scroll; the
+   * Load More button still works.
+   */
+  const autoLoadFirstRowIdRef = useRef<string | null>(null)
+
+  /**
+   * Load the page before the window once the reader nears the top.
+   *
+   * Half a screen early rather than at the very edge, so the page is usually
+   * in before the reader runs out of rows. Only the reader's own scrolling
+   * triggers it: a restore or jump that lands near the top did not ask for
+   * more history.
+   */
+  const maybeLoadOlderOnScroll = useCallback((scrollNode: HTMLElement) => {
+    if (!hasUserScrolledRef.current) return
+    if (!hasOlderMessagesRef.current || isLoadingOlderMessagesRef.current) return
+    if (scrollNode.scrollTop > scrollNode.clientHeight / 2) return
+    const firstRowId = resolvedRowsRef.current[0]?.id
+    if (!firstRowId || autoLoadFirstRowIdRef.current === firstRowId) return
+    autoLoadFirstRowIdRef.current = firstRowId
+    captureFirstRow()
+    void onLoadOlderMessagesRef.current?.()
+  }, [captureFirstRow])
+
   const handleScroll = useCallback(() => {
     const scrollNode = viewportRef.current
     if (!scrollNode) return
@@ -860,7 +918,8 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
     onIsAtEndChange(isAtEnd)
     reportTopVisibleMessage(isAtEnd)
     setTranscriptOverflows(scrollNode.scrollHeight - scrollNode.clientHeight > OVERFLOW_EPSILON_PX)
-  }, [onIsAtEndChange, reportTopVisibleMessage])
+    maybeLoadOlderOnScroll(scrollNode)
+  }, [maybeLoadOlderOnScroll, onIsAtEndChange, reportTopVisibleMessage])
 
   useEffect(() => {
     const scrollNode = viewportRef.current
@@ -954,25 +1013,6 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
     pendingUnloadedJumpRef.current = null
     applyScrollTarget(prepareJumpToRow(rowId))
   }, [applyScrollTarget, prepareJumpToRow, resolvedRows, rowIndexByMessageId])
-
-  /**
-   * The first loaded row and where it sat when "Load More" was clicked.
-   *
-   * The scroller keeps its position across prepends by watching its first
-   * child, but the first child here is the list header (which holds the
-   * button), so from its point of view nothing was prepended. The
-   * correction is done here instead: once older rows land, the row that was
-   * first is moved back to the same offset it had, in the same frame.
-   */
-  const prependAnchorRef = useRef<{ rowId: string; top: number } | null>(null)
-
-  const captureFirstRow = useCallback(() => {
-    const first = resolvedRows[0]
-    const viewport = viewportRef.current
-    const row = first && viewport?.querySelector(`[data-message-id="${CSS.escape(first.id)}"]`)
-    if (!first || !viewport || !row) return
-    prependAnchorRef.current = { rowId: first.id, top: row.getBoundingClientRect().top - viewport.getBoundingClientRect().top }
-  }, [resolvedRows])
 
   useLayoutEffect(() => {
     const anchor = prependAnchorRef.current

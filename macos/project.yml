@@ -50,7 +50,7 @@ targets:
         # The app's own version, independent of kanna-code's. build.sh sets the
         # build number (CFBundleVersion, which Sparkle compares) from the
         # commit count, so it only goes up.
-        MARKETING_VERSION: "1.0.1"
+        MARKETING_VERSION: "1.0.2"
         CURRENT_PROJECT_VERSION: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_VERSION: "5.0"

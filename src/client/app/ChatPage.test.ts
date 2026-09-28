@@ -103,8 +103,13 @@ describe("right sidebar pixel sizing", () => {
     expect(getRightSidebarSizePercent(100, 1_000)).toBe(37)
   })
 
+  test("stops at the left sidebar's maximum width", () => {
+    expect(getRightSidebarSizePercent(1_200, 1_000)).toBe(52)
+    expect(getRightSidebarSizePx(80, 1_000)).toBe(520)
+  })
+
   test("caps the panel so the workspace keeps its minimum share", () => {
-    expect(getRightSidebarSizePercent(1_200, 1_000)).toBe(80)
+    expect(getRightSidebarSizePercent(1_200, 600)).toBe(80)
   })
 
   test("converts the panel percentage back to pixels", () => {

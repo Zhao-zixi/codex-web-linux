@@ -20,6 +20,7 @@ import { buildChatJumpLocationState } from "../../lib/chat-navigation"
 import { snapshotDroppedFiles } from "../../lib/snapshotDroppedFiles"
 import {
   DEFAULT_RIGHT_SIDEBAR_SIZE,
+  RIGHT_SIDEBAR_MAX_WIDTH_PX,
   RIGHT_SIDEBAR_MIN_WIDTH_PX,
   useRightSidebarStore,
   useWidgetsOpen,
@@ -251,7 +252,8 @@ export function getRightSidebarSizePercent(sizePx: number, layoutWidth: number) 
   }
 
   const minSizePercent = (RIGHT_SIDEBAR_MIN_WIDTH_PX / layoutWidth) * 100
-  const requestedSizePercent = (Math.max(RIGHT_SIDEBAR_MIN_WIDTH_PX, sizePx) / layoutWidth) * 100
+  const clampedPx = Math.min(RIGHT_SIDEBAR_MAX_WIDTH_PX, Math.max(RIGHT_SIDEBAR_MIN_WIDTH_PX, sizePx))
+  const requestedSizePercent = (clampedPx / layoutWidth) * 100
   return Math.min(RIGHT_SIDEBAR_MAX_SIZE_PERCENT, Math.max(minSizePercent, requestedSizePercent))
 }
 
@@ -260,7 +262,7 @@ export function getRightSidebarSizePx(sizePercent: number, layoutWidth: number) 
     return DEFAULT_RIGHT_SIDEBAR_SIZE
   }
 
-  return Math.max(RIGHT_SIDEBAR_MIN_WIDTH_PX, layoutWidth * (sizePercent / 100))
+  return Math.min(RIGHT_SIDEBAR_MAX_WIDTH_PX, Math.max(RIGHT_SIDEBAR_MIN_WIDTH_PX, layoutWidth * (sizePercent / 100)))
 }
 
 function useIsMobileViewport() {
@@ -375,6 +377,8 @@ const DesktopSidebarPane = memo(function DesktopSidebarPane({
     <ResizablePanel
       id="rightSidebar"
       defaultSize={`${sizePercent}%`}
+      // Pixels: the same ceiling as the left sidebar, whatever the window.
+      maxSize={RIGHT_SIDEBAR_MAX_WIDTH_PX}
       className="min-h-0 min-w-0"
       elementRef={sidebarPanelRef}
       groupResizeBehavior="preserve-pixel-size"

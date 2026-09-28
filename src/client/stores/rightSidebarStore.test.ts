@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test"
 import {
   DEFAULT_RIGHT_SIDEBAR_SIZE,
   migrateRightSidebarStore,
+  RIGHT_SIDEBAR_MAX_WIDTH_PX,
   RIGHT_SIDEBAR_MIN_WIDTH_PX,
   useRightSidebarStore,
 } from "./rightSidebarStore"
@@ -40,12 +41,15 @@ describe("rightSidebarStore", () => {
     expect(useRightSidebarStore.getState().projects[PROJECT_ID]).toEqual({ widgetsOpen: false })
   })
 
-  test("clamps the size to the minimum width", () => {
+  test("clamps the size between the minimum and the left sidebar's maximum", () => {
     useRightSidebarStore.getState().setSize(100)
     expect(useRightSidebarStore.getState().size).toBe(RIGHT_SIDEBAR_MIN_WIDTH_PX)
 
-    useRightSidebarStore.getState().setSize(560)
-    expect(useRightSidebarStore.getState().size).toBe(560)
+    useRightSidebarStore.getState().setSize(480)
+    expect(useRightSidebarStore.getState().size).toBe(480)
+
+    useRightSidebarStore.getState().setSize(900)
+    expect(useRightSidebarStore.getState().size).toBe(RIGHT_SIDEBAR_MAX_WIDTH_PX)
   })
 
   test("clearProject drops a project's state but keeps the shared size", () => {

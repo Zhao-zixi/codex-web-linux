@@ -168,9 +168,19 @@ export function SettingsPage() {
 
   return (
     <div ref={pageRef} className="relative flex h-full flex-1 min-w-0 bg-background">
+      {/* The Mac app's title bar across the settings page: it drags the window.
+          Both columns start with empty space at least this tall (the sidebar's
+          top padding, the content's md:pt-16), so it covers nothing clickable. */}
+      <div
+        data-window-drag
+        aria-hidden
+        className="hidden mac-app:md:block absolute inset-x-0 top-0 z-10 h-[calc(var(--mac-traffic-lights-center)*2)]"
+      />
       <div className="flex min-w-0 flex-1">
-        <aside className={`hidden w-[200px] shrink-0 md:block ${showFooter ? "pb-[89px]" : ""}`}>
-          <div className="flex flex-col gap-1 px-4 py-6">
+        <aside className={`hidden w-[200px] shrink-0 md:block ${showFooter ? "pb-[89px] mac-app:md:pb-[90.5px]" : ""}`}>
+          {/* In the Mac app the traffic lights and the pinned sidebar toggle sit
+              over this column's top when the app sidebar is collapsed. */}
+          <div className="flex flex-col gap-1 px-4 py-6 mac-app:md:pt-[63px]">
             <div className="px-3 pb-5 text-[22px] font-extrabold tracking-[-0.5px] text-foreground">
               Settings
             </div>
@@ -331,7 +341,9 @@ export function SettingsPage() {
 
       {showFooter ? (
         <div className="absolute bottom-0 left-0 right-[var(--settings-scrollbar-w,0px)] border-t border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-          <div className="px-6 py-[14.25px]">
+          {/* 1.5px taller in the Mac app; the sidebar's bottom padding above
+              keeps the matching reserve. */}
+          <div className="px-6 py-[14.25px] mac-app:md:py-[15px]">
             <div className="grid gap-3 text-xs text-muted-foreground grid-cols-2 lg:grid-cols-4">
               <div>
                 <div className="mb-1 uppercase tracking-wide text-[11px] text-muted-foreground/80">Machine</div>

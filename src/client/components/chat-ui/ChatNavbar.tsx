@@ -200,11 +200,10 @@ function ChatNavbarImpl({
       <div className="relative flex items-center gap-2 w-full mac-app:md:h-[calc(var(--mac-traffic-lights-center)*2)]">
         <div className={cn(
           "md:h-[30px] flex items-center gap-0 flex-shrink-0 border border-border/0 rounded-[9px] md:px-[2px]",
-          // The app pins its sidebar toggle beside the traffic lights
+          // Unbordered: the flower and expand button stand on their own. The
+          // app pins its sidebar toggle beside the traffic lights
           // (KannaSidebar); clear both: 28px toggle + 8px gap, less pl-1.
-          // Its border framed the flower and expand button, which the app
-          // replaces with that toggle.
-          sidebarCollapsed && "px-1.5 border-border mac-app:md:ml-[calc(var(--mac-traffic-lights-inset)+32px)] mac-app:md:border-border/0"
+          sidebarCollapsed && "px-1.5 mac-app:md:ml-[calc(var(--mac-traffic-lights-inset)+32px)]"
         )}>
           <Button
             variant="ghost"

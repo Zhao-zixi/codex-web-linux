@@ -2,6 +2,7 @@ import { create } from "zustand"
 import { persist } from "zustand/middleware"
 import type { AgentProvider } from "../../shared/types"
 import type { ViewerItem } from "./viewerStore"
+import { SIDEBAR_MAX_WIDTH_PX } from "../lib/sidebarWidth"
 
 /**
  * The chat page's panes beside the chat, and the one record of how they're
@@ -65,10 +66,12 @@ interface RightSidebarState {
 
 export const DEFAULT_RIGHT_SIDEBAR_SIZE = 420
 export const RIGHT_SIDEBAR_MIN_WIDTH_PX = 370
+/** The same ceiling as the left sidebar's. */
+export const RIGHT_SIDEBAR_MAX_WIDTH_PX = SIDEBAR_MAX_WIDTH_PX
 
 function clampSize(size: number) {
   if (!Number.isFinite(size)) return DEFAULT_RIGHT_SIDEBAR_SIZE
-  return Math.max(RIGHT_SIDEBAR_MIN_WIDTH_PX, size)
+  return Math.min(RIGHT_SIDEBAR_MAX_WIDTH_PX, Math.max(RIGHT_SIDEBAR_MIN_WIDTH_PX, size))
 }
 
 function createDefaultProjectUiState(): ProjectRightSidebarUiState {

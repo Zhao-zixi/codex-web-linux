@@ -41,12 +41,13 @@ import {
   useFocusModeEnabled,
 } from "../stores/focusModeStore"
 import { formatActionShortcut } from "../lib/keybindings"
+import { SIDEBAR_MAX_WIDTH_PX } from "../lib/sidebarWidth"
 import { useStableSidebarThreads } from "./useStableSidebarThreads"
 import { OPEN_COMMAND_PALETTE_EVENT, openCommandPalette } from "../components/command-palette/CommandPalette"
 
 export const DEFAULT_SIDEBAR_WIDTH = 275
 export const MIN_SIDEBAR_WIDTH = 220
-export const MAX_SIDEBAR_WIDTH = 520
+export const MAX_SIDEBAR_WIDTH = SIDEBAR_MAX_WIDTH_PX
 
 export function clampSidebarWidth(width: number) {
   if (!Number.isFinite(width)) return DEFAULT_SIDEBAR_WIDTH
@@ -724,8 +725,8 @@ function KannaSidebarImpl({
               size="icon"
               onClick={newSidebarEnabled ? () => openCommandPalette() : () => navigate("/home")}
               className={cn(
-                "hidden md:inline-flex h-10 w-auto rounded-lg pl-1.5 pr-3 hover:!border-border/0 mac-app:md:h-8",
-                !newSidebarEnabled && "pl-2"
+                "hidden md:inline-flex h-10 w-auto rounded-lg pl-1.5 pr-3 hover:!border-border/0 mac-app:md:h-8 mac-app:md:pr-1.5",
+                !newSidebarEnabled && "pl-2 mac-app:md:pr-2"
               )}
               title={newSidebarEnabled ? "Search" : "New project"}
             >
@@ -745,6 +746,20 @@ function KannaSidebarImpl({
           {/* The app's title bar has no divider, so the New Chat block sits
               tighter under it: 4px off the top, all 8px off the bottom. */}
           <div className="p-[7px] mac-app:md:pt-[3px]">
+            {/* The app's header gives the flower and wordmark's place to the
+                traffic lights, so the pair leads the sidebar here instead. It
+                goes to Projects, as the header's wordmark does. 7px in centers
+                the 20px flower on the 16px icons below (theirs start 9px in:
+                1px border + px-2). */}
+            <button
+              type="button"
+              onClick={() => navigate("/home")}
+              title="Projects"
+              className="hidden mac-app:md:flex items-center gap-2 pl-[7px] pr-[9px] pt-1 pb-2"
+            >
+              <Flower className="size-5 text-logo" />
+              <span className="font-logo text-base uppercase text-slate-600 dark:text-slate-100">{APP_NAME}</span>
+            </button>
             {/* The focus row joins this block rather than sitting below it, so
                 it inherits the same width, padding and row rhythm as the
                 buttons — which is the whole of its treatment. It leads the

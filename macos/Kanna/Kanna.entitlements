@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<!-- No App Sandbox. The app starts the user's `kanna`, whose agents read and
+     write any project in the home directory and spawn the user's own tools,
+     and a sandboxed parent passes its sandbox to every child. That rules out the
+     Mac App Store; the app ships as a notarized Developer ID build instead
+     (macos/build.sh). -->
+<dict>
+	<!-- Dictation in the composer (getUserMedia). The hardened runtime ignores
+	     NSMicrophoneUsageDescription without it. -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+</dict>
+</plist>

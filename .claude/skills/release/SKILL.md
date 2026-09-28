@@ -1,23 +1,58 @@
-# /release - Publish a new version to npm
+# /release - Publish a new version to npm, and the iOS and Mac apps when they changed
 
 ## Description
-Bump the package version, push to GitHub, and create a release with a structured changelog that triggers the npm publish workflow.
+Bump the package version, push to GitHub, and create a release with a structured changelog that triggers the npm publish workflow. Then check `ios/` and `macos/` for changes since their last release, and ship each one that changed: iOS as the next TestFlight build, Mac as a notarized DMG on kanna.sh.
+
+The three releases are independent. Ship each one that has changes and skip each one that doesn't. If only the iOS app changed, ship only the iOS app.
 
 ## Instructions
 
+### Step 0: Find what changed
+
+Run all three checks before you release anything. Then tell the user in one short message which of npm, iOS and Mac you will ship.
+
+**npm (kanna-code).** Commits since the last `v*` tag, not counting `macos/`, which ships separately:
+
+```bash
+git log $(git describe --tags --abbrev=0 --match 'v*')..HEAD --oneline -- . ':!macos'
+```
+
+**iOS (`ios/`).** `ios/` is its own git repository (github.com/jakemor/kanna-ios), and the parent repo ignores it. Each TestFlight build is tagged `v<version>-build.<N>` on its build-number bump commit, for example `v0.1-build.20`. Builds up to 19 used `v0.1-19`, and the pattern below matches both:
+
+```bash
+cd /Users/jake/Projects/kanna/ios
+LAST=$(git tag --list 'v*-*' --sort=-creatordate | head -1)
+git log "$LAST"..HEAD --oneline
+```
+
+Bump commits don't count as changes. If nothing else is new, skip iOS.
+
+**Mac (`macos/`).** Each Mac release is tagged `mac-v<version>` in this repo. Before the first tag exists, use the last commit that changed `MARKETING_VERSION` in `macos/project.yml`. That commit is the release commit, for example "Kanna for Mac 1.0.2":
+
+```bash
+cd /Users/jake/Projects/kanna
+LAST=$(git tag --list 'mac-v*' --sort=-creatordate | head -1)
+LAST=${LAST:-$(git log -1 --format=%H -G MARKETING_VERSION -- macos/project.yml)}
+git log "$LAST"..HEAD --oneline -- macos
+```
+
+**Uncommitted work.** Only committed changes count. The iOS archive and the Mac build both build from the working tree, and other agents may be editing it. If `git status --porcelain` shows changes in `ios/` or `macos/`, ask the user before you ship that app. Don't commit another agent's work yourself.
+
 ### Step 1: Analyze changes and recommend a version bump
+
+Skip Steps 1–4 if Step 0 found no npm changes.
 
 Before prompting the user, do the following:
 
 1. Read the current version from `package.json`.
-2. Run `git log $(git describe --tags --abbrev=0)..HEAD --oneline` to see what's changed since the last release.
+2. Use the npm commit list from Step 0.
 3. Based on the changes, decide your recommended version bump:
    - **patch** — bug fixes, typos, small tweaks
    - **minor** — new features, non-breaking enhancements
    - **major** — breaking changes, API changes, large rewrites
 4. Calculate what the new version number would be for each option (patch, minor, major).
 
-If the user passed an explicit version as an argument (e.g. `/release 0.27.0`), use that version directly — skip the recommendation logic and confirmation.
+If the user passed an explicit version as an argument (e.g. `/release 0.27.0`), use that version directly — skip the recommendation logic and confirmation. That version applies to npm only.
 
 Otherwise, for **patch** and **minor** bumps, proceed automatically with your best recommendation — do NOT ask for confirmation. Just tell the user what you chose and why in a brief message before bumping.
 
@@ -33,7 +68,7 @@ For **major** bumps only, use the `AskUserQuestion` tool to confirm with the use
 Before creating the GitHub release, generate a structured changelog:
 
 1. Read the last 2–3 releases with `gh release view <tag>` to understand existing style.
-2. Get the commits in this release: `git log <previous-tag>..<new-tag> --oneline`.
+2. Get the commits in this release: `git log <previous-tag>..<new-tag> --oneline -- . ':!macos'`.
 3. For each commit, check if it's associated with a merged PR:
    - Use `gh pr list --search "<sha>" --state merged --json number,title,author` or the GitHub API.
    - If a PR exists, use its number, title, and author. Prefer linking to the PR.
@@ -85,4 +120,35 @@ gh release create "v<new-version>" \
 
 The GitHub Release triggers `.github/workflows/publish.yml`, which builds and publishes to npm via Trusted Publishing.
 
-Tell the user the new version number and link to the release when done.
+### Step 5: iOS → TestFlight (only if `ios/` changed)
+
+Follow the `/testflight` skill (`~/.claude/skills/testflight/SKILL.md`) for the app in `ios/`, with these Kanna specifics:
+
+- **Keep the version. Bump only the build.** Leave `MARKETING_VERSION` in `ios/project.yml` as it is, even when npm got a new version. Add 1 to `CURRENT_PROJECT_VERSION`, taking the higher of that and the highest build on ASC for this version. A new build of a version TestFlight already approved clears beta review in about a minute. A new version goes through full review again.
+- Bundle ID `com.jakemor.kanna`, team `QK9365HKRK`. The ASC API key for signing is in `ios/.env.speedflight` (`ASC_KEY_ID`, `ASC_ISSUER_ID`, and the key at `~/private_keys/AuthKey_<ASC_KEY_ID>.p8`). Pass these to `xcodebuild` with the `-authenticationKey*` flags.
+- Commit the bump **in `ios/`**, not in the parent repo, as `Bump the build number to <N> for the next TestFlight upload`. Then tag it `v<version>-build.<N>` (e.g. `v0.1-build.20`), and push both the branch and the tag: `git push origin main && git push origin v<version>-build.<N>`. The tag is how the next `/release` finds what changed.
+- Run the archive, the upload and the processing polls in the background, and tell the user what is running.
+
+### Step 6: Mac → kanna.sh (only if `macos/` changed)
+
+`macos/` is the Kanna for Mac window only. The server inside it is the npm package, so a Mac release is needed only when `macos/` itself changed.
+
+1. Bump the patch number of `MARKETING_VERSION` in `macos/project.yml` (for example `1.0.2` → `1.0.3`). Bump the minor number instead for a new user-facing feature. The build number is the commit count (`build.sh`), which Sparkle compares, so commit before you build.
+2. Commit only that file as `Kanna for Mac <version>` and push.
+3. Build, notarize and publish in the background. The `asc` profile is `jake@superwall.com`:
+   ```bash
+   cd /Users/jake/Projects/kanna/macos && ASC_PROFILE=jake@superwall.com ./build.sh --publish
+   ```
+   This uploads `Kanna-<version>.dmg`, `Kanna.dmg` and `appcast.xml` to R2. The kanna.sh homepage's Download for Mac button and every installed app's Sparkle update check see them at once.
+4. After it publishes, tag the release commit and push the tag: `git tag mac-v<version> && git push origin mac-v<version>`. No workflow runs on this tag; the next `/release` uses it to find what changed.
+5. If the build fails on signing or notarization, report the exact error and stop. Never create, revoke or delete certificates.
+
+### Step 7: Report
+
+Tell the user, for each release that shipped:
+
+- **npm:** the new version, and a link to the GitHub release.
+- **iOS:** the version and build number, the build ID, and the beta review state.
+- **Mac:** the version, and https://kanna.sh/downloads/mac/Kanna.dmg.
+
+Also name each release you skipped because nothing had changed.

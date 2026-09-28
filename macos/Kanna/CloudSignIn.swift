@@ -179,6 +179,7 @@ final class CloudSignIn: NSObject, ASWebAuthenticationPresentationContextProvidi
       try await Task.sleep(for: .seconds(1))
       let body = try await Self.json(for: URLRequest(url: pairSession))
       if body["status"] as? String == "paired", let origin = (body["appOrigin"] as? String).flatMap(URL.init(string:)) {
+        Machines.shared.refresh()
         return origin
       }
       if body["status"] as? String == "error" {
@@ -240,13 +241,16 @@ enum Keychain {
   }
 
   static func setToken(_ token: String, for site: URL) {
-    deleteToken(for: site)
+    SecItemDelete(query(for: site) as CFDictionary)
     var query = query(for: site)
     query[kSecValueData as String] = Data(token.utf8)
     SecItemAdd(query as CFDictionary, nil)
+    Machines.shared.refresh()
   }
 
+  /// Signing out empties the machine list too.
   static func deleteToken(for site: URL) {
-    SecItemDelete(query(for: site) as CFDictionary)
+    guard SecItemDelete(query(for: site) as CFDictionary) == errSecSuccess else { return }
+    Machines.shared.refresh()
   }
 }

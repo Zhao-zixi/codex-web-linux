@@ -27,7 +27,41 @@ function jsonResponse(payload: unknown, status = 200) {
 }
 
 beforeEach(() => {
-  useConnectionStore.setState({ mode: "unknown", machines: [] })
+  useConnectionStore.setState({
+    mode: "unknown",
+    machines: [],
+    thisMachine: null,
+    showingMachine: null,
+    fromMacApp: false,
+  })
+})
+
+describe("connectionStore.setMacAppMachines", () => {
+  test("the app's list wins over the page's own detection", async () => {
+    useConnectionStore.getState().setMacAppMachines({ machines: MACHINES, thisMachine: "jakemor-mbp", showing: "jakemor-studio" })
+    const fetchImpl = (async () => jsonResponse({ error: "Not found" }, 404)) as unknown as typeof fetch
+    await useConnectionStore.getState().load(fetchImpl)
+    const state = useConnectionStore.getState()
+    expect(state.mode).toBe("cloud")
+    expect(state.machines).toEqual(MACHINES)
+    expect(state.thisMachine).toBe("jakemor-mbp")
+    expect(state.showingMachine).toBe("jakemor-studio")
+  })
+
+  test("null after a list (signed out) goes back to detection", () => {
+    useConnectionStore.getState().setMacAppMachines({ machines: MACHINES })
+    useConnectionStore.getState().setMacAppMachines(null)
+    const state = useConnectionStore.getState()
+    expect(state.mode).toBe("unknown")
+    expect(state.fromMacApp).toBe(false)
+    expect(state.thisMachine).toBeNull()
+  })
+
+  test("null before any list leaves detection alone", () => {
+    useConnectionStore.setState({ mode: "local" })
+    useConnectionStore.getState().setMacAppMachines(null)
+    expect(useConnectionStore.getState().mode).toBe("local")
+  })
 })
 
 describe("connectionStore.load", () => {

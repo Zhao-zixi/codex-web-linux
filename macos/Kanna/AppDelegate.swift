@@ -2,7 +2,7 @@ import AppKit
 import Sparkle
 
 @main
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenuDelegate {
   private var main: MainWindowController!
   private var quitting = false
   private var offeredSetup = false
@@ -56,6 +56,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
       guard let self else { return }
       main.show(state)
       updateDockBadge()
+      // This Mac's pairing (and so which machine it is) belongs to the
+      // server that runs.
+      if case .running = state { Machines.shared.refresh() }
       // Setup needs a running server (Kanna Cloud pairs through it), and
       // installing Kanna comes first.
       if case .running = state, !offeredSetup, let window = main.window {
@@ -66,12 +69,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     main.show(agent.state)
     agent.start()
 
+    Machines.shared.onChange = { [weak self] in self?.main.pushMachines() }
+    Machines.shared.start()
+
     main.showWindow(nil)
     NSApp.activate()
   }
 
   func applicationDidBecomeActive(_ notification: Notification) {
     main?.bridge.refreshPermission()
+    Machines.shared.refresh()
   }
 
   /// Closing the window is quitting, and the server the app started goes
@@ -95,6 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
           components.scheme == "kanna-app" else { return }
     if components.host == "open",
        let target = components.queryItems?.first(where: { $0.name == "url" })?.value.flatMap(URL.init(string:)) {
+      main.showThisMac()
       ServerAgent.shared.start(preferring: target)
     }
     bringToFront()
@@ -229,7 +237,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
   }
 
   private func switchServer(to mode: ServerMode) {
+    main.showThisMac()
     ServerAgent.shared.switchMode(to: mode)
+  }
+
+  // MARK: Machines menu
+
+  /// Rebuilt each time it opens: machines come and go online.
+  func menuNeedsUpdate(_ menu: NSMenu) {
+    menu.removeAllItems()
+    let machines = Machines.shared
+    guard machines.isSignedIn else {
+      menu.addItem(item("Sign In to Kanna Cloud…", #selector(showSetup(_:))))
+      return
+    }
+    let showing = main.showingSubdomain
+    // This Mac is always first, whether or not it's on Kanna Cloud.
+    let thisMac = machines.list.first { $0.subdomain == machines.thisSubdomain }
+    let others = machines.list.filter { $0.subdomain != machines.thisSubdomain }
+    let thisItem = item("\(thisMac?.name ?? "This Mac") (This machine)", #selector(openMachine(_:)))
+    thisItem.image = Self.statusDot(online: true)
+    thisItem.state = main.remoteMachine == nil ? .on : .off
+    menu.addItem(thisItem)
+    if !others.isEmpty { menu.addItem(.separator()) }
+    for machine in others {
+      let entry = item(machine.online ? machine.name : "\(machine.name) (Offline)", #selector(openMachine(_:)))
+      entry.representedObject = machine.subdomain
+      entry.image = Self.statusDot(online: machine.online)
+      entry.state = machine.subdomain == showing ? .on : .off
+      menu.addItem(entry)
+    }
+    menu.addItem(.separator())
+    menu.addItem(item("Manage Machines…", #selector(manageMachines(_:))))
+  }
+
+  @objc func openMachine(_ sender: NSMenuItem) {
+    bringToFront()
+    main.showMachine(sender.representedObject as? String)
+  }
+
+  @objc func manageMachines(_ sender: Any?) {
+    NSWorkspace.shared.open(Machines.shared.site.appendingPathComponent("machines"))
+  }
+
+  /// The sidebar picker's online dot (src/client/app/MachineSwitcher.tsx).
+  private static func statusDot(online: Bool) -> NSImage {
+    let image = NSImage(size: NSSize(width: 8, height: 8), flipped: false) { rect in
+      (online ? NSColor.systemGreen : NSColor.tertiaryLabelColor).setFill()
+      NSBezierPath(ovalIn: rect).fill()
+      return true
+    }
+    return image
   }
 
   /// "DEV" on the Dock icon while the window shows a checkout's server, so a
@@ -310,6 +368,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation {
     server.addItem(item("Custom URL…", #selector(useCustomServer(_:))))
     server.addItem(.separator())
     server.addItem(item("Choose Checkout…", #selector(chooseCheckout(_:))))
+
+    let machines = submenu(in: menu, title: "Machines")
+    machines.delegate = self
+    // AppKit skips an empty menu; menuNeedsUpdate fills in the real items.
+    machines.addItem(withTitle: "This Mac", action: nil, keyEquivalent: "")
 
     let window = submenu(in: menu, title: "Window")
     window.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")

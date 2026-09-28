@@ -13,9 +13,12 @@ import { useCloudPairSession } from "../components/cloud/useCloudPairSession"
 import { InputPopover, PopoverMenuItem } from "../components/chat-ui/ChatPreferenceControls"
 import { findCurrentMachine, useConnectionStore } from "../stores/connectionStore"
 import { displayClaimUrl } from "../lib/pairSession"
+import { postToMacApp } from "../lib/macApp"
 import { cn } from "../lib/utils"
+import type { CloudMachineSummary } from "../../shared/cloud-api"
 
 const MANAGE_MACHINES_URL = "https://kanna.sh/machines"
+const THIS_MAC_NAME = "This Mac"
 
 /** Shared trigger padding: borderless, but keeps the same net inset as before. */
 const TRIGGER_CLASS = "w-full justify-between py-1.5 rounded-md hover:bg-transparent"
@@ -43,12 +46,17 @@ function OnlineDot({ online }: { online: boolean }) {
  * Sidebar machine switcher. Cloud mode lists the account's machines and
  * navigates between their subdomains (mode comes from connectionStore's
  * /__cloud/machines feature detection); local mode offers one-click pairing,
- * or a shortcut to the hosted URL once this machine has one.
+ * or a shortcut to the hosted URL once this machine has one. In Kanna for
+ * Mac, signed in, it's always the machine list, and the app does the
+ * switching (this Mac at localhost, the rest at kanna.sh).
  */
 export function MachineSwitcher() {
   const mode = useConnectionStore((state) => state.mode)
   const machines = useConnectionStore((state) => state.machines)
   const load = useConnectionStore((state) => state.load)
+  const fromMacApp = useConnectionStore((state) => state.fromMacApp)
+  const thisMachineSubdomain = useConnectionStore((state) => state.thisMachine)
+  const showingMachine = useConnectionStore((state) => state.showingMachine)
   const [pairDialogOpen, setPairDialogOpen] = useState(false)
   const { session, starting, begin } = useCloudPairSession({ enabled: mode === "local" })
   const startedRef = useRef(false)
@@ -110,7 +118,24 @@ export function MachineSwitcher() {
     )
   }
 
-  const currentMachine = findCurrentMachine(machines)
+  // In Kanna for Mac the app says which machine is showing and which is this
+  // Mac (at localhost, where the hostname names no machine). This Mac is
+  // listed first, even when it isn't on Kanna Cloud, so there's a way back.
+  const thisMachine = fromMacApp ? machines.find((machine) => machine.subdomain === thisMachineSubdomain) : undefined
+  const currentMachine = fromMacApp
+    ? machines.find((machine) => machine.subdomain === (showingMachine ?? thisMachineSubdomain)) ?? null
+    : findCurrentMachine(machines)
+  const showingThisMac = fromMacApp && (showingMachine === null || showingMachine === thisMachineSubdomain)
+  const otherMachines = fromMacApp
+    ? machines.filter((machine) => machine.subdomain !== thisMachineSubdomain)
+    : machines
+  const open = (machine: CloudMachineSummary | null) => {
+    if (fromMacApp) {
+      postToMacApp({ type: "openMachine", subdomain: machine?.subdomain ?? null })
+    } else if (machine) {
+      window.location.href = machine.appOrigin
+    }
+  }
 
   return (
     <MachineSection>
@@ -121,7 +146,7 @@ export function MachineSwitcher() {
             <span className="flex min-w-0 items-center gap-2">
               <LaptopMinimal className="size-4 shrink-0" />
               <span className="truncate text-xs font-medium">
-                {currentMachine?.name ?? window.location.hostname}
+                {currentMachine?.name ?? (showingThisMac ? THIS_MAC_NAME : window.location.hostname)}
               </span>
             </span>
             <ChevronDown className="size-3.5 shrink-0 opacity-60" />
@@ -130,16 +155,31 @@ export function MachineSwitcher() {
       >
         {(close) => (
           <>
-            {machines.map((machine) => {
+            {fromMacApp ? (
+              <PopoverMenuItem
+                onClick={() => {
+                  close()
+                  if (!showingThisMac) open(null)
+                }}
+                selected={showingThisMac}
+                icon={<OnlineDot online />}
+                label={
+                  <>
+                    {thisMachine?.name ?? THIS_MAC_NAME}{" "}
+                    <span className="text-muted-foreground">(This machine)</span>
+                  </>
+                }
+                description={thisMachine ? `${thisMachine.subdomain}.kanna.sh` : "Not on Kanna Cloud"}
+              />
+            ) : null}
+            {otherMachines.map((machine) => {
               const isCurrent = machine.subdomain === currentMachine?.subdomain
               return (
                 <PopoverMenuItem
                   key={machine.subdomain}
                   onClick={() => {
                     close()
-                    if (!isCurrent) {
-                      window.location.href = machine.appOrigin
-                    }
+                    if (!isCurrent) open(machine)
                   }}
                   selected={isCurrent}
                   icon={<OnlineDot online={machine.online} />}

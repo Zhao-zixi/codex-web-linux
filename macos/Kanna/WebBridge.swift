@@ -17,6 +17,8 @@ final class WebBridge: NSObject, WKScriptMessageHandler, UNUserNotificationCente
   var onWindowDrag: (() -> Void)?
   var onWindowDoubleClick: (() -> Void)?
   var onActivateNotification: (() -> Void)?
+  /// The sidebar's machine picker; nil is this Mac.
+  var onOpenMachine: ((String?) -> Void)?
 
   private let center = UNUserNotificationCenter.current()
   private var permission = "default"
@@ -62,6 +64,8 @@ final class WebBridge: NSObject, WKScriptMessageHandler, UNUserNotificationCente
       onWindowDrag?()
     case "windowDoubleClick":
       onWindowDoubleClick?()
+    case "openMachine":
+      onOpenMachine?(body["subdomain"] as? String)
     case "requestNotificationPermission":
       requestPermission(callbackId: body["id"] as? String)
     default:

@@ -22,6 +22,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
   private var themeObservation: NSKeyValueObservation?
   private var popups: [PopupWindowController] = []
   private var loadedURL: URL?
+  /// Another of the account's machines, when the window shows one (the
+  /// Machines menu, the sidebar's picker). nil is this Mac: whatever the
+  /// server agent runs, at its local address.
+  private(set) var remoteMachine: Machines.Machine?
   private lazy var navigation = NavigationHandler(owner: self)
   private let metrics: ChromeMetrics
 
@@ -91,6 +95,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     }
     bridge.onWindowDrag = { [weak self] in self?.dragWindow() }
     bridge.onWindowDoubleClick = { [weak self] in self?.titleBarDoubleClicked() }
+    bridge.onOpenMachine = { [weak self] subdomain in self?.showMachine(subdomain) }
   }
 
   required init?(coder: NSCoder) { fatalError() }
@@ -155,6 +160,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
       addEventListener("dblclick", (event) => {
         if (inTitleBar(event)) post("windowDoubleClick")
       }, true)
+
+      // The account's machines, for the sidebar's picker
+      // (src/client/stores/connectionStore.ts). See pushMachines.
+      window.__kannaSetMachines = (machines) => {
+        window.__kannaMachines = machines
+        dispatchEvent(new CustomEvent("kanna:machines", { detail: machines }))
+      }
     })()
     """
   }
@@ -162,6 +174,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
   // MARK: Server
 
   func show(_ state: ServerAgent.State) {
+    // The local server keeps running (other machines reach it through
+    // kanna.sh) while the window shows another machine.
+    guard remoteMachine == nil else { return }
     let agent = ServerAgent.shared
     let showLog = StatusOverlay.Action(title: "Show Log", isDefault: false) {
       NSWorkspace.shared.open(agent.logURL)
@@ -209,6 +224,79 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
   }
 
   var serverOrigin: URL? { loadedURL }
+
+  // MARK: Machines
+
+  /// The machine the window shows, by subdomain. This Mac's is nil when it
+  /// isn't on Kanna Cloud.
+  var showingSubdomain: String? { remoteMachine?.subdomain ?? Machines.shared.thisSubdomain }
+
+  /// Shows one of the account's machines. This Mac (or nil) is the local
+  /// server, never its kanna.sh address; another machine loads from
+  /// kanna.sh, at `url` when a link inside the page picked a path there.
+  func showMachine(_ subdomain: String?, url: URL? = nil) {
+    guard let subdomain, subdomain != Machines.shared.thisSubdomain,
+          let machine = Machines.shared.list.first(where: { $0.subdomain == subdomain }),
+          let origin = URL(string: machine.appOrigin) else {
+      showThisMac()
+      return
+    }
+    if remoteMachine?.subdomain == subdomain, url == nil { return }
+    remoteMachine = machine
+    loadedURL = origin
+    overlay.hide()
+    webView.load(URLRequest(url: url ?? origin))
+    pushMachines()
+  }
+
+  func showThisMac() {
+    guard remoteMachine != nil else { return }
+    remoteMachine = nil
+    loadedURL = nil
+    show(ServerAgent.shared.state)
+    pushMachines()
+  }
+
+  /// Hands the machine list to the page, which shows it in the sidebar's
+  /// picker in place of its own (it can't tell which machine is this Mac).
+  /// null until the list loads, and when signed out: the picker falls back
+  /// to its local behavior.
+  func pushMachines() {
+    struct Payload: Encodable {
+      let machines: [Machines.Machine]
+      let thisMachine: String?
+      let showing: String?
+    }
+    let machines = Machines.shared
+    var json = "null"
+    if !machines.list.isEmpty,
+       let data = try? JSONEncoder().encode(Payload(
+         machines: machines.list,
+         thisMachine: machines.thisSubdomain,
+         showing: showingSubdomain
+       )) {
+      json = String(decoding: data, as: UTF8.self)
+    }
+    webView.evaluateJavaScript("window.__kannaSetMachines?.(\(json))")
+  }
+
+  /// A machine that doesn't answer, or kanna.sh itself.
+  func remoteLoadFailed(_ error: Error) {
+    guard let machine = remoteMachine else { return }
+    overlay.show(
+      busy: false,
+      title: "Couldn't reach \(machine.name)",
+      detail: error.localizedDescription,
+      actions: [
+        .init(title: "Show This Mac", isDefault: false) { [weak self] in self?.showThisMac() },
+        .init(title: "Try Again", isDefault: true) { [weak self] in
+          guard let self, let url = loadedURL else { return }
+          overlay.hide()
+          webView.load(URLRequest(url: url))
+        },
+      ]
+    )
+  }
 
   func go(to path: String) {
     guard let base = loadedURL, let url = URL(string: path, relativeTo: base) else { return }
@@ -259,9 +347,9 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
   @objc func goForward(_ sender: Any?) { webView.goForward() }
 }
 
-/// Where each navigation goes. The window only ever shows the local server;
-/// everything else opens in the default browser, where the user's sessions
-/// and password manager are.
+/// Where each navigation goes. The window only ever shows Kanna, the local
+/// server's or another machine's; everything else opens in the default
+/// browser, where the user's sessions and password manager are.
 final class NavigationHandler: NSObject, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
   private weak var owner: MainWindowController?
   private var destinations: [ObjectIdentifier: URL] = [:]
@@ -302,6 +390,14 @@ final class NavigationHandler: NSObject, WKNavigationDelegate, WKUIDelegate, WKD
       decisionHandler(.allow)
       return
     }
+    // A machine's kanna.sh address (the picker on another machine's page
+    // sets location.href) switches machines in place; this Mac's goes to
+    // the local server.
+    if let host = url.host, let machine = Machines.shared.machine(forHost: host) {
+      decisionHandler(.cancel)
+      owner?.showMachine(machine.subdomain, url: url)
+      return
+    }
     NSWorkspace.shared.open(url)
     decisionHandler(.cancel)
   }
@@ -322,9 +418,18 @@ final class NavigationHandler: NSObject, WKNavigationDelegate, WKUIDelegate, WKD
   func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
     owner?.bridge.refreshPermission()
     owner?.applyChrome()
+    owner?.pushMachines()
   }
 
   func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+    if owner?.remoteMachine != nil {
+      // Cancelled loads (a download, a switch) aren't failures.
+      let error = error as NSError
+      let cancelled = error.code == NSURLErrorCancelled && error.domain == NSURLErrorDomain
+      let interrupted = error.code == 102 && error.domain == "WebKitErrorDomain"
+      if !cancelled && !interrupted { owner?.remoteLoadFailed(error) }
+      return
+    }
     // The server went away between its health check and this load. The
     // agent notices within seconds and the window reloads when it is back.
     ServerAgent.shared.start()

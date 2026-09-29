@@ -12,7 +12,10 @@ import { builtinModules } from "node:module"
  *   every user's machine.
  * - The bundle loads a package that won't be installed: every bare import
  *   left in it must be a builtin, a declared dependency, or a known optional
- *   one that its caller guards.
+ *   one that its caller guards. Looking a package up on disk counts too
+ *   (`import.meta.resolve`, `require.resolve`): a bundled package has no
+ *   folder to find. Kanna read the Agent SDK's package.json that way, and
+ *   0.76.1 failed on the first Claude version check.
  * - Nothing was seen at all: Bun's `// node_modules/…` region comments are how
  *   this sees inlined packages. If their format changed, an empty scan would
  *   pass silently, so a bundle with no regions is a failure too.
@@ -89,6 +92,7 @@ export function checkServerBundle(files: BundleFile[], options: BundleCheckOptio
     for (const match of file.text.matchAll(/(?:^|[\s;])import\s*"([^"]+)"/g)) specifiers.add(match[1]!)
     for (const match of file.text.matchAll(/\bimport\(\s*"([^"]+)"\s*\)/g)) specifiers.add(match[1]!)
     for (const match of file.text.matchAll(/\b__require\(\s*"([^"]+)"\s*\)/g)) specifiers.add(match[1]!)
+    for (const match of file.text.matchAll(/\b(?:import\.meta|require)\.resolve\(\s*"([^"]+)"/g)) specifiers.add(match[1]!)
     for (const specifier of specifiers) {
       if (specifier.startsWith(".") || specifier.startsWith("/") || isBuiltin(specifier)) continue
       if (!SPECIFIER.test(specifier)) continue

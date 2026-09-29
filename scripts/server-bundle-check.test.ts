@@ -62,6 +62,15 @@ describe("checkServerBundle", () => {
     ])
   })
 
+  test("looking a bundled package up on disk fails: it has no folder there", () => {
+    const text = `${CLEAN}\nconst entry = fileURLToPath(import.meta.resolve("@anthropic-ai/claude-agent-sdk"));\nconst p = require.resolve("zod/package.json");\n`
+    const { problems } = checkServerBundle([{ path: "chunk.js", text }], OPTIONS)
+    expect(problems).toEqual([
+      expect.stringContaining('loads "@anthropic-ai/claude-agent-sdk"'),
+      expect.stringContaining('loads "zod/package.json"'),
+    ])
+  })
+
   test("a bundle with no region comments fails rather than passing blind", () => {
     const { problems } = checkServerBundle([{ path: "cli.js", text: "var x = 1;\n" }], OPTIONS)
     expect(problems).toEqual([expect.stringContaining("no `// node_modules/…`")])

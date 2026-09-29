@@ -16,10 +16,12 @@
  * provider card offers `claude update`.
  */
 
-import { readFileSync, statSync } from "node:fs"
+import { statSync } from "node:fs"
 import { homedir } from "node:os"
-import path from "node:path"
-import { fileURLToPath } from "node:url"
+// Read at build time: the published server is a bundle with the SDK inlined
+// (scripts/build-server.ts), so there's no SDK folder on disk to look in. By
+// path, because the SDK's `exports` doesn't list package.json.
+import sdkPackage from "../../node_modules/@anthropic-ai/claude-agent-sdk/package.json" with { type: "json" }
 import { compareVersions } from "./cli-runtime"
 import { resolveCommandPath } from "./process-utils"
 
@@ -34,20 +36,13 @@ export type ClaudeExecutable =
   | { ok: false; reason: "not_installed"; message: string }
   | { ok: false; reason: "outdated"; message: string; path: string; version: string }
 
-let minimumVersion: string | null = null
-
 /**
  * The Claude Code version this Agent SDK was built against (its
  * `claudeCodeVersion`; SDK 0.3.N pairs with Claude Code 2.1.N).
  */
 export function claudeCodeMinimumVersion(): string {
-  if (minimumVersion) return minimumVersion
-  const sdkEntry = fileURLToPath(import.meta.resolve("@anthropic-ai/claude-agent-sdk"))
-  const pkg = JSON.parse(readFileSync(path.join(path.dirname(sdkEntry), "package.json"), "utf8")) as {
-    claudeCodeVersion?: unknown
-  }
-  minimumVersion = typeof pkg.claudeCodeVersion === "string" ? pkg.claudeCodeVersion : "0.0.0"
-  return minimumVersion
+  const version = (sdkPackage as { claudeCodeVersion?: unknown }).claudeCodeVersion
+  return typeof version === "string" ? version : "0.0.0"
 }
 
 /** `CLAUDE_EXECUTABLE`, with a leading ~ expanded (the SDK spawns it verbatim). */

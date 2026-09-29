@@ -21,7 +21,7 @@ import {
  *
  * Kanna for Mac also knows which machine the window shows, and shows this
  * Mac at its local address. So it hands the page the list
- * (`MainWindowController.pushFleet` in macos/), and while it does, that list
+ * (`pushFleet` in macos/src/window.ts), and while it does, that list
  * wins, on localhost or on a machine subdomain.
  */
 

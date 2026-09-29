@@ -10,7 +10,7 @@ import process from "node:process"
 import { spawn } from "node:child_process"
 
 export const MAC_APP_BUNDLE_ID = "sh.kanna.mac"
-/** Registered by the app (macos/Kanna/Info.plist). `open?url=` names the server to show. */
+/** Registered by the app (macos/electron-builder.yml). `open?url=` names the server to show. */
 export const MAC_APP_URL_SCHEME = "kanna-app"
 
 /** The app sets this so a server it started does not outlive a crashed app. */

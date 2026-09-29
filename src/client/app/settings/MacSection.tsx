@@ -9,7 +9,7 @@ import { SettingsGroup, SettingsGroups, SettingsPlaceholder, SettingsRow } from 
 /**
  * Settings › This Mac, in Kanna for Mac only: the setup wizard's This Mac
  * step (MacSetupStep), for after setup. The app does each thing and reports
- * the live state back (macos/Kanna/MacSetup.swift), re-read every second so
+ * the live state back (macos/src/mac-setup.ts), re-read every second so
  * a switch flipped in System Settings shows here too.
  */
 export function MacSection() {

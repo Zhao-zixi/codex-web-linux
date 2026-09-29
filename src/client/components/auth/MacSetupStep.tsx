@@ -14,7 +14,7 @@ import { Switch } from "../ui/switch"
  * The setup wizard's This Mac step, shown only in Kanna for Mac, on this
  * Mac's own server: Open at Login, staying awake, and Full Disk Access. The
  * page draws it; the app does each thing and reports back
- * (macos/Kanna/MacSetup.swift). A browser, or an app older than the step,
+ * (macos/src/mac-setup.ts). A browser, or an app older than the step,
  * never sees it.
  */
 export { macSetupAvailable }

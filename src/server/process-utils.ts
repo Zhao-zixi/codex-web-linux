@@ -166,7 +166,7 @@ export function parseShellPathOutput(output: string) {
 export async function inheritShellPath() {
   if (process.platform === "win32") return
   // The Mac app already started this process with the whole login-shell
-  // environment (macos/Kanna/ServerAgent.swift); a heavy ~/.zshrc costs
+  // environment (macos/src/shell-env.ts); a heavy ~/.zshrc costs
   // seconds, so don't pay for it twice.
   if (process.env[SHELL_ENV_IMPORTED_ENV_VAR] === "1") return
   const shell = process.env.SHELL || (process.platform === "darwin" ? "/bin/zsh" : "/bin/sh")

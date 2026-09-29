@@ -1,114 +1,123 @@
 #!/bin/bash
-# Build a notarized Kanna.app for release, plus its Sparkle appcast.
+# Build Kanna for Mac.
 #
-#   ASC_PROFILE=<asc profile> ./build.sh [--publish]
-#
-#   --test stops at a signed DMG, not notarized and not published: quick
-#   builds to hand to a test Mac, which then needs right-click › Open once.
-#   --publish uploads the result to the kanna-releases R2 bucket, which
-#   kanna.sh serves at /downloads/mac/ (kanna-site, src/worker/mac-releases.ts):
-#   the homepage's Download for Mac button and every installed app's update
-#   check see it at once. Without it the build stays local.
-#   SIGN_IDENTITY overrides the Developer ID it signs with.
+#   ./build.sh             Kanna.app in dist/, signed, not notarized: for this Mac
+#   ./build.sh --open      the same, then quit any running Kanna and open this one
+#   ASC_PROFILE=<asc profile> ./build.sh --release
+#                          notarized DMG, update zip and latest-mac.yml in
+#                          dist/release, not uploaded
+#   ASC_PROFILE=<asc profile> ./build.sh --publish
+#                          --release, then upload to the kanna-releases R2
+#                          bucket, which kanna.sh serves at /downloads/mac/
+#                          (kanna-site, src/worker/mac-releases.ts): the
+#                          homepage's Download for Mac button and every
+#                          installed app's update check (src/updates.ts) see
+#                          it at once
 #
 # This ships only the window. Kanna itself is the npm package and releases
 # with /release as always; run this when macos/ changes, after bumping
-# MARKETING_VERSION in project.yml.
+# "version" in package.json. The build number is the commit count, so it only
+# goes up.
+#
+# Signed with the Developer ID (SIGN_IDENTITY overrides it) even for this Mac:
+# Full Disk Access and the microphone grant are tied to the signature, so a
+# stable one keeps them across rebuilds.
 #
 # One-time setup:
-#   - A Developer ID Application certificate in the login keychain.
+#   - The Developer ID Application certificate in the login keychain.
 #   - An `asc` profile (asc auth login) whose App Store Connect API key
 #     notarizes: asc talks to Apple's Notary API with it directly.
 #   - uv, for dmgbuild (run through uvx; see dmg-settings.py).
-#   - Sparkle's update-signing key in the keychain: generate_keys --account
-#     kanna (in build/derived/SourcePackages/artifacts once the package
-#     resolves). Its public half is SPARKLE_PUBLIC_KEY in project.yml.
-#
-# Output in build/release: Kanna-<version>.dmg, Kanna.dmg (the fixed "latest"
-# download link) and appcast.xml, served next to each other at the URL in
-# project.yml (KANNA_APPCAST_URL).
 set -euo pipefail
 cd "$(dirname "$0")"
-OUT="$(pwd)/build/release"
 
-SIGN_IDENTITY=${SIGN_IDENTITY:-"Developer ID Application: Jake Mor (QK9365HKRK)"}
-PUBLISH=false
-TEST=false
+MODE=local
 case "${1:-}" in
-  --publish) PUBLISH=true ;;
-  --test) TEST=true ;;
+  --open) MODE=open ;;
+  --release) MODE=release ;;
+  --publish) MODE=publish ;;
   "") ;;
-  *) echo "usage: build.sh [--publish | --test]" >&2; exit 1 ;;
+  *) echo "usage: build.sh [--open | --release | --publish]" >&2; exit 1 ;;
 esac
-$TEST || : "${ASC_PROFILE:?set ASC_PROFILE to the asc profile that notarizes (asc auth status)}"
-
-BUILD_NUMBER=$(git rev-list --count HEAD)
-rm -rf "$OUT"
-mkdir -p "$OUT"
-
-# 1. Build unsigned; signing happens below, inside out.
-xcodegen generate --quiet
-xcodebuild -project Kanna.xcodeproj -scheme Kanna -configuration Release \
-  -derivedDataPath build/derived -archivePath build/Kanna.xcarchive -quiet archive \
-  CURRENT_PROJECT_VERSION="$BUILD_NUMBER" CODE_SIGNING_ALLOWED=NO
-APP="$OUT/Kanna.app"
-ditto build/Kanna.xcarchive/Products/Applications/Kanna.app "$APP"
-VERSION=$(defaults read "$APP/Contents/Info.plist" CFBundleShortVersionString)
-echo "building Kanna for Mac $VERSION ($BUILD_NUMBER)"
-
-# 2. Sign Sparkle's helpers in the order Sparkle documents, then the app.
-sign() { codesign --force --timestamp --options runtime --sign "$SIGN_IDENTITY" "$@"; }
-SPARKLE="$APP/Contents/Frameworks/Sparkle.framework"
-sign "$SPARKLE/Versions/B/XPCServices/Installer.xpc"
-sign --preserve-metadata=entitlements "$SPARKLE/Versions/B/XPCServices/Downloader.xpc"
-sign "$SPARKLE/Versions/B/Autoupdate"
-sign "$SPARKLE/Versions/B/Updater.app"
-sign "$SPARKLE"
-sign --entitlements Kanna/Kanna.entitlements "$APP"
-codesign --verify --deep --strict "$APP"
-
-# 3. The DMG: the app and an Applications shortcut (dmg-settings.py). Signed
-# itself too, so Gatekeeper trusts the image before it trusts what's in it.
-DMG="$OUT/Kanna-$VERSION.dmg"
-uvx --from 'dmgbuild==1.6.5' dmgbuild -s dmg-settings.py -D app="$APP" "Kanna" "$DMG"
-codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG"
-# The app as a user gets it: still sealed once copied into the image.
-MOUNT=$(hdiutil attach -readonly -nobrowse -noautoopen "$DMG" | tail -1 | awk -F'\t' '{print $NF}')
-codesign --verify --deep --strict "$MOUNT/Kanna.app"
-hdiutil detach -quiet "$MOUNT"
-
-if $TEST; then
-  rm -rf "$APP"
-  echo
-  echo "test build (signed, not notarized): $DMG"
-  exit 0
+if [ "$MODE" = release ] || [ "$MODE" = publish ]; then
+  : "${ASC_PROFILE:?set ASC_PROFILE to the asc profile that notarizes (asc auth status)}"
 fi
 
-# 4. Notarize the DMG (its ticket covers the app inside) and staple it, so it
-# opens without a network check.
-asc --profile "$ASC_PROFILE" notarization submit --file "$DMG" --wait --timeout 1h --output table
+IDENTITY=${SIGN_IDENTITY:-"Jake Mor (QK9365HKRK)"}
+VERSION=$(node -p 'require("./package.json").version')
+BUILD_NUMBER=$(git rev-list --count HEAD)
+
+# 1. Bundle the main process and preloads, then package and sign Kanna.app
+#    (electron-builder.yml). It signs inside out, with entitlements.plist.
+bun install --frozen-lockfile
+bun run build
+rm -rf dist
+bunx electron-builder --mac --publish never \
+  -c.mac.identity="$IDENTITY" -c.buildVersion="$BUILD_NUMBER"
+APP=$(ls -d dist/mac*/Kanna.app | head -1)
+codesign --verify --deep --strict "$APP"
+echo "built Kanna for Mac $VERSION ($BUILD_NUMBER): $APP"
+
+if [ "$MODE" = open ]; then
+  osascript -e 'tell application id "sh.kanna.mac" to quit' >/dev/null 2>&1 || true
+  while pgrep -f "Kanna.app/Contents/MacOS/Kanna" >/dev/null; do sleep 0.2; done
+  open "$APP"
+fi
+if [ "$MODE" = local ] || [ "$MODE" = open ]; then exit 0; fi
+
+OUT="$(pwd)/dist/release"
+mkdir -p "$OUT"
+notarize() {
+  asc --profile "$ASC_PROFILE" notarization submit --file "$1" --wait --timeout 1h --output table
+}
+
+# 2. Notarize the app and staple its ticket, so it opens without a network
+#    check from the DMG and from the update zip alike.
+ditto -c -k --keepParent "$APP" "$OUT/notarize.zip"
+notarize "$OUT/notarize.zip"
+rm "$OUT/notarize.zip"
+xcrun stapler staple "$APP"
+xcrun stapler validate "$APP"
+
+# 3. The update zip: what electron-updater downloads and Squirrel installs.
+#    ditto keeps the bundle's symlinks and signature intact, as zip wouldn't.
+ZIP="Kanna-$VERSION-mac.zip"
+ditto -c -k --sequesterRsrc --keepParent "$APP" "$OUT/$ZIP"
+
+# 4. The DMG: the app and an Applications shortcut (dmg-settings.py). Signed
+#    and notarized itself too, so Gatekeeper trusts the image before it
+#    trusts what's in it.
+DMG="Kanna-$VERSION.dmg"
+uvx --from 'dmgbuild==1.6.5' dmgbuild -s dmg-settings.py -D app="$APP" "Kanna" "$OUT/$DMG"
+codesign --force --timestamp --sign "Developer ID Application: $IDENTITY" "$OUT/$DMG"
+notarize "$OUT/$DMG"
 # Apple's stapler, not `asc notarization staple`: stapling rewrites the DMG,
 # and asc then fails its own check that the file didn't change.
-xcrun stapler staple "$DMG"
-xcrun stapler validate "$DMG"
-spctl --assess --type open --context context:primary-signature --verbose "$DMG"
-cp "$DMG" "$OUT/Kanna.dmg"
+xcrun stapler staple "$OUT/$DMG"
+xcrun stapler validate "$OUT/$DMG"
+spctl --assess --type open --context context:primary-signature --verbose "$OUT/$DMG"
+cp "$OUT/$DMG" "$OUT/Kanna.dmg"
 
-# 5. The appcast, signed with the EdDSA key in the keychain. Sparkle installs
-# from the DMG; with earlier DMGs next to this one it also writes deltas.
-GENERATE_APPCAST=$(find build/derived/SourcePackages/artifacts -path '*/bin/generate_appcast' -type f | head -1)
-mkdir -p "$OUT/appcast"
-cp "$DMG" "$OUT/appcast/"
-"$GENERATE_APPCAST" --account kanna "$OUT/appcast"
-mv "$OUT/appcast/appcast.xml" "$OUT/appcast.xml"
-rm -rf "$OUT/appcast" "$APP"
+# 5. The update feed electron-updater reads (its "generic" provider format):
+#    the newest version and its zip, which it checks against the hash.
+sha512() { openssl dgst -sha512 -binary "$1" | base64; }
+cat > "$OUT/latest-mac.yml" <<EOF
+version: $VERSION
+files:
+  - url: $ZIP
+    sha512: $(sha512 "$OUT/$ZIP")
+    size: $(stat -f %z "$OUT/$ZIP")
+path: $ZIP
+sha512: $(sha512 "$OUT/$ZIP")
+releaseDate: '$(date -u +%Y-%m-%dT%H:%M:%S.000Z)'
+EOF
 
-# 6. Publish. The versioned DMG goes up before the files that point at it.
-if $PUBLISH; then
+# 6. Publish. The versioned files go up before the ones that point at them.
+if [ "$MODE" = publish ]; then
   # The Cloudflare account kanna.sh and the bucket live in; without it, a
   # login that can see several accounts refuses to pick one.
   export CLOUDFLARE_ACCOUNT_ID=${CLOUDFLARE_ACCOUNT_ID:-7c389c8055f3e4aba40ec6500c07ff3b}
-  for file in "Kanna-$VERSION.dmg" Kanna.dmg appcast.xml; do
+  for file in "$DMG" "$ZIP" Kanna.dmg latest-mac.yml; do
     bunx wrangler@4 r2 object put "kanna-releases/mac/$file" --file "$OUT/$file" --remote
   done
   echo "published Kanna for Mac $VERSION: https://kanna.sh/downloads/mac/Kanna.dmg"

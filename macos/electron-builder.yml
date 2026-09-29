@@ -1,0 +1,38 @@
+# Kanna for Mac. electron-builder only packages and signs Kanna.app here;
+# build.sh notarizes it and makes the DMG and the update zip.
+appId: sh.kanna.mac
+productName: Kanna
+copyright: MIT License
+directories:
+  output: dist
+files:
+  - build/**
+  - static/**
+  - package.json
+# Kanna › Uninstall Kanna… runs it (src/uninstall.ts).
+extraResources:
+  - from: uninstall.sh
+    to: uninstall.sh
+# kanna-app://open from a terminal's `kanna` (src/server/mac-app.ts in the
+# repo root) and kanna-app://auth from kanna.sh's sign-in (src/app-auth.ts).
+# kanna.sh hands a session only to the schemes it knows (APP_AUTH_SCHEMES in
+# kanna-site), so this one doesn't change.
+protocols:
+  - name: Kanna
+    schemes:
+      - kanna-app
+mac:
+  target: dir
+  category: public.app-category.developer-tools
+  icon: resources/icon.png
+  minimumSystemVersion: "14.0"
+  hardenedRuntime: true
+  # No App Sandbox: the app starts the user's `kanna`, whose agents read and
+  # write any project in the home directory and spawn the user's own tools,
+  # and a sandboxed parent passes its sandbox to every child. That rules out
+  # the Mac App Store; the app ships as a notarized Developer ID build.
+  entitlements: entitlements.plist
+  entitlementsInherit: entitlements.plist
+  notarize: false
+  extendInfo:
+    NSMicrophoneUsageDescription: Kanna uses the microphone when you dictate a prompt.

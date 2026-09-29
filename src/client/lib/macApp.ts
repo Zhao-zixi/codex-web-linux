@@ -2,12 +2,14 @@ import { create } from "zustand"
 
 /**
  * The Kanna for Mac window (macos/). The app talks to the page through the
- * `kanna` WebKit message handler one way and `window.__kanna*` functions the
- * other (macos/Kanna/WebBridge.swift, MainWindowController.swift).
+ * `kanna` message handler one way and `window.__kanna*` globals the other
+ * (macos/src/preload.ts, window.ts). The handler keeps the WebKit name from
+ * the WKWebView the app used to be, so pages of any version find it.
  *
- * The app and this page ship separately (Sparkle vs npm), so the page checks
- * `window.__kannaMacApp.features` before it shows anything that needs the
- * app, and an app older than the feature simply doesn't get it.
+ * The app and this page ship separately (the app's own updates vs npm), so
+ * the page checks `window.__kannaMacApp.features` before it shows anything
+ * that needs the app, and an app older than the feature simply doesn't get
+ * it.
  */
 
 interface MacAppHandler {
@@ -16,7 +18,7 @@ interface MacAppHandler {
 
 export type MacAppFeature = "fleet" | "setup"
 
-/** The live state behind the setup wizard's This Mac step (macos/Kanna/MacSetup.swift). */
+/** The live state behind the setup wizard's This Mac step (macos/src/mac-setup.ts). */
 export interface MacSetupState {
   loginItem: "enabled" | "requiresApproval" | "off"
   keepAwakeOnPower: boolean

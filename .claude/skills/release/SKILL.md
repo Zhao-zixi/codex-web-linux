@@ -27,12 +27,11 @@ git log "$LAST"..HEAD --oneline
 
 Bump commits don't count as changes. If nothing else is new, skip iOS.
 
-**Mac (`macos/`).** Each Mac release is tagged `mac-v<version>` in this repo. Before the first tag exists, use the last commit that changed `MARKETING_VERSION` in `macos/project.yml`. That commit is the release commit, for example "Kanna for Mac 1.0.2":
+**Mac (`macos/`).** Each Mac release is tagged `mac-v<version>` in this repo, on its release commit ("Kanna for Mac 2.0.1"):
 
 ```bash
 cd /Users/jake/Projects/kanna
 LAST=$(git tag --list 'mac-v*' --sort=-creatordate | head -1)
-LAST=${LAST:-$(git log -1 --format=%H -G MARKETING_VERSION -- macos/project.yml)}
 git log "$LAST"..HEAD --oneline -- macos
 ```
 
@@ -131,15 +130,15 @@ Follow the `/testflight` skill (`~/.claude/skills/testflight/SKILL.md`) for the 
 
 ### Step 6: Mac → kanna.sh (only if `macos/` changed)
 
-`macos/` is the Kanna for Mac window only. The server inside it is the npm package, so a Mac release is needed only when `macos/` itself changed.
+`macos/` is Kanna for Mac, an Electron app: the window only. The server inside it is the npm package, so a Mac release is needed only when `macos/` itself changed.
 
-1. Bump the patch number of `MARKETING_VERSION` in `macos/project.yml` (for example `1.0.2` → `1.0.3`). Bump the minor number instead for a new user-facing feature. The build number is the commit count (`build.sh`), which Sparkle compares, so commit before you build.
+1. Bump the patch number of `"version"` in `macos/package.json` (for example `2.0.0` → `2.0.1`). Bump the minor number instead for a new user-facing feature. Installed apps update only to a higher version, and the build number is the commit count (`build.sh`), so commit before you build.
 2. Commit only that file as `Kanna for Mac <version>` and push.
 3. Build, notarize and publish in the background. The `asc` profile is `jake@superwall.com`:
    ```bash
    cd /Users/jake/Projects/kanna/macos && ASC_PROFILE=jake@superwall.com ./build.sh --publish
    ```
-   This uploads `Kanna-<version>.dmg`, `Kanna.dmg` and `appcast.xml` to R2. The kanna.sh homepage's Download for Mac button and every installed app's Sparkle update check see them at once.
+   It notarizes twice (the app, then the DMG), which takes a few minutes each. Then it uploads `Kanna-<version>.dmg`, `Kanna-<version>-mac.zip`, `Kanna.dmg` and `latest-mac.yml` to R2. The kanna.sh homepage's Download for Mac button and every installed app's update check (`macos/src/updates.ts`) see them at once.
 4. After it publishes, tag the release commit and push the tag: `git tag mac-v<version> && git push origin mac-v<version>`. No workflow runs on this tag; the next `/release` uses it to find what changed.
 5. If the build fails on signing or notarization, report the exact error and stop. Never create, revoke or delete certificates.
 

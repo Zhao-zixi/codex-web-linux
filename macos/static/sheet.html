@@ -1,0 +1,139 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>Kanna</title>
+<!--
+  The two alerts that need more than Electron's dialog has: Server › Custom
+  URL… (a text field) and Kanna › Uninstall Kanna… (checkboxes). Shown as a
+  sheet on the window.
+-->
+<style>
+  :root { color-scheme: light dark; }
+  html, body { margin: 0; }
+  body {
+    font: 13px -apple-system, BlinkMacSystemFont, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    background: Canvas;
+    color: CanvasText;
+    padding: 20px 20px 16px;
+    cursor: default;
+    user-select: none;
+  }
+  h1 { font-size: 13px; font-weight: 700; margin: 0 0 6px; }
+  p { font-size: 11px; margin: 0 0 12px; color: light-dark(rgb(0 0 0 / 0.7), rgb(255 255 255 / 0.7)); line-height: 1.4; }
+  input[type=text] {
+    width: 100%; box-sizing: border-box;
+    font: 13px -apple-system, BlinkMacSystemFont, sans-serif;
+    padding: 4px 6px;
+    border-radius: 5px;
+    border: 1px solid light-dark(rgb(0 0 0 / 0.2), rgb(255 255 255 / 0.2));
+    background: Field;
+    color: FieldText;
+    outline: none;
+  }
+  input[type=text]:focus { border-color: AccentColor; box-shadow: 0 0 0 3px color-mix(in srgb, AccentColor 35%, transparent); }
+  .heading { font-size: 11px; font-weight: 600; color: light-dark(rgb(0 0 0 / 0.5), rgb(255 255 255 / 0.5)); margin: 4px 0 6px; }
+  .heading + .heading, .group + .heading { margin-top: 14px; }
+  label { display: flex; align-items: center; gap: 6px; margin: 0 0 6px; }
+  label.disabled { opacity: 0.4; }
+  input[type=checkbox] { margin: 0; accent-color: AccentColor; }
+  .buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+  button {
+    min-width: 72px;
+    font: 13px -apple-system, BlinkMacSystemFont, sans-serif;
+    padding: 4px 12px;
+    border-radius: 6px;
+    border: 1px solid light-dark(rgb(0 0 0 / 0.15), rgb(255 255 255 / 0.15));
+    background: light-dark(#fff, rgb(255 255 255 / 0.1));
+    color: CanvasText;
+  }
+  button.default { background: AccentColor; color: AccentColorText; border-color: transparent; }
+  button.destructive { background: #e5484d; color: white; border-color: transparent; }
+  button:focus { outline: none; }
+</style>
+</head>
+<body>
+<div id="content"></div>
+<script>
+  const content = document.getElementById("content")
+  const el = (tag, props = {}, ...children) => {
+    const node = document.createElement(tag)
+    Object.assign(node, props)
+    node.append(...children)
+    return node
+  }
+  const fit = () => window.kannaPanel.resize(Math.ceil(document.documentElement.getBoundingClientRect().height))
+  const buttons = (primary, onPrimary) => {
+    const cancel = el("button", { textContent: "Cancel", onclick: () => window.kannaPanel.done(null) })
+    const ok = el("button", { textContent: primary.title, className: primary.className, onclick: onPrimary })
+    addEventListener("keydown", (event) => {
+      if (event.key === "Escape") window.kannaPanel.done(null)
+      if (event.key === "Enter") onPrimary()
+    })
+    return el("div", { className: "buttons" }, cancel, ok)
+  }
+
+  function customServer(data) {
+    const field = el("input", { type: "text", placeholder: "http://localhost:3211", value: data.last ?? "" })
+    content.append(
+      el("h1", { textContent: "Connect to a Kanna server" }),
+      el("p", { textContent: "The address of a running Kanna, like http://localhost:3211 or another Mac's http://name.tailnet.ts.net:3210. Kanna shows it once it answers." }),
+      field,
+      buttons({ title: "Connect", className: "default" }, () => window.kannaPanel.done(field.value)),
+    )
+    field.focus()
+    field.select()
+  }
+
+  function uninstall(data) {
+    const boxes = []
+    const group = (heading, choices) => {
+      content.append(el("div", { className: "heading", textContent: heading }))
+      const wrap = el("div", { className: "group" })
+      for (const choice of choices) {
+        const box = el("input", { type: "checkbox", checked: choice.checked })
+        const label = el("label", {}, box, choice.title)
+        boxes.push({ box, label, choice })
+        wrap.append(label)
+      }
+      content.append(wrap)
+    }
+    content.append(
+      el("h1", { textContent: "Uninstall Kanna?" }),
+      el("p", { textContent: data.message }),
+    )
+    group("Also remove", data.keep)
+    group("Agent CLIs, and their sign-ins", data.agents)
+
+    // Keeping the command keeps Bun: untick the command and Bun goes grey.
+    const cli = boxes.find((entry) => entry.choice.id === "cli")
+    const bun = boxes.find((entry) => entry.choice.id === "bun")
+    let remembered = bun.box.checked
+    cli.box.addEventListener("change", () => {
+      if (cli.box.checked) {
+        bun.box.disabled = false
+        bun.label.classList.remove("disabled")
+        bun.box.checked = remembered
+      } else {
+        remembered = bun.box.checked
+        bun.box.checked = false
+        bun.box.disabled = true
+        bun.label.classList.add("disabled")
+      }
+    })
+
+    content.append(buttons({ title: "Uninstall", className: "destructive" }, () => {
+      window.kannaPanel.done(Object.fromEntries(boxes.map(({ box, choice }) => [choice.id, box.checked])))
+    }))
+  }
+
+  window.kannaPanel.init().then(({ kind, data }) => {
+    if (kind === "customServer") customServer(data)
+    if (kind === "uninstall") uninstall(data)
+    requestAnimationFrame(fit)
+  })
+</script>
+</body>
+</html>

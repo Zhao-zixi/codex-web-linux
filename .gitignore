@@ -37,7 +37,6 @@ playwright-report/
 # .git directory is ../kanna-ios (git init --separate-git-dir).
 ios/
 
-# Mac app: macos/project.yml is the source of truth; the Xcode project is
-# generated from it.
-macos/Kanna.xcodeproj/
+# Mac app: the bundled main process and preloads (dist/ above covers the
+# packaged app and release files).
 macos/build/

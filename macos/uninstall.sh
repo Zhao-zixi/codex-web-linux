@@ -4,8 +4,8 @@
 # permissions, and this Mac's Kanna Cloud pairing. Optionally Bun and the
 # agent CLIs the setup wizard installs.
 #
-# Kanna › Uninstall Kanna… runs this from the app bundle (AppDelegate
-# uninstallKanna), with the user's choices as flags. By hand:
+# Kanna › Uninstall Kanna… runs this from the app bundle (src/uninstall.ts),
+# with the user's choices as flags. By hand:
 #
 #   bash uninstall.sh              Kanna, its data and Bun; asks first
 #   bash uninstall.sh --agents     also every agent CLI below, and its sign-in
@@ -127,7 +127,12 @@ step "Removing Kanna's $($KEEP_DATA || echo "data, ")preferences, web data and l
 $KEEP_DATA || rm -rf "$HOME/.kanna" "$HOME/.kanna-dev"
 defaults delete sh.kanna.mac >/dev/null 2>&1
 defaults delete sh.kanna.mac.dev >/dev/null 2>&1
-rm -rf "$HOME"/Library/Caches/sh.kanna.mac* \
+# The app's settings and web data live in Application Support/Kanna (Kanna
+# Dev: `bun run start` in macos/); the rest is from the WKWebView app it was
+# until 2.0.
+rm -rf "$HOME"/Library/"Application Support"/Kanna \
+       "$HOME"/Library/"Application Support"/"Kanna Dev" \
+       "$HOME"/Library/Caches/sh.kanna.mac* \
        "$HOME"/Library/WebKit/sh.kanna.mac* \
        "$HOME"/Library/HTTPStorages/sh.kanna.mac* \
        "$HOME"/Library/"Saved Application State"/sh.kanna.mac*.savedState \

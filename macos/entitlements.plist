@@ -1,12 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
-<!-- No App Sandbox. The app starts the user's `kanna`, whose agents read and
-     write any project in the home directory and spawn the user's own tools,
-     and a sandboxed parent passes its sandbox to every child. That rules out the
-     Mac App Store; the app ships as a notarized Developer ID build instead
-     (macos/build.sh). -->
+<!-- Hardened runtime, no App Sandbox (electron-builder.yml says why). -->
 <dict>
+	<!-- V8 compiles JavaScript into executable memory. -->
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
 	<!-- Dictation in the composer (getUserMedia). The hardened runtime ignores
 	     NSMicrophoneUsageDescription without it. -->
 	<key>com.apple.security.device.audio-input</key>

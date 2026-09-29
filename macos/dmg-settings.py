@@ -5,8 +5,8 @@
 #
 # A DMG with an Applications shortcut, rather than a zip, because an app run
 # from where it was unzipped (Downloads) is App-Translocated: macOS runs a
-# read-only copy from a random path, and Sparkle can't update it there. The
-# window says "drag me to Applications" without a word.
+# read-only copy from a random path, and the app can't update itself there.
+# The window says "drag me to Applications" without a word.
 #
 #   uvx dmgbuild -s dmg-settings.py -D app=path/to/Kanna.app "Kanna" Kanna.dmg
 

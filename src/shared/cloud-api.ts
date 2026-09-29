@@ -205,3 +205,30 @@ export interface CloudMachineSummary {
 export interface CloudMachinesResponse {
   machines: CloudMachineSummary[]
 }
+
+// ---------------------------------------------------------------------------
+// Fleet: the account's machines, for a machine's own UI
+// ---------------------------------------------------------------------------
+
+/**
+ * `GET {controlUrl}/fleet` with `Authorization: Bearer <machineToken>` — the
+ * machines of the account this machine is paired to, itself included. A
+ * machine's UI on localhost has no kanna.sh session, so the machine asks with
+ * its own credentials. 401 = revoked.
+ */
+export interface CloudFleetResponse {
+  /** This machine's subdomain. */
+  self: string
+  machines: CloudMachineSummary[]
+}
+
+/**
+ * Machine-served `GET` path for the same list, fetched by the machine with
+ * its credentials. `self` is null and `machines` empty while unpaired.
+ */
+export const CLOUD_FLEET_PATH = "/api/cloud/fleet"
+
+export interface CloudLocalFleetResponse {
+  self: string | null
+  machines: CloudMachineSummary[]
+}

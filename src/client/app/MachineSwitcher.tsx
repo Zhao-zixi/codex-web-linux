@@ -17,7 +17,7 @@ import { postToMacApp } from "../lib/macApp"
 import { cn } from "../lib/utils"
 import type { CloudMachineSummary } from "../../shared/cloud-api"
 
-const MANAGE_MACHINES_URL = "https://kanna.sh/machines"
+const FLEET_URL = "https://kanna.sh/fleet"
 const THIS_MAC_NAME = "This Mac"
 
 /** Shared trigger padding: borderless, but keeps the same net inset as before. */
@@ -46,9 +46,10 @@ function OnlineDot({ online }: { online: boolean }) {
  * Sidebar machine switcher. Cloud mode lists the account's machines and
  * navigates between their subdomains (mode comes from connectionStore's
  * /__cloud/machines feature detection); local mode offers one-click pairing,
- * or a shortcut to the hosted URL once this machine has one. In Kanna for
- * Mac, signed in, it's always the machine list, and the app does the
- * switching (this Mac at localhost, the rest at kanna.sh).
+ * or a shortcut to the hosted URL once this machine has one. A paired
+ * machine on localhost lists its Fleet too (connectionStore). In Kanna for
+ * Mac the app does the switching (this Mac at localhost, the rest at
+ * kanna.sh).
  */
 export function MachineSwitcher() {
   const mode = useConnectionStore((state) => state.mode)
@@ -118,15 +119,17 @@ export function MachineSwitcher() {
     )
   }
 
-  // In Kanna for Mac the app says which machine is showing and which is this
-  // Mac (at localhost, where the hostname names no machine). This Mac is
-  // listed first, even when it isn't on Kanna Cloud, so there's a way back.
-  const thisMachine = fromMacApp ? machines.find((machine) => machine.subdomain === thisMachineSubdomain) : undefined
-  const currentMachine = fromMacApp
+  // On localhost (the server names itself) and in Kanna for Mac (the app
+  // says which machine is showing), the page knows which machine it's on,
+  // and lists it first as This machine. The Mac app lists this Mac even when
+  // it isn't on Kanna Cloud, so there's a way back.
+  const knowsSelf = fromMacApp || thisMachineSubdomain !== null
+  const thisMachine = knowsSelf ? machines.find((machine) => machine.subdomain === thisMachineSubdomain) : undefined
+  const currentMachine = knowsSelf
     ? machines.find((machine) => machine.subdomain === (showingMachine ?? thisMachineSubdomain)) ?? null
     : findCurrentMachine(machines)
-  const showingThisMac = fromMacApp && (showingMachine === null || showingMachine === thisMachineSubdomain)
-  const otherMachines = fromMacApp
+  const showingThisMac = knowsSelf && (showingMachine === null || showingMachine === thisMachineSubdomain)
+  const otherMachines = knowsSelf
     ? machines.filter((machine) => machine.subdomain !== thisMachineSubdomain)
     : machines
   const open = (machine: CloudMachineSummary | null) => {
@@ -155,7 +158,7 @@ export function MachineSwitcher() {
       >
         {(close) => (
           <>
-            {fromMacApp ? (
+            {knowsSelf ? (
               <PopoverMenuItem
                 onClick={() => {
                   close()
@@ -191,11 +194,11 @@ export function MachineSwitcher() {
             <PopoverMenuItem
               onClick={() => {
                 close()
-                window.open(MANAGE_MACHINES_URL, "_blank", "noopener")
+                window.open(FLEET_URL, "_blank", "noopener")
               }}
               selected={false}
               icon={<ExternalLink className="h-4 w-4" />}
-              label="Manage machines"
+              label="Manage Fleet"
               description="Add or remove machines on kanna.sh"
             />
           </>

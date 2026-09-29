@@ -1,6 +1,8 @@
 import { create } from "zustand"
 import {
   CLOUD_BROWSER_PATH_PREFIX,
+  CLOUD_FLEET_PATH,
+  type CloudLocalFleetResponse,
   type CloudMachineSummary,
   type CloudMachinesResponse,
 } from "../../shared/cloud-api"
@@ -13,17 +15,20 @@ import {
  * explicitly 404s the prefix, so a JSON 200 means "cloud", anything else
  * means "local". Not persisted — the answer is a property of the origin.
  *
- * Kanna for Mac knows more than the page: it's signed in to kanna.sh
- * natively and knows which machine is the Mac it runs on, which it shows at
- * its local address. So it hands the page the list itself
- * (`MainWindowController.pushMachines` in macos/), and while it does, that
- * list wins over /__cloud/machines, on localhost or on a machine subdomain.
+ * On the machine's own address (localhost) there's no kanna.sh session, so
+ * a paired machine lists its Fleet itself, with its machine credentials
+ * (`GET /api/cloud/fleet`, src/server/cloud/fleet.ts), and names itself.
+ *
+ * Kanna for Mac also knows which machine the window shows, and shows this
+ * Mac at its local address. So it hands the page the list
+ * (`MainWindowController.pushFleet` in macos/), and while it does, that list
+ * wins, on localhost or on a machine subdomain.
  */
 
 export type ConnectionMode = "unknown" | "local" | "cloud"
 
 /** What Kanna for Mac pushes: null while signed out or still loading. */
-export interface MacAppMachines {
+export interface MacAppFleet {
   machines: CloudMachineSummary[]
   /** This Mac's subdomain; absent when it isn't on Kanna Cloud. */
   thisMachine?: string
@@ -34,13 +39,13 @@ export interface MacAppMachines {
 interface ConnectionState {
   mode: ConnectionMode
   machines: CloudMachineSummary[]
-  /** From Kanna for Mac only; null in a browser. */
+  /** The machine serving this page, when it knows (localhost, Kanna for Mac). */
   thisMachine: string | null
   showingMachine: string | null
   fromMacApp: boolean
   /** Detect mode + load the machine list. Safe to call repeatedly. */
   load: (fetchImpl?: typeof fetch) => Promise<void>
-  setMacAppMachines: (payload: MacAppMachines | null) => void
+  setMacAppFleet: (payload: MacAppFleet | null) => void
 }
 
 export function findCurrentMachine(
@@ -55,6 +60,17 @@ export function findCurrentMachine(
       return false
     }
   }) ?? null
+}
+
+async function loadLocalFleet(fetchImpl: typeof fetch): Promise<CloudLocalFleetResponse | null> {
+  try {
+    const response = await fetchImpl(CLOUD_FLEET_PATH, { headers: { Accept: "application/json" } })
+    if (!response.ok || !(response.headers.get("content-type") ?? "").includes("application/json")) return null
+    const payload = await response.json() as CloudLocalFleetResponse
+    return Array.isArray(payload.machines) ? payload : null
+  } catch {
+    return null
+  }
 }
 
 export const useConnectionStore = create<ConnectionState>()((set, get) => ({
@@ -79,10 +95,16 @@ export const useConnectionStore = create<ConnectionState>()((set, get) => ({
     } catch {
       // Unreachable → treat as local.
     }
-    if (!get().fromMacApp) set({ mode: "local", machines: [] })
+    const fleet = await loadLocalFleet(fetchImpl)
+    if (get().fromMacApp) return
+    if (fleet && fleet.self && fleet.machines.length > 0) {
+      set({ mode: "cloud", machines: fleet.machines, thisMachine: fleet.self, showingMachine: fleet.self })
+      return
+    }
+    set({ mode: "local", machines: [] })
   },
 
-  setMacAppMachines: (payload) => {
+  setMacAppFleet: (payload) => {
     if (payload && Array.isArray(payload.machines)) {
       set({
         mode: "cloud",
@@ -103,16 +125,16 @@ export const useConnectionStore = create<ConnectionState>()((set, get) => ({
 
 declare global {
   interface Window {
-    __kannaMachines?: MacAppMachines | null
+    __kannaFleet?: MacAppFleet | null
   }
 }
 
 if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
-  const apply = (payload: MacAppMachines | null | undefined) => {
-    if (payload !== undefined) useConnectionStore.getState().setMacAppMachines(payload)
+  const apply = (payload: MacAppFleet | null | undefined) => {
+    if (payload !== undefined) useConnectionStore.getState().setMacAppFleet(payload)
   }
-  apply(window.__kannaMachines)
-  window.addEventListener("kanna:machines", (event) => {
-    apply((event as CustomEvent<MacAppMachines | null>).detail)
+  apply(window.__kannaFleet)
+  window.addEventListener("kanna:fleet", (event) => {
+    apply((event as CustomEvent<MacAppFleet | null>).detail)
   })
 }

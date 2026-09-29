@@ -15,8 +15,9 @@ import { ChangelogSection, useChangelog } from "./settings/ChangelogSection"
 import { GeneralSection } from "./settings/GeneralSection"
 import { KeybindingsSection } from "./settings/KeybindingsSection"
 import { LabsSection } from "./settings/LabsSection"
+import { MacSection } from "./settings/MacSection"
 import { ProvidersSection } from "./settings/ProvidersSection"
-import { SETTINGS_SECTIONS } from "./settings/registry"
+import { SETTINGS_SECTIONS, visibleSettingsSections } from "./settings/registry"
 import { SkillsSection } from "./settings/SkillsSection"
 import { UsageSection } from "./settings/UsageSection"
 import { getKeybindingsSubtitle, SETTINGS_INSET_X_CLASS, SettingsNotice, SettingsPlaceholder } from "./settings/shared"
@@ -40,8 +41,10 @@ export {
   shouldPreviewChatSoundChange,
 } from "./settings/shared"
 
-const sidebarItems = SETTINGS_SECTIONS
-type SidebarItem = (typeof sidebarItems)[number]
+// This Mac shows only in Kanna for Mac (registry.isSettingsSectionVisible);
+// the answer is a property of the page, so it's read once.
+const sidebarItems = visibleSettingsSections()
+type SidebarItem = (typeof SETTINGS_SECTIONS)[number]
 type SidebarPageId = SidebarItem["id"]
 
 export function resolveSettingsSectionId(sectionId: string | undefined): SidebarPageId | null {
@@ -299,6 +302,8 @@ export function SettingsPage() {
 
                 {selectedPage === "general" ? (
                   <GeneralSection state={state} appVersion={appVersion} />
+                ) : selectedPage === "mac" ? (
+                  <MacSection />
                 ) : selectedPage === "providers" ? (
                   <ProvidersSection state={state} />
                 ) : selectedPage === "keybindings" ? (

@@ -11,6 +11,10 @@ enum LoginItem {
     try SMAppService.mainApp.register()
   }
 
+  static func disable() throws {
+    try SMAppService.mainApp.unregister()
+  }
+
   static func openSettings() {
     SMAppService.openSystemSettingsLoginItems()
   }

@@ -19,6 +19,8 @@ final class WebBridge: NSObject, WKScriptMessageHandler, UNUserNotificationCente
   var onActivateNotification: (() -> Void)?
   /// The sidebar's machine picker; nil is this Mac.
   var onOpenMachine: ((String?) -> Void)?
+  /// The setup wizard's This Mac step (`macSetup.*`, see MacSetup).
+  var onMacSetup: ((String, [String: Any], WKFrameInfo) -> Void)?
 
   private let center = UNUserNotificationCenter.current()
   private var permission = "default"
@@ -66,6 +68,8 @@ final class WebBridge: NSObject, WKScriptMessageHandler, UNUserNotificationCente
       onWindowDoubleClick?()
     case "openMachine":
       onOpenMachine?(body["subdomain"] as? String)
+    case _ where type.hasPrefix("macSetup."):
+      onMacSetup?(type, body, message.frameInfo)
     case "requestNotificationPermission":
       requestPermission(callbackId: body["id"] as? String)
     default:

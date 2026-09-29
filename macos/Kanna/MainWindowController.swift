@@ -22,12 +22,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
   private var themeObservation: NSKeyValueObservation?
   private var popups: [PopupWindowController] = []
   private var loadedURL: URL?
-  /// Another of the account's machines, when the window shows one (the
-  /// Machines menu, the sidebar's picker). nil is this Mac: whatever the
+  /// Another machine in the Fleet, when the window shows one (the Fleet
+  /// menu, the sidebar's picker). nil is this Mac: whatever the
   /// server agent runs, at its local address.
-  private(set) var remoteMachine: Machines.Machine?
+  private(set) var remoteMachine: Fleet.Machine?
   private lazy var navigation = NavigationHandler(owner: self)
   private let metrics: ChromeMetrics
+  let macSetup = MacSetup()
 
   init() {
     let window = NSWindow(
@@ -72,6 +73,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     webView.allowsBackForwardNavigationGestures = true
     webView.pageZoom = CGFloat(UserDefaults.standard.object(forKey: "pageZoom") as? Double ?? 1)
     bridge.webView = webView
+    macSetup.webView = webView
     super.init(window: window)
     window.delegate = self
 
@@ -96,6 +98,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     bridge.onWindowDrag = { [weak self] in self?.dragWindow() }
     bridge.onWindowDoubleClick = { [weak self] in self?.titleBarDoubleClicked() }
     bridge.onOpenMachine = { [weak self] subdomain in self?.showMachine(subdomain) }
+    bridge.onMacSetup = { [weak self] type, body, frame in self?.macSetup.handle(type, body: body, frame: frame) }
   }
 
   required init?(coder: NSCoder) { fatalError() }
@@ -161,11 +164,20 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         if (inTitleBar(event)) post("windowDoubleClick")
       }, true)
 
-      // The account's machines, for the sidebar's picker
-      // (src/client/stores/connectionStore.ts). See pushMachines.
-      window.__kannaSetMachines = (machines) => {
-        window.__kannaMachines = machines
-        dispatchEvent(new CustomEvent("kanna:machines", { detail: machines }))
+      // The Fleet, for the sidebar's picker
+      // (src/client/stores/connectionStore.ts). See pushFleet.
+      window.__kannaSetFleet = (fleet) => {
+        window.__kannaFleet = fleet
+        dispatchEvent(new CustomEvent("kanna:fleet", { detail: fleet }))
+      }
+
+      // What this app can do, for the page (src/client/lib/macApp.ts). The
+      // app and the page ship separately, so the page asks before it shows
+      // anything that needs the app, like the setup wizard's This Mac step.
+      window.__kannaMacApp = { version: \(Self.jsonString(AppInfo.version)), features: ["fleet", "setup"] }
+      window.__kannaSetMacSetup = (state) => {
+        window.__kannaMacSetup = state
+        dispatchEvent(new CustomEvent("kanna:mac-setup", { detail: state }))
       }
     })()
     """
@@ -225,28 +237,53 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
 
   var serverOrigin: URL? { loadedURL }
 
-  // MARK: Machines
+  // MARK: Fleet
 
   /// The machine the window shows, by subdomain. This Mac's is nil when it
   /// isn't on Kanna Cloud.
-  var showingSubdomain: String? { remoteMachine?.subdomain ?? Machines.shared.thisSubdomain }
+  var showingSubdomain: String? { remoteMachine?.subdomain ?? Fleet.shared.thisSubdomain }
 
   /// Shows one of the account's machines. This Mac (or nil) is the local
   /// server, never its kanna.sh address; another machine loads from
   /// kanna.sh, at `url` when a link inside the page picked a path there.
   func showMachine(_ subdomain: String?, url: URL? = nil) {
-    guard let subdomain, subdomain != Machines.shared.thisSubdomain,
-          let machine = Machines.shared.list.first(where: { $0.subdomain == subdomain }),
+    guard let subdomain, subdomain != Fleet.shared.thisSubdomain,
+          let machine = Fleet.shared.list.first(where: { $0.subdomain == subdomain }),
           let origin = URL(string: machine.appOrigin) else {
       showThisMac()
       return
     }
     if remoteMachine?.subdomain == subdomain, url == nil { return }
-    remoteMachine = machine
-    loadedURL = origin
-    overlay.hide()
-    webView.load(URLRequest(url: url ?? origin))
-    pushMachines()
+    Task {
+      // kanna.sh lets another machine's page through only with the user's
+      // session, and the window gets one the first time it needs it.
+      guard await Fleet.shared.hasSession() else {
+        signIn(thenShow: subdomain, url: url)
+        return
+      }
+      remoteMachine = machine
+      loadedURL = origin
+      overlay.hide()
+      webView.load(URLRequest(url: url ?? origin))
+      pushFleet()
+    }
+  }
+
+  /// The browser signs the window in (AppAuth), then the machine opens.
+  /// Also where an expired session lands: kanna.sh sent the page to its
+  /// sign-in, which the window never shows.
+  func signIn(thenShow subdomain: String, url: URL? = nil) {
+    showThisMac()
+    AppAuth.shared.signIn(site: Fleet.shared.site) { [weak self] in
+      self?.showMachine(subdomain, url: url)
+    }
+  }
+
+  /// Kanna › Setup…: the web wizard, on this Mac, where its This Mac step is.
+  /// `step: "cloud"` opens it at Kanna Cloud.
+  func openSetup(step: String? = nil) {
+    showThisMac()
+    webView.evaluateJavaScript("window.__kannaOpenSetup?.(\(step.map(Self.jsonString) ?? ""))")
   }
 
   func showThisMac() {
@@ -254,20 +291,19 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     remoteMachine = nil
     loadedURL = nil
     show(ServerAgent.shared.state)
-    pushMachines()
+    pushFleet()
   }
 
   /// Hands the machine list to the page, which shows it in the sidebar's
-  /// picker in place of its own (it can't tell which machine is this Mac).
-  /// null until the list loads, and when signed out: the picker falls back
-  /// to its local behavior.
-  func pushMachines() {
+  /// picker, with which machine the window shows. null while this Mac isn't
+  /// on Kanna Cloud: the picker falls back to its local behavior.
+  func pushFleet() {
     struct Payload: Encodable {
-      let machines: [Machines.Machine]
+      let machines: [Fleet.Machine]
       let thisMachine: String?
       let showing: String?
     }
-    let machines = Machines.shared
+    let machines = Fleet.shared
     var json = "null"
     if !machines.list.isEmpty,
        let data = try? JSONEncoder().encode(Payload(
@@ -277,7 +313,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
        )) {
       json = String(decoding: data, as: UTF8.self)
     }
-    webView.evaluateJavaScript("window.__kannaSetMachines?.(\(json))")
+    webView.evaluateJavaScript("window.__kannaSetFleet?.(\(json))")
   }
 
   /// A machine that doesn't answer, or kanna.sh itself.
@@ -393,9 +429,16 @@ final class NavigationHandler: NSObject, WKNavigationDelegate, WKUIDelegate, WKD
     // A machine's kanna.sh address (the picker on another machine's page
     // sets location.href) switches machines in place; this Mac's goes to
     // the local server.
-    if let host = url.host, let machine = Machines.shared.machine(forHost: host) {
+    if let host = url.host, let machine = Fleet.shared.machine(forHost: host) {
       decisionHandler(.cancel)
       owner?.showMachine(machine.subdomain, url: url)
+      return
+    }
+    // An expired session: kanna.sh sends another machine's page to its
+    // sign-in. The browser signs the window in again instead.
+    if let machine = owner?.remoteMachine, url.host == Fleet.shared.site.host, url.path == "/login" {
+      decisionHandler(.cancel)
+      owner?.signIn(thenShow: machine.subdomain)
       return
     }
     NSWorkspace.shared.open(url)
@@ -418,7 +461,7 @@ final class NavigationHandler: NSObject, WKNavigationDelegate, WKUIDelegate, WKD
   func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
     owner?.bridge.refreshPermission()
     owner?.applyChrome()
-    owner?.pushMachines()
+    owner?.pushFleet()
   }
 
   func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {

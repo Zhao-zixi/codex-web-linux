@@ -1,4 +1,5 @@
-import { BookText, Command, FlaskConical, Gauge, MessageSquareQuote, ScrollText, Settings2, type LucideIcon } from "lucide-react"
+import { BookText, Command, FlaskConical, Gauge, LaptopMinimal, MessageSquareQuote, ScrollText, Settings2, type LucideIcon } from "lucide-react"
+import { macSetupAvailable } from "../../lib/macApp"
 
 /**
  * Single source of truth for settings navigation targets.
@@ -16,6 +17,12 @@ export const SETTINGS_SECTIONS = [
     label: "General",
     icon: Settings2 as LucideIcon,
     subtitle: "Appearance, notifications, chats, editor, and terminal.",
+  },
+  {
+    id: "mac",
+    label: "This Mac",
+    icon: LaptopMinimal as LucideIcon,
+    subtitle: "What keeps your agents running on this Mac while you're away.",
   },
   {
     id: "providers",
@@ -58,6 +65,19 @@ export const SETTINGS_SECTIONS = [
 
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number]
 export type SettingsSectionId = SettingsSection["id"]
+
+/**
+ * This Mac exists only in Kanna for Mac, on this Mac's own server
+ * (lib/macApp.ts): its switches are the app's. Everywhere else the section,
+ * its rows and its palette entries don't exist.
+ */
+export function isSettingsSectionVisible(id: SettingsSectionId) {
+  return id !== "mac" || macSetupAvailable()
+}
+
+export function visibleSettingsSections(): SettingsSection[] {
+  return SETTINGS_SECTIONS.filter((section) => isSettingsSectionVisible(section.id))
+}
 
 export interface SettingsRowDef {
   /** Stable anchor id; the palette navigates to `/settings/:sectionId#id`. */
@@ -201,6 +221,32 @@ export const SETTINGS_ROWS = defineRows({
     keywords: ["fave models", "pi"],
   },
 
+  // This Mac (Kanna for Mac)
+  openAtLogin: {
+    sectionId: "mac",
+    title: "Open at Login",
+    description: "Start Kanna when you log in, so your agents and this Mac's Kanna Cloud address come back after a restart.",
+    keywords: ["login item", "startup", "launch", "restart", "boot"],
+  },
+  keepAwake: {
+    sectionId: "mac",
+    title: "Keep This Mac Awake",
+    description: "Stay awake while plugged in, so agents keep running and this Mac stays reachable. The display still sleeps and locks.",
+    keywords: ["sleep", "caffeinate", "power", "reachable", "remote", "idle"],
+  },
+  keepAwakeOnBattery: {
+    sectionId: "mac",
+    title: "Also on Battery",
+    description: "Stay awake on battery too, not just when plugged in.",
+    keywords: ["sleep", "battery", "power"],
+  },
+  fullDiskAccess: {
+    sectionId: "mac",
+    title: "Full Disk Access",
+    description: "Lets agents work on projects anywhere in your home folder without macOS asking about each protected folder.",
+    keywords: ["privacy", "permission", "tcc", "desktop", "documents", "downloads", "icloud"],
+  },
+
   // Labs
   recentChatsInSidebar: {
     sectionId: "labs",
@@ -223,5 +269,5 @@ export const SETTINGS_ROWS = defineRows({
 })
 
 export function listAllSettingsRowDefs(): SettingsRowDef[] {
-  return Object.values<SettingsRowDef>(SETTINGS_ROWS)
+  return Object.values<SettingsRowDef>(SETTINGS_ROWS).filter((row) => isSettingsSectionVisible(row.sectionId))
 }

@@ -192,6 +192,10 @@ describe("resolveSettingsSectionId", () => {
     expect(resolveSettingsSectionId("nope")).toBeNull()
     expect(resolveSettingsSectionId(undefined)).toBeNull()
   })
+
+  test("This Mac exists only in Kanna for Mac", () => {
+    expect(resolveSettingsSectionId("mac")).toBeNull()
+  })
 })
 
 describe("SkillsSection", () => {

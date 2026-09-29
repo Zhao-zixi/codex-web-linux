@@ -1,18 +1,21 @@
 import Foundation
 import WebKit
 
-/// The signed-in account's Kanna Cloud machines, for the sidebar's picker
-/// (pushed into the page, see `MainWindowController.pushMachines`) and the
-/// Machines menu.
+/// The Fleet: the Kanna Cloud machines of the account this Mac is paired to,
+/// for the Fleet menu and the sidebar's picker (pushed into the page, see
+/// `MainWindowController.pushFleet`).
 ///
-/// The app signs in to kanna.sh natively (CloudSignIn), so it asks kanna.sh
-/// itself, with that session. This Mac is the machine whose subdomain its own
-/// pairing (cloud.json) names: showing it means the local server, never its
-/// kanna.sh address, which would send this Mac's own traffic out through
-/// Cloudflare and back. Any other machine is shown at its kanna.sh address,
-/// with the session installed as a cookie so it opens already signed in.
-final class Machines {
-  static let shared = Machines()
+/// The local server has the list: it asks kanna.sh with this Mac's own
+/// machine credentials (GET /api/cloud/fleet, src/server/cloud/fleet.ts), so
+/// listing needs no sign-in, and `self` names this Mac. Showing this Mac
+/// means the local server, never its kanna.sh address, which would send its
+/// own traffic out through Cloudflare and back. Any other machine loads from
+/// kanna.sh, which takes a session in the window (AppAuth).
+final class Fleet {
+  static let shared = Fleet()
+
+  /// kanna.sh's session cookie (kanna-site src/worker/cloud/cookies.ts).
+  static let sessionCookieName = "kanna_cloud_session"
 
   struct Machine: Codable, Equatable {
     let subdomain: String
@@ -24,11 +27,13 @@ final class Machines {
   }
 
   private(set) var list: [Machine] = []
+  /// This Mac's subdomain; nil while it isn't on Kanna Cloud.
+  private(set) var thisSubdomain: String?
   var onChange: (() -> Void)?
   private var timer: Timer?
 
   /// The control plane this Mac paired with (cloud.json's controlUrl), else
-  /// kanna.sh. The sign-in token is kept per control plane (Keychain).
+  /// kanna.sh: where AppAuth signs in.
   var site: URL {
     let controlURL = pairing?["controlUrl"] as? String
     guard let url = controlURL.flatMap(URL.init(string:)),
@@ -40,11 +45,6 @@ final class Machines {
     return components.url ?? URL(string: "https://kanna.sh")!
   }
 
-  var isSignedIn: Bool { Keychain.token(for: site) != nil }
-
-  /// This Mac's machine, from the pairing of whichever server the window runs.
-  var thisSubdomain: String? { pairing?["subdomain"] as? String }
-
   private var pairing: [String: Any]? {
     guard let url = ServerMode.current.dataRoot?.appendingPathComponent("cloud.json"),
           let data = try? Data(contentsOf: url) else { return nil }
@@ -53,6 +53,17 @@ final class Machines {
 
   func machine(forHost host: String) -> Machine? {
     list.first { URL(string: $0.appOrigin)?.host?.lowercased() == host.lowercased() }
+  }
+
+  /// Whether the window has a kanna.sh session to open other machines with.
+  func hasSession() async -> Bool {
+    guard let host = site.host?.lowercased() else { return false }
+    let cookies = await WKWebsiteDataStore.default().httpCookieStore.allCookies()
+    return cookies.contains { cookie in
+      cookie.name == Self.sessionCookieName
+        && cookie.domain.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased() == host
+        && (cookie.expiresDate ?? .distantFuture) > Date()
+    }
   }
 
   /// Keeps the list fresh while the app runs: machines come and go online.
@@ -65,52 +76,25 @@ final class Machines {
   }
 
   func refresh() {
-    let site = site
-    guard let token = Keychain.token(for: site) else {
-      if !list.isEmpty {
-        list = []
-        onChange?()
-      }
-      return
-    }
+    guard let server = ServerAgent.shared.serverURL else { return }
     Task {
-      var request = URLRequest(url: site.appendingPathComponent("api/cloud/machines"))
-      request.setValue("kanna_cloud_session=\(token)", forHTTPHeaderField: "Cookie")
+      var request = URLRequest(url: server.appendingPathComponent("api/cloud/fleet"))
       request.timeoutInterval = 10
-      guard let (data, response) = try? await URLSession.shared.data(for: request) else { return }
-      let status = (response as? HTTPURLResponse)?.statusCode
-      // Signed out on kanna.sh: the menu offers sign-in again.
-      if status == 401 {
-        Keychain.deleteToken(for: site)
-        return
-      }
-      guard status == 200, let decoded = try? JSONDecoder().decode(Response.self, from: data) else { return }
-      await installSessionCookie(token: token, site: site)
+      guard let (data, response) = try? await URLSession.shared.data(for: request),
+            (response as? HTTPURLResponse)?.statusCode == 200,
+            let decoded = try? JSONDecoder().decode(Response.self, from: data) else { return }
       let machines = decoded.machines.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-      if machines != list {
+      if machines != list || decoded.`self` != thisSubdomain {
         list = machines
+        thisSubdomain = decoded.`self`
         onChange?()
       }
     }
   }
 
+  /// CloudLocalFleetResponse in src/shared/cloud-api.ts.
   private struct Response: Decodable {
+    let `self`: String?
     let machines: [Machine]
-  }
-
-  /// kanna.sh's session cookie for every machine subdomain, so a remote
-  /// machine's page loads signed in (the proxy gates on it).
-  private func installSessionCookie(token: String, site: URL) async {
-    guard let host = site.host,
-          let cookie = HTTPCookie(properties: [
-            .domain: ".\(host)",
-            .path: "/",
-            .name: "kanna_cloud_session",
-            .value: token,
-            .secure: "TRUE",
-            .expires: Date().addingTimeInterval(30 * 24 * 60 * 60),
-            HTTPCookiePropertyKey("HttpOnly"): "TRUE",
-          ]) else { return }
-    await WKWebsiteDataStore.default().httpCookieStore.setCookie(cookie)
   }
 }

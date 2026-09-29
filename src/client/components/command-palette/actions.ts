@@ -4,6 +4,7 @@ import type { SidebarThread } from "../../lib/thread-sections"
 import {
   listAllSettingsRowDefs,
   SETTINGS_SECTIONS,
+  visibleSettingsSections,
   type SettingsRowDef,
   type SettingsSectionId,
 } from "../../app/settings/registry"
@@ -198,7 +199,7 @@ function sectionLabelFor(sectionId: SettingsSectionId): string {
  * Derived entirely from the settings registry — new rows appear automatically.
  */
 export function getSettingsPaletteEntries(): SettingsPaletteEntry[] {
-  const sections: SettingsPaletteEntry[] = SETTINGS_SECTIONS.map((section) => ({
+  const sections: SettingsPaletteEntry[] = visibleSettingsSections().map((section) => ({
     id: `settings-section-${section.id}`,
     title: section.label,
     sectionLabel: "Settings",

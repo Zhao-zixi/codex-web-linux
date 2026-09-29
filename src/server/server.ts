@@ -7,6 +7,7 @@ import type { ChatAttachment } from "../shared/types"
 import type { ShareMode } from "../shared/share"
 import {
   CLOUD_BROWSER_PATH_PREFIX,
+  CLOUD_FLEET_PATH,
   CLOUD_PAIR_SESSION_PATH,
   CLOUD_WS_ENDPOINT_PATH,
   type CloudWsEndpointResponse,
@@ -14,6 +15,7 @@ import {
 import { createAuthManager } from "./auth"
 import { classifyCloudRequest, isAllowedCloudWsUpgrade, type CloudRequestClass } from "./cloud/guard"
 import { createCloudRuntime, type CloudRuntime } from "./cloud"
+import { createFleetCache } from "./cloud/fleet"
 import { writeCloudIdentity } from "./cloud/identity"
 import { createPairSessionManager, type PairSessionSnapshot } from "./cloud/pair-session"
 import { EventStore } from "./event-store"
@@ -430,6 +432,8 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   // One-click cloud setup: the sidebar asks for a claim URL, the user opens
   // it (or scans it) on any device, and pairing lands back here — credentials
   // to ~/.kanna/cloud.json and the tunnel up, without restarting kanna.
+  const fleet = createFleetCache()
+
   const pairSession =
     options.allowCloudPairing && !cloud
       ? createPairSessionManager({
@@ -626,6 +630,18 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
               return withOriginAgentCluster(respond(pairSession.status()))
             }
             return withOriginAgentCluster(new Response(null, { status: 405, headers: { Allow: "GET, POST" } }))
+          }
+
+          // The account's machines, asked for with this machine's own
+          // credentials (see cloud/fleet.ts). Through the proxy the page asks
+          // kanna.sh instead, but answering there too costs nothing.
+          if (url.pathname === CLOUD_FLEET_PATH) {
+            if (req.method !== "GET") {
+              return withOriginAgentCluster(new Response(null, { status: 405, headers: { Allow: "GET" } }))
+            }
+            return withOriginAgentCluster(Response.json(await fleet.get(cloud?.identity ?? null), {
+              headers: { "Cache-Control": "no-store" },
+            }))
           }
 
           if (url.pathname === CLOUD_WS_ENDPOINT_PATH) {

@@ -61,6 +61,9 @@ targets:
         # Debug builds start in this checkout's `bun run dev`
         # (macos/Kanna/ServerMode.swift); every build can switch.
         KANNA_DEV_CHECKOUT: ""
+        # The app's URL scheme (Info.plist): terminal links and the browser's
+        # sign-in handoff (Kanna/AppAuth.swift) reach this build and no other.
+        KANNA_URL_SCHEME: kanna-app
       configs:
         Debug:
           KANNA_DEV_CHECKOUT: "$(PROJECT_DIR)/.."
@@ -69,6 +72,7 @@ targets:
           # terminal reach the installed one.
           PRODUCT_BUNDLE_IDENTIFIER: sh.kanna.mac.dev
           PRODUCT_NAME: Kanna Dev
+          KANNA_URL_SCHEME: kanna-app-dev
         Release:
           # Public half of the update-signing key (Sparkle generate_keys
           # --account kanna); the private half is in the release machine's

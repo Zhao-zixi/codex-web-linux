@@ -5,7 +5,6 @@ import Sparkle
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, NSMenuDelegate {
   private var main: MainWindowController!
   private var quitting = false
-  private var offeredSetup = false
 
   /// Sparkle updates this app, the window. Kanna itself is the global npm
   /// install and updates itself the way it does in a terminal. The updater
@@ -58,19 +57,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
       updateDockBadge()
       // This Mac's pairing (and so which machine it is) belongs to the
       // server that runs.
-      if case .running = state { Machines.shared.refresh() }
-      // Setup needs a running server (Kanna Cloud pairs through it), and
-      // installing Kanna comes first.
-      if case .running = state, !offeredSetup, let window = main.window {
-        offeredSetup = true
-        SetupSheet.showIfNeeded(on: window)
-      }
+      // Setup is the page's wizard, which opens by itself on a first run.
+      if case .running = state { Fleet.shared.refresh() }
     }
     main.show(agent.state)
     agent.start()
 
-    Machines.shared.onChange = { [weak self] in self?.main.pushMachines() }
-    Machines.shared.start()
+    Fleet.shared.onChange = { [weak self] in self?.main.pushFleet() }
+    Fleet.shared.start()
 
     main.showWindow(nil)
     NSApp.activate()
@@ -78,7 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
 
   func applicationDidBecomeActive(_ notification: Notification) {
     main?.bridge.refreshPermission()
-    Machines.shared.refresh()
+    Fleet.shared.refresh()
   }
 
   /// Closing the window is quitting, and the server the app started goes
@@ -99,8 +93,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   @objc private func handleURLEvent(_ event: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
     guard let string = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
           let components = URLComponents(string: string),
-          components.scheme == "kanna-app" else { return }
-    if components.host == "open",
+          components.scheme == AppAuth.urlScheme else { return }
+    // The browser handing back a kanna.sh session (AppAuth).
+    if components.host == "auth" {
+      AppAuth.shared.handleCallback(components, site: Fleet.shared.site)
+    } else if components.host == "open",
        let target = components.queryItems?.first(where: { $0.name == "url" })?.value.flatMap(URL.init(string:)) {
       main.showThisMac()
       ServerAgent.shared.start(preferring: target)
@@ -127,9 +124,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
   }
 
   @objc func showSetup(_ sender: Any?) {
-    guard let window = main.window else { return }
     bringToFront()
-    SetupSheet.show(on: window)
+    main.openSetup()
+  }
+
+  @objc func putThisMacOnline(_ sender: Any?) {
+    bringToFront()
+    main.openSetup(step: "cloud")
   }
 
   @objc func showSettings(_ sender: Any?) {
@@ -241,14 +242,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     ServerAgent.shared.switchMode(to: mode)
   }
 
-  // MARK: Machines menu
+  // MARK: Fleet menu
 
   /// Rebuilt each time it opens: machines come and go online.
   func menuNeedsUpdate(_ menu: NSMenu) {
     menu.removeAllItems()
-    let machines = Machines.shared
-    guard machines.isSignedIn else {
-      menu.addItem(item("Sign In to Kanna Cloud…", #selector(showSetup(_:))))
+    let machines = Fleet.shared
+    // Putting this Mac online is the setup wizard's Kanna Cloud step, the
+    // same claim link the CLI shows.
+    guard machines.thisSubdomain != nil else {
+      menu.addItem(item("Put This Mac Online…", #selector(putThisMacOnline(_:))))
+      menu.addItem(item("Manage Fleet…", #selector(manageFleet(_:))))
       return
     }
     let showing = main.showingSubdomain
@@ -268,7 +272,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
       menu.addItem(entry)
     }
     menu.addItem(.separator())
-    menu.addItem(item("Manage Machines…", #selector(manageMachines(_:))))
+    menu.addItem(item("Manage Fleet…", #selector(manageFleet(_:))))
   }
 
   @objc func openMachine(_ sender: NSMenuItem) {
@@ -276,8 +280,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     main.showMachine(sender.representedObject as? String)
   }
 
-  @objc func manageMachines(_ sender: Any?) {
-    NSWorkspace.shared.open(Machines.shared.site.appendingPathComponent("machines"))
+  @objc func manageFleet(_ sender: Any?) {
+    NSWorkspace.shared.open(Fleet.shared.site.appendingPathComponent("fleet"))
   }
 
   /// The sidebar picker's online dot (src/client/app/MachineSwitcher.tsx).
@@ -369,10 +373,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     server.addItem(.separator())
     server.addItem(item("Choose Checkout…", #selector(chooseCheckout(_:))))
 
-    let machines = submenu(in: menu, title: "Machines")
-    machines.delegate = self
+    let fleet = submenu(in: menu, title: "Fleet")
+    fleet.delegate = self
     // AppKit skips an empty menu; menuNeedsUpdate fills in the real items.
-    machines.addItem(withTitle: "This Mac", action: nil, keyEquivalent: "")
+    fleet.addItem(withTitle: "This Mac", action: nil, keyEquivalent: "")
 
     let window = submenu(in: menu, title: "Window")
     window.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")

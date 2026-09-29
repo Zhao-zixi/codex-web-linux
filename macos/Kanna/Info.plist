@@ -26,12 +26,14 @@
 	<array>
 		<dict>
 			<!-- `kanna` in a terminal opens kanna-app://open?url=<local server>
-			     (src/server/mac-app.ts), which lands here. -->
+			     (src/server/mac-app.ts), and the browser hands back a kanna.sh
+			     session on <scheme>://auth (AppAuth.swift). Kanna Dev answers on
+			     kanna-app-dev (KANNA_URL_SCHEME in project.yml). -->
 			<key>CFBundleURLName</key>
-			<string>sh.kanna.mac</string>
+			<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>kanna-app</string>
+				<string>$(KANNA_URL_SCHEME)</string>
 			</array>
 		</dict>
 	</array>

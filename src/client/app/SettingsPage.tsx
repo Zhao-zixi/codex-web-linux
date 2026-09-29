@@ -8,7 +8,6 @@ import {
 import { useLocation, useNavigate, useOutletContext, useParams } from "react-router-dom"
 import { getKeybindingsFilePathDisplay, SDK_CLIENT_APP } from "../../shared/branding"
 import { SettingsHeaderButton } from "../components/ui/settings-header-button"
-import { useScrollbarGutterVar } from "../hooks/useScrollbarGutterVar"
 import { getResolvedKeybindings } from "../lib/keybindings"
 import { cn } from "../lib/utils"
 import { ChangelogSection, useChangelog } from "./settings/ChangelogSection"
@@ -145,13 +144,6 @@ export function SettingsPage() {
     }
   }, [])
 
-  // The status footer overlays the section scroller, so it ends at that
-  // scroller's gutter rather than dimming the scrollbar through its backdrop
-  // blur. See useScrollbarGutterVar for why z-index can't do this.
-  const pageRef = useRef<HTMLDivElement>(null)
-  const sectionScrollRef = useRef<HTMLDivElement>(null)
-  useScrollbarGutterVar(sectionScrollRef, pageRef, "--settings-scrollbar-w")
-
   const selectedSection = sidebarItems.find((item) => item.id === selectedPage) ?? sidebarItems[0]
   const selectedSectionSubtitle =
     selectedPage === "keybindings"
@@ -181,10 +173,10 @@ export function SettingsPage() {
   }
 
   return (
-    <div ref={pageRef} className="relative flex h-full flex-1 min-w-0 bg-background">
+    <div data-settings-page className="relative flex h-full flex-1 min-w-0 bg-background">
       {/* The Mac app's title bar across the settings page: it drags the window.
-          Both columns start with empty space at least this tall (the sidebar's
-          top padding, the content's md:pt-16), so it covers nothing clickable. */}
+          Only the sidebar's "Settings" heading and the content's md:pt-16
+          reach up under it, so it covers nothing clickable. */}
       <div
         data-window-drag
         aria-hidden
@@ -194,7 +186,7 @@ export function SettingsPage() {
         <aside className={`hidden w-[200px] shrink-0 md:block ${showFooter ? "pb-[89px] mac-app:md:pb-[90.5px]" : ""}`}>
           {/* In the Mac app the traffic lights and the pinned sidebar toggle sit
               over this column's top when the app sidebar is collapsed. */}
-          <div className="flex flex-col gap-1 px-4 py-6 mac-app:md:pt-[63px]">
+          <div className="flex flex-col gap-1 px-4 py-6 mac-app:md:pt-[43px]">
             <div className="px-3 pb-5 text-[22px] font-extrabold tracking-[-0.5px] text-foreground">
               Settings
             </div>
@@ -233,7 +225,7 @@ export function SettingsPage() {
           </div>
         </aside>
 
-        <div ref={sectionScrollRef} className="min-w-0 flex-1 overflow-y-auto">
+        <div className="min-w-0 flex-1 overflow-y-auto">
           <div className="border-b border-border py-2 md:hidden h-[63px] pl-1 md:h-auto">
             <div className="overflow-x-auto pr-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               <div className="flex min-w-max items-center gap-2">
@@ -362,7 +354,7 @@ export function SettingsPage() {
       </div>
 
       {showFooter ? (
-        <div className="absolute bottom-0 left-0 right-[var(--settings-scrollbar-w,0px)] border-t border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+        <div className="absolute bottom-0 left-0 right-0 border-t border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
           {/* 1.5px taller in the Mac app; the sidebar's bottom padding above
               keeps the matching reserve. */}
           <div className="px-6 py-[14.25px] mac-app:md:py-[15px]">

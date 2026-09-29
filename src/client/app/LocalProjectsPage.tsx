@@ -32,6 +32,15 @@ export function LocalProjectsPage() {
 
   return (
     <div className="flex-1 flex flex-col min-w-0 relative">
+      {/* The Mac app's title bar across the projects page: it drags the
+          window, as on the settings page. The page starts with pt-16 of
+          empty space, so at the top of the scroll it covers nothing
+          clickable. */}
+      <div
+        data-window-drag
+        aria-hidden
+        className="hidden mac-app:md:block absolute inset-x-0 top-0 z-10 h-[calc(var(--mac-traffic-lights-center)*2)]"
+      />
       <LocalDev connectionStatus={state.connectionStatus} ready={state.localProjectsReady}>
         <ProjectsHome
           machineName={state.localProjects?.machine.displayName ?? "This machine"}

@@ -691,16 +691,22 @@
     display: none;
   }
 
-  /* The right sidebar hides every scrollbar inside it, on desktop and in the
-     mobile overlay. One rule on the container rather than `scrollbar-hide` on
-     each scroller, so a widget added later can't bring a scrollbar back. */
+  /* The right sidebar (on desktop and in the mobile overlay) and the
+     settings page hide every scrollbar inside them. One rule on the container
+     rather than `scrollbar-hide` on each scroller, so a widget or section
+     added later can't bring a scrollbar back, and the settings footer never
+     has to leave room for one. */
   [data-right-sidebar-visual],
-  [data-right-sidebar-visual] * {
+  [data-right-sidebar-visual] *,
+  [data-settings-page],
+  [data-settings-page] * {
     scrollbar-width: none;
   }
 
   [data-right-sidebar-visual]::-webkit-scrollbar,
-  [data-right-sidebar-visual] *::-webkit-scrollbar {
+  [data-right-sidebar-visual] *::-webkit-scrollbar,
+  [data-settings-page]::-webkit-scrollbar,
+  [data-settings-page] *::-webkit-scrollbar {
     display: none;
   }
 

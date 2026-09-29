@@ -1574,6 +1574,55 @@ describe("AgentCoordinator claude integration", () => {
     events.close()
   })
 
+  test("a Claude turn the CLI started on its own does not end the user's turn", async () => {
+    const events = new AsyncEventQueue<any>()
+    const promptIds: string[] = []
+    const result = (text: string) => timestamped({
+      kind: "result",
+      subtype: "success",
+      isError: false,
+      durationMs: 0,
+      result: text,
+    })
+
+    const store = createFakeStore()
+    const coordinator = new AgentCoordinator({
+      store: store as never,
+      onStateChange: () => {},
+      startClaudeSession: async () => ({
+        provider: "claude",
+        echoesPromptIds: true,
+        stream: events,
+        getAccountInfo: async () => null,
+        interrupt: async () => {},
+        close: () => {},
+        setModel: async () => {},
+        setPermissionMode: async () => {},
+        sendPrompt: async (_content: string, promptId?: string) => {
+          promptIds.push(promptId!)
+          // A resumed session first runs the notification about background
+          // commands the previous process left behind. Its result echoes no id.
+          events.push({ type: "transcript" as const, entry: result("") })
+        },
+      }),
+    })
+
+    await coordinator.send({
+      type: "chat.send",
+      chatId: "chat-1",
+      provider: "claude",
+      content: "widen the page",
+      model: "claude-opus-4-1",
+    })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(store.turnFinishedCount).toBe(0)
+
+    events.push({ type: "transcript" as const, entry: result("done"), promptIds: [promptIds[0]!] })
+    await waitFor(() => store.turnFinishedCount === 1)
+
+    events.close()
+  })
+
   test("auto plan controls the EnterPlanMode tool and restarts the session when it changes", async () => {
     const queues: AsyncEventQueue<any>[] = []
     const startSessionCalls: Array<{ planMode: boolean; autoPlan: boolean }> = []

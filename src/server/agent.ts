@@ -30,7 +30,7 @@ import type {
 import { normalizeToolCall } from "../shared/tools"
 import type { ClientCommand } from "../shared/protocol"
 import { AsyncQueue } from "./async-queue"
-import { requireClaudeExecutable } from "./claude-executable"
+import { resolveClaudeExecutable } from "./claude-executable"
 import { KannaToolRuntime, KannaToolEventFilter, type KannaToolHost } from "./kanna-tools"
 import { createClaudeKannaTools } from "./kanna-tool-adapters"
 import { EventStore } from "./event-store"
@@ -201,7 +201,10 @@ interface ClaudeSessionHandle {
   /** Stops one background task; the CLI then reports it ended as `stopped`. */
   stopTask?: (taskId: string) => Promise<void>
   close: () => void
-  sendPrompt: (content: string) => Promise<void>
+  /** `promptId` rides on the message and comes back on the result that answers it. */
+  sendPrompt: (content: string, promptId?: string) => Promise<void>
+  /** Whether results are known to echo prompt ids before any has arrived. */
+  echoesPromptIds?: boolean
   setModel: (model: string) => Promise<void>
   setPermissionMode: (planMode: boolean) => Promise<void>
   setFastMode?: (fastMode: boolean) => Promise<void>
@@ -229,7 +232,10 @@ interface ClaudeSessionState {
   sessionToken: string | null
   accountInfoLoaded: boolean
   nextPromptSeq: number
-  pendingPromptSeqs: number[]
+  /** Prompts sent and not yet answered, oldest first. */
+  pendingPrompts: Array<{ seq: number; id: string }>
+  /** Results carry the ids of the prompts they answer (see takeAnsweredClaudePrompts). */
+  echoesPromptIds: boolean
   /**
    * Set while a cancel is settling so in-flight stream entries (emitted
    * between cancel() and the interrupt landing) don't re-register an
@@ -657,6 +663,16 @@ function normalizeClaudeStreamMessageEntries(
   return []
 }
 
+function claudeResultPromptIds(message: any): string[] | undefined {
+  if (Array.isArray(message.user_message_uuids)) {
+    const ids = message.user_message_uuids.filter((id: unknown): id is string => typeof id === "string")
+    if (ids.length > 0) return ids
+  }
+  return typeof message.user_message_uuid === "string" && message.user_message_uuid
+    ? [message.user_message_uuid]
+    : undefined
+}
+
 async function* createClaudeHarnessStream(
   q: Query,
   hooks?: {
@@ -783,11 +799,12 @@ async function* createClaudeHarnessStream(
       latestUsageSnapshot = null
     }
 
+    const promptIds = sdkMessage?.type === "result" ? claudeResultPromptIds(sdkMessage) : undefined
     for (const entry of normalizeClaudeStreamMessage(sdkMessage, { structuredToolIds })) {
       if (entry.kind === "tool_call" && STRUCTURED_RESULT_TOOL_KINDS.has(entry.tool.toolKind)) {
         structuredToolIds.add(entry.tool.toolId)
       }
-      yield { type: "transcript", entry }
+      yield promptIds ? { type: "transcript", entry, promptIds } : { type: "transcript", entry }
     }
   }
 }
@@ -912,7 +929,8 @@ async function startClaudeSession(args: {
   }
 
   // The user's own `claude`, never the SDK's pinned copy (claude-executable.ts).
-  const claudeExecutable = await requireClaudeExecutable()
+  const claudeExecutable = await resolveClaudeExecutable()
+  if (!claudeExecutable.ok) throw new Error(claudeExecutable.message)
   const promptQueue = new AsyncQueue<SDKUserMessage>()
   let promptQueueClosed = false
 
@@ -949,7 +967,7 @@ async function startClaudeSession(args: {
       // and an explicit false keeps a user-level settings.json from silently
       // enabling it while the UI shows "Standard".
       settings: { enableWorkflows: true, fastMode: args.serviceTier === "fast" },
-      pathToClaudeCodeExecutable: claudeExecutable,
+      pathToClaudeCodeExecutable: claudeExecutable.path,
       env: (() => { const { CLAUDECODE: _, ...env } = process.env; return env })(),
     },
   })
@@ -960,6 +978,9 @@ async function startClaudeSession(args: {
 
   return {
     provider: "claude",
+    // A readable version passed the minimum-version gate, and every CLI from
+    // that version on echoes prompt ids. An override wrapper reports none.
+    echoesPromptIds: claudeExecutable.version !== null,
     stream: createClaudeHarnessStream(q, {
       onCommandsChanged: (commands) => {
         commandsRef.current = commands
@@ -996,7 +1017,7 @@ async function startClaudeSession(args: {
     stopTask: async (taskId: string) => {
       await q.stopTask(taskId)
     },
-    sendPrompt: async (content: string) => {
+    sendPrompt: async (content: string, promptId?: string) => {
       if (promptQueueClosed) {
         throw new Error("Cannot push to a closed queue")
       }
@@ -1008,6 +1029,7 @@ async function startClaudeSession(args: {
         },
         parent_tool_use_id: null,
         session_id: args.sessionToken ?? "",
+        ...(promptId ? { uuid: promptId as SDKUserMessage["uuid"] } : {}),
       })
     },
     setModel: async (model: string) => {
@@ -2006,8 +2028,9 @@ export class AgentCoordinator {
       }
       session.suppressResume = false
       const promptSeq = session.nextPromptSeq + 1
+      const promptId = crypto.randomUUID()
       session.nextPromptSeq = promptSeq
-      session.pendingPromptSeqs.push(promptSeq)
+      session.pendingPrompts.push({ seq: promptSeq, id: promptId })
       active.claudePromptSeq = promptSeq
       logClaudeSteer("claude_prompt_sent", {
         chatId: args.chatId,
@@ -2015,7 +2038,7 @@ export class AgentCoordinator {
         promptSeq,
         activeStatus: active.status,
         contentPreview: wireContent.slice(0, 160),
-        pendingPromptSeqs: [...session.pendingPromptSeqs],
+        pendingPromptSeqs: session.pendingPrompts.map((prompt) => prompt.seq),
       })
       // setModel() swaps the model on the live session without restarting it,
       // so the agent id in the session prompt can be stale. Re-state it on the
@@ -2026,7 +2049,8 @@ export class AgentCoordinator {
       await session.session.sendPrompt(
         session.promptAgentId === claudeAgentId
           ? claudePrompt
-          : appendSystemMessageBlock(claudePrompt, buildKannaAgentCorrection(claudeAgentId))
+          : appendSystemMessageBlock(claudePrompt, buildKannaAgentCorrection(claudeAgentId)),
+        promptId,
       )
       return
     }
@@ -2095,7 +2119,8 @@ export class AgentCoordinator {
         sessionToken: args.sessionToken,
         accountInfoLoaded: false,
         nextPromptSeq: 0,
-        pendingPromptSeqs: [],
+        pendingPrompts: [],
+        echoesPromptIds: started.echoesPromptIds ?? false,
         suppressResume: false,
         cancelledPromptSeqs: new Set(),
       }
@@ -2438,11 +2463,46 @@ export class AgentCoordinator {
   }
 
   /**
+   * Removes and returns the seqs of the prompts a turn-ending entry answers.
+   *
+   * The CLI also runs turns nobody sent. A task notification starts one, and
+   * a resumed session opens with one about background commands the previous
+   * process left running. Such a turn can end while the user's prompt waits
+   * behind it in the CLI's queue. Crediting its result to the oldest pending
+   * prompt ended the user's turn before the CLI had started it: "turn done"
+   * with no reply. So each prompt carries an id, and the CLI echoes the ids a
+   * turn consumed on its result.
+   *
+   * A result without ids answers none of ours, unless this CLI has never
+   * echoed (a CLAUDE_EXECUTABLE wrapper), where oldest-first is all there
+   * is. Error and interrupt results can come back without ids too (an
+   * interrupted or failed turn), and they still go oldest-first so a failed
+   * turn can't leave the chat spinning.
+   */
+  private takeAnsweredClaudePrompts(
+    session: ClaudeSessionState,
+    promptIds: string[] | undefined,
+    endedEarly: boolean,
+  ): number[] {
+    if (promptIds?.length) {
+      session.echoesPromptIds = true
+      const answered = session.pendingPrompts.filter((prompt) => promptIds.includes(prompt.id))
+      session.pendingPrompts = session.pendingPrompts.filter((prompt) => !promptIds.includes(prompt.id))
+      return answered.map((prompt) => prompt.seq)
+    }
+    const head = session.pendingPrompts[0]
+    if (!head) return []
+    if (session.echoesPromptIds && !endedEarly) return []
+    session.pendingPrompts.shift()
+    return [head.seq]
+  }
+
+  /**
    * Re-registers an active turn for a Claude session that produced new
    * activity after its previous turn finished (e.g. a Monitor or Cron
    * wakeup continued the session). The resumed turn has no prompt seq, so
-   * the next result entry (pendingPromptSeqs empty → null === null) closes
-   * it through the normal completion path in runClaudeSession.
+   * the next result that answers none of our prompts closes it through the
+   * normal completion path in runClaudeSession.
    */
   private async resumeBackgroundTurn(session: ClaudeSessionState) {
     const active: ActiveTurn = {
@@ -2486,22 +2546,22 @@ export class AgentCoordinator {
 
         if (!event.entry || customToolEvents.skip(event.entry)) continue
 
+        const completedPromptSeqs = event.entry.kind === "result" || event.entry.kind === "interrupted"
+          ? this.takeAnsweredClaudePrompts(session, event.promptIds, event.entry.kind === "interrupted" || event.entry.isError)
+          : []
+
         // After an escape/cancel or steer, the SDK ends the cancelled turn
         // with a result of subtype error_during_execution (is_error, usually
         // no text). The cancel already appended an "interrupted" entry, so
         // persisting this would render a spurious "An unknown error
-        // occurred." in the UI. Attribute the result to the prompt it
-        // completes (pendingPromptSeqs[0]) rather than relying on
-        // suppressResume, which a steered follow-up prompt clears before the
-        // interrupt error lands.
-        const completingPromptSeq = event.entry.kind === "result" || event.entry.kind === "interrupted"
-          ? (session.pendingPromptSeqs[0] ?? null)
-          : null
+        // occurred." in the UI. Attribute the result to the prompts it
+        // answers rather than relying on suppressResume, which a steered
+        // follow-up prompt clears before the interrupt error lands.
         const isCancelledPromptErrorResult =
           event.entry.kind === "result"
           && event.entry.isError
-          && completingPromptSeq !== null
-          && session.cancelledPromptSeqs.has(completingPromptSeq)
+          && completedPromptSeqs.length > 0
+          && completedPromptSeqs.every((seq) => session.cancelledPromptSeqs.has(seq))
         if (!isCancelledPromptErrorResult) {
           await this.store.appendMessage(session.chatId, event.entry)
         }
@@ -2540,15 +2600,12 @@ export class AgentCoordinator {
             chatId: session.chatId,
             sessionId: session.id,
             activePromptSeq: active.claudePromptSeq ?? null,
-            pendingPromptSeqs: [...session.pendingPromptSeqs],
+            pendingPromptSeqs: session.pendingPrompts.map((prompt) => prompt.seq),
           })
         }
 
-        const completedClaudePromptSeq = event.entry.kind === "result" || event.entry.kind === "interrupted"
-          ? (session.pendingPromptSeqs.shift() ?? null)
-          : null
-        if (completedClaudePromptSeq !== null) {
-          session.cancelledPromptSeqs.delete(completedClaudePromptSeq)
+        for (const seq of completedPromptSeqs) {
+          session.cancelledPromptSeqs.delete(seq)
         }
 
         logClaudeSteer("claude_event", {
@@ -2556,12 +2613,17 @@ export class AgentCoordinator {
           sessionId: session.id,
           entryKind: event.entry.kind,
           activePromptSeq: active?.claudePromptSeq ?? null,
-          completedPromptSeq: completedClaudePromptSeq,
+          completedPromptSeqs,
           activeStatus: active?.status ?? null,
-          pendingPromptSeqs: [...session.pendingPromptSeqs],
+          pendingPromptSeqs: session.pendingPrompts.map((prompt) => prompt.seq),
         })
 
-        if (event.entry.kind === "result" && active && completedClaudePromptSeq === (active.claudePromptSeq ?? null)) {
+        // A turn resumed by background activity has no prompt, so any result
+        // that answers none of ours ends it.
+        const completesActive = active?.claudePromptSeq == null
+          ? completedPromptSeqs.length === 0
+          : completedPromptSeqs.includes(active.claudePromptSeq)
+        if (event.entry.kind === "result" && active && completesActive) {
           active.hasFinalResult = true
           if (event.entry.isError) {
             await this.store.recordTurnFailed(session.chatId, event.entry.result || "Turn failed")

@@ -4,6 +4,8 @@ export interface HarnessEvent {
   type: "transcript" | "session_token"
   entry?: TranscriptEntry
   sessionToken?: string
+  /** Claude results: the ids of the prompts this turn answered, as the CLI echoes them. */
+  promptIds?: string[]
 }
 
 export interface HarnessToolRequest {

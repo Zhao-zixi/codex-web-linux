@@ -1,6 +1,6 @@
 import { create } from "zustand"
 import { useShallow } from "zustand/react/shallow"
-import type { SidebarChatRow, SidebarData } from "../../shared/types"
+import type { KannaStatus, SidebarChatRow, SidebarData } from "../../shared/types"
 import { stabilizeSidebarData } from "../app/sidebarStability"
 import { applySidebarProjectOrder } from "../app/kannaStateHelpers"
 import { formatProjectRepoBranch } from "../lib/project-label"
@@ -118,6 +118,23 @@ export function useChatExists(chatId: string | null): boolean {
     return state.data.projectGroups.some((group) =>
       group.chats.some((chat) => chat.chatId === chatId)
       || (group.archivedChats ?? []).some((chat) => chat.chatId === chatId))
+  })
+}
+
+/**
+ * The chat's status as the sidebar last heard it. The sidebar is subscribed from
+ * app start, so this is known the moment a chat opens, well before that chat's
+ * own snapshot arrives.
+ */
+export function useSidebarChatStatus(chatId: string | null): KannaStatus | null {
+  return useSidebarStore((state) => {
+    if (!chatId) return null
+    for (const group of state.data.projectGroups) {
+      const chat = group.chats.find((row) => row.chatId === chatId)
+        ?? (group.archivedChats ?? []).find((row) => row.chatId === chatId)
+      if (chat) return chat.status
+    }
+    return null
   })
 }
 

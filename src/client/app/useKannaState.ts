@@ -16,6 +16,7 @@ import {
   useFirstProjectGroup,
   useNavbarRepoLabel,
   useProjectIdForChat,
+  useSidebarChatStatus,
   useSidebarReady,
   useSidebarStore,
 } from "../stores/sidebarStore"
@@ -682,7 +683,14 @@ export function useKannaState(activeChatId: string | null): KannaState {
   const optimisticRuntimeStatus = optimisticProcessing?.scopeId === optimisticScopeId && (!runtime || runtime.status === "idle")
     ? "starting"
     : null
-  const effectiveRuntimeStatus = optimisticRuntimeStatus ?? runtime?.status ?? null
+  // The chat's snapshot waits on the server reading the transcript off disk,
+  // but the cached transcript paints before that. Without a status in the gap,
+  // a running chat opens with no footer indicator and gains one a beat later,
+  // shoving the text up. The sidebar already knows the status, so use it until
+  // the snapshot lands.
+  const sidebarChatStatus = useSidebarChatStatus(activeChatId)
+  const loadingRuntimeStatus = activeChatId && !activeChatSnapshot ? sidebarChatStatus : null
+  const effectiveRuntimeStatus = optimisticRuntimeStatus ?? runtime?.status ?? loadingRuntimeStatus ?? null
   // Outside a chat snapshot (new-chat composer, settings) the catalog is the
   // live one the app-settings snapshot carries, so runtime-discovered models
   // show before any chat is opened; the static list covers a cold start. The

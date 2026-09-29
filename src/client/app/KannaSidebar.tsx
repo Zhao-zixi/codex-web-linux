@@ -592,9 +592,10 @@ function KannaSidebarImpl({
           // Collapsing slides the card out by its own margin: at -width it sits
           // just off the left edge and takes no room, so the chat widens in
           // the same frames it slides, and the card never changes width, so its
-          // contents never reflow. A drawer curve, quicker out than in.
+          // contents never reflow. The pane clock and curve every pane beside
+          // the chat shares (paneAnimation.ts): 300ms in, 240ms out, glide.
           // visibility rides along: visible for the slide, hidden once gone.
-          "md:transition-[margin-left,visibility] md:duration-300 md:ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none",
+          "md:transition-[margin-left,visibility] md:duration-300 md:ease-glide motion-reduce:transition-none",
           collapsed && "md:!ml-[calc(var(--sidebar-width)*-1)] md:!duration-[240ms] md:invisible"
         )}
         inert={collapsed}

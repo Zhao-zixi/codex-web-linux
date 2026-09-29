@@ -1,4 +1,6 @@
-import { lazy, Suspense } from "react"
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type Ref } from "react"
+import { PANE_CLOSE_MS, prefersReducedMotion } from "../../app/paneAnimation"
+import type { ChatViewerState } from "../../stores/rightSidebarStore"
 import { useChatViewer, useViewerStore, type ViewerItem } from "../../stores/viewerStore"
 import type { DiffViewerContext } from "../chat-ui/git/DiffViewer"
 import { OpenLocalLinkProvider, type OpenLocalLinkTarget } from "../messages/shared"
@@ -36,19 +38,35 @@ function showsOn(item: ViewerItem | null, projectId: string | null | undefined) 
  * handles a file link inside what's shown (a markdown preview's), as the
  * transcript's do. `placement` is given where the page has a pane for it.
  */
-export function ViewerLayer({ diff, className, onOpenLocalLink, placement }: {
+export function ViewerLayer({ diff, className, onOpenLocalLink, placement, presented, layerRef }: {
   diff?: DiffViewerContext
   className?: string
   onOpenLocalLink?: (target: OpenLocalLinkTarget) => void
   placement?: ViewerPlacement
+  /** What to show, from usePresentedViewer, on a page that animates it out; else what the chat has open. */
+  presented?: PresentedViewer
+  layerRef?: Ref<HTMLDivElement>
 }) {
-  const item = useChatViewer()?.item ?? null
+  const live = useChatViewer()
+  const item = (presented ? presented.viewer : live)?.item ?? null
+  const exiting = presented?.exiting ?? false
   const close = useViewerStore((store) => store.close)
   const openCount = useViewerStore((store) => store.openCount)
   if (!item || !showsOn(item, diff?.projectId)) return null
+  // In a pane, the pane closes around it. Over the chat it leaves the way it
+  // came, faded and a touch small, quicker than it came.
+  const overlayExit = exiting && !(placement && !placement.expanded)
 
   return (
-    <div className={cn("absolute inset-0 z-30 bg-background p-2", className)}>
+    <div
+      ref={layerRef}
+      inert={exiting || undefined}
+      className={cn(
+        "absolute inset-0 z-30 bg-background p-2",
+        overlayExit && "opacity-0 transition-opacity duration-150 ease-snappy motion-safe:[&_[data-viewer-surface]]:scale-[0.98]",
+        className,
+      )}
+    >
       <ViewerPlacementProvider value={placement ?? null}>
       <OpenLocalLinkProvider onOpenLocalLink={onOpenLocalLink}>
         <Suspense fallback={null}>
@@ -73,6 +91,49 @@ export function ViewerLayer({ diff, className, onOpenLocalLink, placement }: {
       </ViewerPlacementProvider>
     </div>
   )
+}
+
+export const VIEWER_OVERLAY_EXIT_MS = 150
+
+export interface PresentedViewer {
+  viewer: ChatViewerState | null
+  /** Closed, and on screen only while it animates out. */
+  exiting: boolean
+}
+
+/**
+ * The viewer as the page shows it: what the chat has open, or for a moment
+ * after it closes, what it had open, so it can leave rather than vanish.
+ * Beside the chat that's the pane's closing time (the pane closes around
+ * it); over the chat, the card's fade. Another chat, or reduced motion,
+ * drops it at once.
+ */
+export function usePresentedViewer(projectId: string | null | undefined, paneAvailable: boolean): PresentedViewer {
+  const live = useChatViewer()
+  const chatKey = useViewerStore((store) => store.chatKey)
+  const shown = live && showsOn(live.item, projectId) ? live : null
+  // The last viewer shown, as committed: read in render to keep it on screen
+  // the render it closes in, so it never unmounts and mounts again.
+  const lastShownRef = useRef<{ viewer: ChatViewerState; chatKey: string } | null>(null)
+  const [finished, setFinished] = useState<ChatViewerState | null>(null)
+  const last = lastShownRef.current
+  const leaving = !shown && last && last.chatKey === chatKey && last.viewer !== finished && !prefersReducedMotion()
+    ? last.viewer
+    : null
+  const exitMs = leaving ? (paneAvailable && !leaving.expanded ? PANE_CLOSE_MS : VIEWER_OVERLAY_EXIT_MS) : 0
+
+  useLayoutEffect(() => {
+    if (shown) lastShownRef.current = { viewer: shown, chatKey }
+    else if (!leaving) lastShownRef.current = null
+  })
+
+  useEffect(() => {
+    if (!leaving) return
+    const timeout = window.setTimeout(() => setFinished(leaving), exitMs)
+    return () => window.clearTimeout(timeout)
+  }, [exitMs, leaving])
+
+  return { viewer: shown ?? leaving, exiting: leaving !== null }
 }
 
 /** Whether the viewer is showing on this project's page: the page makes room for it, or goes inert under it. */

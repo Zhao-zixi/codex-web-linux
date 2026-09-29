@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react"
 import type { GroupImperativeHandle } from "react-resizable-panels"
 import type { ProjectTerminalLayout } from "../stores/terminalLayoutStore"
-import { interpolateLayout, TERMINAL_TOGGLE_ANIMATION_DURATION_MS } from "./terminalToggleAnimation"
+import { interpolateLayout, paneDurationMs, prefersReducedMotion } from "./paneAnimation"
 
 type UseTerminalToggleAnimationParams = {
   chatInputRef: RefObject<HTMLTextAreaElement | null>
@@ -169,6 +169,7 @@ export function useTerminalToggleAnimation({
 
     if (
       shouldSkipAnimation ||
+      prefersReducedMotion() ||
       Math.abs(currentLayout[0] - targetLayout[0]) < 0.1 &&
       Math.abs(currentLayout[1] - targetLayout[1]) < 0.1
     ) {
@@ -185,9 +186,10 @@ export function useTerminalToggleAnimation({
     terminalVisualRef.current?.setAttribute("data-terminal-animated", "true")
     group.setLayout({ chat: currentLayout[0], terminal: currentLayout[1] })
     const startTime = performance.now()
+    const durationMs = paneDurationMs(showTerminalPane)
 
     const step = (now: number) => {
-      const progress = Math.min(1, (now - startTime) / TERMINAL_TOGGLE_ANIMATION_DURATION_MS)
+      const progress = Math.min(1, (now - startTime) / durationMs)
       const nextLayout = interpolateLayout(currentLayout, targetLayout, progress)
       group.setLayout({ chat: nextLayout[0], terminal: nextLayout[1] })
 

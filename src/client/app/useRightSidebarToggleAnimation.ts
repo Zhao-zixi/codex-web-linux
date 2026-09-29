@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, type RefObject } from "react"
 import type { GroupImperativeHandle } from "react-resizable-panels"
-import { interpolateLayout, TERMINAL_TOGGLE_ANIMATION_DURATION_MS } from "./terminalToggleAnimation"
+import { interpolateLayout, paneDurationMs, prefersReducedMotion } from "./paneAnimation"
 
 type UseRightSidebarToggleAnimationParams = {
   projectId: string | null
@@ -88,6 +88,7 @@ export function useRightSidebarToggleAnimation({
 
     if (
       shouldSkipAnimation ||
+      prefersReducedMotion() ||
       (Math.abs(currentLayout[0] - targetLayout[0]) < 0.1 &&
       Math.abs(currentLayout[1] - targetLayout[1]) < 0.1)
     ) {
@@ -104,9 +105,10 @@ export function useRightSidebarToggleAnimation({
     sidebarVisualRef.current?.setAttribute("data-right-sidebar-animated", "true")
     group.setLayout({ workspace: currentLayout[0], rightSidebar: currentLayout[1] })
     const startTime = performance.now()
+    const durationMs = paneDurationMs(showRightSidebar)
 
     const step = (now: number) => {
-      const progress = Math.min(1, (now - startTime) / TERMINAL_TOGGLE_ANIMATION_DURATION_MS)
+      const progress = Math.min(1, (now - startTime) / durationMs)
       const nextLayout = interpolateLayout(currentLayout, targetLayout, progress)
       group.setLayout({ workspace: nextLayout[0], rightSidebar: nextLayout[1] })
 

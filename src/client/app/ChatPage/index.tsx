@@ -1,5 +1,6 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type DragEvent, type ReactNode, type RefObject } from "react"
 import type { GroupImperativeHandle } from "react-resizable-panels"
+import { flushSync } from "react-dom"
 import { useNavigate, useOutletContext } from "react-router-dom"
 import type { ChatInputHandle } from "../../components/chat-ui/ChatInput"
 import { ChatNavbar, ChatNavbarWash } from "../../components/chat-ui/ChatNavbar"
@@ -25,7 +26,7 @@ import {
   useRightSidebarStore,
   useWidgetsOpen,
 } from "../../stores/rightSidebarStore"
-import { ViewerLayer, useViewerShown } from "../../components/viewer/ViewerLayer"
+import { ViewerLayer, usePresentedViewer, useViewerShown } from "../../components/viewer/ViewerLayer"
 import { opensInViewer, projectRelativePath } from "../../components/viewer/localLinks"
 import type { OpenLocalLinkTarget } from "../../components/messages/shared"
 import { shouldOpenLocalFileLinkInEditor } from "../../lib/pathUtils"
@@ -37,7 +38,7 @@ import { usePaneChatKey } from "../../lib/paneVisibility"
 import { useTerminalPreferencesStore } from "../../stores/terminalPreferencesStore"
 import { shouldCloseTerminalPane } from "../terminalLayoutResize"
 
-import { interpolateLayout, TERMINAL_TOGGLE_ANIMATION_DURATION_MS } from "../terminalToggleAnimation"
+import { interpolateLayout, PANE_CLOSE_MS, PANE_EASING, PANE_OPEN_MS, paneDurationMs, prefersReducedMotion } from "../paneAnimation"
 import { useRightSidebarToggleAnimation } from "../useRightSidebarToggleAnimation"
 import { useStickyChatFocus } from "../useStickyChatFocus"
 import { useTerminalToggleAnimation } from "../useTerminalToggleAnimation"
@@ -394,7 +395,7 @@ const DesktopSidebarPane = memo(function DesktopSidebarPane({
         data-right-sidebar-animated="false"
         data-right-sidebar-visual
         style={{
-          "--terminal-toggle-duration": `${TERMINAL_TOGGLE_ANIMATION_DURATION_MS}ms`,
+          "--pane-duration": `${paneDurationMs(showRightSidebar)}ms`,
         } as CSSProperties}
       >
         {content}
@@ -425,9 +426,11 @@ const MobileSidebarPane = memo(function MobileSidebarPane({
 
   return (
     <div
+      // The pane clock and curve (paneAnimation.ts), in classes. Under reduced
+      // motion the sheet stops sliding; the backdrop still fades.
       className={cn(
-        "absolute inset-0 z-40 transition-opacity duration-300 ease-out",
-        showRightSidebar ? "pointer-events-auto opacity-100" : "pointer-events-none opacity-0",
+        "absolute inset-0 z-40 transition-opacity ease-glide",
+        showRightSidebar ? "pointer-events-auto opacity-100 duration-300" : "pointer-events-none opacity-0 duration-[240ms]",
       )}
       aria-hidden={showRightSidebar ? undefined : true}
       data-mobile-right-sidebar-overlay
@@ -441,9 +444,9 @@ const MobileSidebarPane = memo(function MobileSidebarPane({
       <div
         ref={sidebarVisualRef}
         className={cn(
-          "absolute inset-y-0 right-0 flex w-[min(92vw,30rem)] max-w-full min-h-0 flex-col overflow-hidden bg-background shadow-2xl transition-transform duration-300 ease-out",
+          "absolute inset-y-0 right-0 flex w-[min(92vw,30rem)] max-w-full min-h-0 flex-col overflow-hidden bg-background shadow-2xl transition-transform ease-glide motion-reduce:transition-none",
           "pt-[max(env(safe-area-inset-top),0px)] pb-[max(env(safe-area-inset-bottom),0px)]",
-          showRightSidebar ? "translate-x-0" : "translate-x-full",
+          showRightSidebar ? "translate-x-0 duration-300" : "translate-x-full duration-[240ms]",
         )}
         data-right-sidebar-open={showRightSidebar ? "true" : "false"}
         data-right-sidebar-animated="false"
@@ -523,7 +526,7 @@ function ChatWorkspace({
           data-terminal-animated="false"
           data-terminal-visual
           style={{
-            "--terminal-toggle-duration": `${TERMINAL_TOGGLE_ANIMATION_DURATION_MS}ms`,
+            "--pane-duration": `${paneDurationMs(showTerminalPane)}ms`,
           } as CSSProperties}
         >
           {shouldRenderTerminalLayout ? <TerminalWorkspaceShell
@@ -1115,15 +1118,79 @@ export function ChatPage() {
   const viewerSplitElementRef = useRef<HTMLDivElement | null>(null)
   const viewerSplitAnimationRef = useRef<number | null>(null)
   const viewerSplitStateRef = useRef<{ group: GroupImperativeHandle | null; open: boolean; chatKey: string }>({ group: null, open: false, chatKey: "" })
-  const viewerPlacement = useMemo(() => ({ expanded: viewerExpanded, onToggleExpanded: toggleViewerExpanded }), [toggleViewerExpanded, viewerExpanded])
+  // What's on screen, which outlives a close by its exit animation. The
+  // placement follows it, so a viewer closing over the chat leaves from
+  // there rather than dropping into the pane.
+  const presentedViewer = usePresentedViewer(projectId, viewerPaneAvailable)
+  const presentedExpanded = presentedViewer.viewer?.expanded ?? false
+  const viewerPlacement = useMemo(() => ({ expanded: presentedExpanded, onToggleExpanded: toggleViewerExpanded }), [presentedExpanded, toggleViewerExpanded])
+
+  // Expanded as the layer is placed: against the whole workspace, or in its
+  // pane. Expanding places it at once and its left edge slides from the
+  // pane's out to the workspace's. Collapsing slides it back first, still
+  // against the workspace, and only lands it in the pane at the end: the
+  // pane clips what's in it, so the slide couldn't run from in there.
+  const [viewerLayerExpanded, setViewerLayerExpanded] = useState(presentedExpanded)
+  if (presentedExpanded && !viewerLayerExpanded) setViewerLayerExpanded(true)
+  const viewerLayerRef = useRef<HTMLDivElement | null>(null)
+  const viewerExpandAnimationRef = useRef<Animation | null>(null)
+  const viewerExpandStateRef = useRef({ expanded: presentedExpanded, chatKey: viewerChatKey, shown: presentedViewer.viewer !== null })
+
+  useLayoutEffect(() => {
+    const previous = viewerExpandStateRef.current
+    const shown = presentedViewer.viewer !== null
+    viewerExpandStateRef.current = { expanded: presentedExpanded, chatKey: viewerChatKey, shown }
+    if (previous.expanded === presentedExpanded) return
+
+    const layer = viewerLayerRef.current
+    const group = viewerSplitGroupRef.current
+    const splitWidth = viewerSplitElementRef.current?.clientWidth ?? 0
+    // Turned around mid-slide, it goes on from where it is.
+    const running = viewerExpandAnimationRef.current
+    const fromLeftPx = running && layer ? Number.parseFloat(getComputedStyle(layer).left) : null
+    running?.cancel()
+    viewerExpandAnimationRef.current = null
+
+    const animate = layer && group && splitWidth > 0 && shown && previous.shown
+      && previous.chatKey === viewerChatKey && !presentedViewer.exiting && !prefersReducedMotion()
+    if (!animate) {
+      setViewerLayerExpanded(presentedExpanded)
+      return
+    }
+
+    const paneLeftPx = splitWidth * ((group.getLayout().chatColumn ?? 100) / 100)
+    if (presentedExpanded) {
+      viewerExpandAnimationRef.current = layer.animate(
+        [{ left: `${fromLeftPx ?? paneLeftPx}px` }, { left: "0px" }],
+        { duration: PANE_OPEN_MS, easing: PANE_EASING },
+      )
+      return
+    }
+
+    const animation = layer.animate(
+      [{ left: `${fromLeftPx ?? 0}px` }, { left: `${paneLeftPx}px` }],
+      { duration: PANE_CLOSE_MS, easing: PANE_EASING, fill: "forwards" },
+    )
+    viewerExpandAnimationRef.current = animation
+    animation.onfinish = () => {
+      // Into the pane and off the held frame in one commit, before paint:
+      // the held left would be measured from the pane's edge once it's in.
+      flushSync(() => setViewerLayerExpanded(false))
+      animation.cancel()
+      if (viewerExpandAnimationRef.current === animation) viewerExpandAnimationRef.current = null
+    }
+  }, [presentedExpanded, presentedViewer.exiting, presentedViewer.viewer, viewerChatKey])
+
+  useEffect(() => () => viewerExpandAnimationRef.current?.cancel(), [])
 
   // Opening slides the pane in, as the terminal and widget column slide, and
-  // so does going between a review and a preview; closing snaps the chat
-  // back, as the viewer leaves at once. Another chat, or a group that's new
-  // (another project, a phone turned desktop), takes its layout without the
-  // slide. Stepping between files of one kind, and expanding, leave the split
-  // as it is. A width you dragged the pane to is the chat's, and it opens at
-  // it again.
+  // so does going between a review and a preview; closing slides it shut
+  // around the viewer, which stays on screen for it (usePresentedViewer).
+  // Another chat, or a group that's new (another project, a phone turned
+  // desktop), takes its layout without the slide, as does reduced motion.
+  // Stepping between files of one kind, and expanding, leave the split as it
+  // is. A width you dragged the pane to is the chat's, and it opens at it
+  // again.
   useLayoutEffect(() => {
     const group = viewerSplitGroupRef.current
     const previous = viewerSplitStateRef.current
@@ -1148,7 +1215,8 @@ export function ChatPage() {
           return [100 - panePercent, panePercent]
         })()
       : [100, 0]
-    const animate = viewerPaneOpen && previous.group === group && previous.chatKey === viewerChatKey
+    const animate = (viewerPaneOpen || previous.open) && previous.group === group
+      && previous.chatKey === viewerChatKey && !prefersReducedMotion()
     if (!animate) {
       group.setLayout({ chatColumn: target[0], viewerPane: target[1] })
       return
@@ -1159,8 +1227,9 @@ export function ChatPage() {
       ? [current.chatColumn ?? 100, current.viewerPane ?? 0]
       : [100, 0]
     const startTime = performance.now()
+    const durationMs = paneDurationMs(viewerPaneOpen)
     const step = (now: number) => {
-      const progress = Math.min(1, (now - startTime) / TERMINAL_TOGGLE_ANIMATION_DURATION_MS)
+      const progress = Math.min(1, (now - startTime) / durationMs)
       const next = interpolateLayout(from, target, progress)
       group.setLayout({ chatColumn: next[0], viewerPane: next[1] })
       viewerSplitAnimationRef.current = progress < 1 ? window.requestAnimationFrame(step) : null
@@ -1314,6 +1383,8 @@ export function ChatPage() {
       diff={diffViewerContext}
       onOpenLocalLink={handleViewerLocalLink}
       placement={viewerPaneAvailable ? viewerPlacement : undefined}
+      presented={presentedViewer}
+      layerRef={viewerLayerRef}
       className={isMobileViewport ? undefined : cn("pt-[calc(var(--chat-navbar-h,53px)+1px)]", showRightSidebar && "pr-0")}
     />
   )
@@ -1345,7 +1416,7 @@ export function ChatPage() {
           // no width of its own), over the card.
           className={cn("z-40 w-4 -ml-1 -mr-3", !viewerDocked && "pointer-events-none opacity-0")}
         />
-        <ResizablePanel id="viewerPane" defaultSize="0%" minSize="0%" className={cn("min-h-0 min-w-0", viewerDocked && "relative")}>
+        <ResizablePanel id="viewerPane" defaultSize="0%" minSize="0%" className={cn("min-h-0 min-w-0", !viewerLayerExpanded && "relative")}>
           {viewerLayer}
         </ResizablePanel>
       </ResizablePanelGroup>

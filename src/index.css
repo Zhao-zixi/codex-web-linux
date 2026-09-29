@@ -155,8 +155,9 @@
   /* Starts fast and settles: for UI that enters, opens or answers a press. */
   --ease-snappy: cubic-bezier(0.23, 1, 0.32, 1);
   /* iOS's glide (from Ionic): for a part that travels across its control, like
-     a switch's knob. Snappy front-loads so hard that short travel looks
-     instant; this keeps the move visible and still settles softly. */
+     a switch's knob, and for a pane opening beside the chat (paneAnimation.ts).
+     Snappy front-loads so hard that short travel looks instant; this keeps
+     the move visible and still settles softly. */
   --ease-glide: cubic-bezier(0.32, 0.72, 0, 1);
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
@@ -598,10 +599,13 @@
     overflow: hidden;
   }
 
+  /* The pane's contents fade in step with the pane itself: --pane-duration is
+     set beside the layout animation (paneAnimation.ts) to its open or close
+     time, on the same curve. */
   [data-terminal-visual] {
     transition:
-      opacity var(--terminal-toggle-duration, 350ms) cubic-bezier(0.4, 0, 0.2, 1),
-      filter var(--terminal-toggle-duration, 350ms) cubic-bezier(0.4, 0, 0.2, 1);
+      opacity var(--pane-duration, 300ms) var(--ease-glide),
+      filter var(--pane-duration, 300ms) var(--ease-glide);
     will-change: opacity, filter;
   }
 
@@ -621,8 +625,8 @@
 
   [data-right-sidebar-visual] {
     transition:
-      opacity var(--terminal-toggle-duration, 350ms) cubic-bezier(0.4, 0, 0.2, 1),
-      filter var(--terminal-toggle-duration, 350ms) cubic-bezier(0.4, 0, 0.2, 1);
+      opacity var(--pane-duration, 300ms) var(--ease-glide),
+      filter var(--pane-duration, 300ms) var(--ease-glide);
     will-change: opacity, filter;
   }
 

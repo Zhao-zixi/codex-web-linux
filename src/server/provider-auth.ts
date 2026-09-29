@@ -1,4 +1,6 @@
 import { createHash, randomBytes } from "node:crypto"
+import { accessSync, constants as fsConstants, statSync } from "node:fs"
+import path from "node:path"
 import { LOG_PREFIX } from "../shared/branding"
 import {
   AUTH_SERVICE_LABELS,
@@ -239,6 +241,8 @@ export interface ProviderAuthManagerDeps {
   fetchFn?: typeof fetch
   fetchLatestNpmVersion?: (packageName: string) => Promise<string>
   resolveCommandPath?: (command: string) => string | null
+  /** Whether a path is an executable file (default: the filesystem). */
+  isExecutable?: (filePath: string) => boolean
   /** Oldest Claude Code Kanna runs turns on (default: the Agent SDK's pairing). */
   claudeMinimumVersion?: string
   onSignedIn?: (service: AuthServiceId) => void
@@ -355,6 +359,17 @@ export class ProviderAuthManager {
 
   private setLogin(service: AuthServiceId, login: AuthLoginFlowState) {
     this.patchService(service, { login })
+  }
+
+  private isExecutable(filePath: string): boolean {
+    if (this.deps.isExecutable) return this.deps.isExecutable(filePath)
+    try {
+      if (!statSync(filePath).isFile()) return false
+      accessSync(filePath, fsConstants.X_OK)
+      return true
+    } catch {
+      return false
+    }
   }
 
   private resolvePath(command: string, options?: { fresh?: boolean }): string | null {
@@ -630,9 +645,25 @@ export class ProviderAuthManager {
       return nativeInstall
     }
     if (service === "codex") {
+      // Update the codex the card runs, not whichever npm a login bash finds.
+      // The install runs in `bash -l`, which doesn't read ~/.zshrc, so there a
+      // bare `npm` was Homebrew's while the card ran nvm's codex: updates
+      // landed in the other install and the version never moved. So use the
+      // npm (or bun) beside that codex, with its folder first on PATH so that
+      // npm runs on its own node and installs into its own prefix.
       const pkg = NPM_PACKAGES.codex!
-      if (this.resolvePath("npm")) return `npm install -g ${pkg}`
-      if (this.resolvePath("bun")) return `bun add -g ${pkg}`
+      const existing = this.cliPath("codex")
+      const beside = (tool: string) => {
+        if (!existing) return null
+        const candidate = path.join(path.dirname(existing), tool)
+        return this.isExecutable(candidate) ? candidate : null
+      }
+      const besideBun = beside("bun")
+      const npm = beside("npm") ?? (besideBun ? null : this.resolvePath("npm"))
+      const bun = besideBun ?? this.resolvePath("bun")
+      const run = (tool: string) => `PATH=${shellQuote(path.dirname(tool))}:"$PATH" ${shellQuote(tool)}`
+      if (npm) return `${run(npm)} install -g ${pkg}`
+      if (bun) return `${run(bun)} add -g ${pkg}`
       throw new Error("Neither npm nor bun is available to install the package.")
     }
     if (service === "cursor") {

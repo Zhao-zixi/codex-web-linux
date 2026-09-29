@@ -207,6 +207,8 @@ interface HarnessOptions {
   fetchLatestNpmVersion?: (pkg: string) => Promise<string>
   platform?: NodeJS.Platform
   claudeMinimumVersion?: string
+  /** Files that exist and are executable (npm or bun beside a CLI). */
+  executables?: string[]
 }
 
 function createHarness(options: HarnessOptions = {}) {
@@ -251,6 +253,7 @@ function createHarness(options: HarnessOptions = {}) {
     fetchFn: options.fetchFn ?? ((async () => new Response("{}", { status: 200 })) as unknown as typeof fetch),
     fetchLatestNpmVersion: options.fetchLatestNpmVersion,
     resolveCommandPath: (command) => paths[command] ?? null,
+    isExecutable: (filePath) => (options.executables ?? []).includes(filePath),
     // Below the fake CLI's 2.1.218; the floor has its own test.
     claudeMinimumVersion: options.claudeMinimumVersion ?? "2.1.0",
     onSignedIn: (service) => signedIn.push(service),
@@ -1050,7 +1053,7 @@ describe("install", () => {
       paths: { codex: null },
       exec: (argv) => {
         const joined = argv.join(" ")
-        if (argv[0] === "sh" && joined.includes("npm install -g @openai/codex")) {
+        if (argv[0] === "sh" && joined.includes("npm' install -g @openai/codex")) {
           installed = true
           return { code: 0, stdout: "added 3 packages", stderr: "" }
         }
@@ -1070,6 +1073,29 @@ describe("install", () => {
     expect(codex.installState).toBe("idle")
     expect(codex.installed).toBe(true)
     expect(codex.authStatus).toBe("signed_out")
+  })
+
+  test("codex updates with the npm beside the codex the card runs, on that npm's node", async () => {
+    // nvm's codex comes first on Kanna's PATH; the login shell's npm is Homebrew's.
+    const harness = createHarness({
+      paths: { codex: "/Users/j/.nvm/versions/node/v22/bin/codex", npm: "/opt/homebrew/bin/npm" },
+      executables: ["/Users/j/.nvm/versions/node/v22/bin/npm"],
+      exec: signedOutExec,
+    })
+    await harness.manager.install("codex")
+    const script = harness.execCalls.find((call) => call.argv[0] === "sh")?.argv[2]
+    expect(script).toBe(`PATH='/Users/j/.nvm/versions/node/v22/bin':"$PATH" '/Users/j/.nvm/versions/node/v22/bin/npm' install -g @openai/codex`)
+  })
+
+  test("a codex from bun's global install updates with that bun", async () => {
+    const harness = createHarness({
+      paths: { codex: "/Users/j/.bun/bin/codex" },
+      executables: ["/Users/j/.bun/bin/bun"],
+      exec: signedOutExec,
+    })
+    await harness.manager.install("codex")
+    const script = harness.execCalls.find((call) => call.argv[0] === "sh")?.argv[2]
+    expect(script).toBe(`PATH='/Users/j/.bun/bin':"$PATH" '/Users/j/.bun/bin/bun' add -g @openai/codex`)
   })
 
   test("install failure surfaces the error output", async () => {

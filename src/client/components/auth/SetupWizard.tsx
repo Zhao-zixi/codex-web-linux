@@ -181,8 +181,13 @@ export const SetupWizard = memo(function SetupWizard() {
   // A property of the page (the app, this Mac's own server), not of the run.
   const [macStepEnabled] = useState(macSetupAvailable)
   // GitHub already connected (say, gh signed in before Kanna existed): no
-  // step to show. Decided on open, so connecting mid-step can't pull it away.
+  // step to show. Decided once gh's status is known, not on open: a first
+  // launch opens before the provider checks finish, and "not checked yet"
+  // isn't "not connected". Never pulled away from under the user, though.
   const [githubStepEnabled, setGithubStepEnabled] = useState(true)
+  const githubDecidedRef = useRef(false)
+  const ghStatus = selectAuthService(snapshot, "gh")?.authStatus
+  const ghKnown = ghStatus !== undefined && ghStatus !== "unknown"
   const macState = useMacSetupState(open && macStepEnabled)
 
   // Kanna › Setup… in the Mac app opens this wizard; its Fleet menu's Put
@@ -249,7 +254,8 @@ export const SetupWizard = memo(function SetupWizard() {
     if (open && !wasOpenRef.current) {
       setLeaving(null)
       setEnterDirection("open")
-      setGithubStepEnabled(!status.githubConnected)
+      githubDecidedRef.current = ghKnown
+      setGithubStepEnabled(!ghKnown || !status.githubConnected)
       setStep(
         macStepEnabled && !macSetupSatisfied(macState) ? "mac"
         : !status.githubConnected ? "github"
@@ -261,6 +267,16 @@ export const SetupWizard = memo(function SetupWizard() {
     wasOpenRef.current = open
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
+
+  useEffect(() => {
+    if (!open) {
+      githubDecidedRef.current = false
+      return
+    }
+    if (githubDecidedRef.current || !ghKnown) return
+    githubDecidedRef.current = true
+    if (status.githubConnected && step !== "github") setGithubStepEnabled(false)
+  }, [open, ghKnown, status.githubConnected, step])
 
   // Entering the cloud step mints the claim URL (once — the server hands back
   // the live session if one is already open).

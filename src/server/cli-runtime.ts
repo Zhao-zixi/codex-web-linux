@@ -135,7 +135,7 @@ function printHelp() {
 Usage:
   ${CLI_COMMAND} [options]
   ${CLI_COMMAND} pair          Claim this machine on kanna.sh (prints a link + QR) and start
-  ${CLI_COMMAND} pair <code>   Same, using a code from https://kanna.sh/machines
+  ${CLI_COMMAND} pair <code>   Same, using a code from https://kanna.sh/fleet
   ${CLI_COMMAND} pair --status|--disable|--enable|--remove
   ${CLI_COMMAND} slim-transcripts
                        Rewrite stored transcripts without raw tool payloads (stop ${CLI_COMMAND} first)

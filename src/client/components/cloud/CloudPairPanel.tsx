@@ -4,7 +4,7 @@ import { renderSVG } from "uqr"
 import { displayClaimUrl, type PairSessionState } from "../../lib/pairSession"
 import { CopyButton } from "../ui/copy-button"
 
-const MANAGE_MACHINES_URL = "https://kanna.sh/machines"
+const FLEET_URL = "https://kanna.sh/fleet"
 
 const PRIMARY_ACTION_CLASS =
   "inline-flex h-9 items-center justify-center gap-1.5 rounded-full bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
@@ -31,14 +31,14 @@ function ManualPairInstructions() {
       <li>
         Sign in at{" "}
         <a
-          href={MANAGE_MACHINES_URL}
+          href={FLEET_URL}
           target="_blank"
           rel="noreferrer"
           className="font-medium underline underline-offset-2"
         >
-          kanna.sh/machines
+          kanna.sh/fleet
         </a>{" "}
-        and add a machine.
+        and add a machine to your Fleet.
       </li>
       <li>
         Run <code className="rounded bg-muted px-1.5 py-0.5 text-xs">bunx kanna pair &lt;code&gt;</code>{" "}

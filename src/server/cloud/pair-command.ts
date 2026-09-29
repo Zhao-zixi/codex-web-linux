@@ -166,7 +166,7 @@ export async function runPairCommand(args: PairCommandArgs, deps: PairCommandDep
         response = await client.pair(args.pairingCode, getMachineName())
       } catch (error) {
         if (error instanceof CloudApiError && (error.status === 404 || error.status === 410)) {
-          warn(`${LOG_PREFIX} that pairing code is ${error.status === 410 ? "expired" : "invalid"} — generate a new one at https://kanna.sh/machines`)
+          warn(`${LOG_PREFIX} that pairing code is ${error.status === 410 ? "expired" : "invalid"} — generate a new one at https://kanna.sh/fleet`)
           return 1
         }
         warn(`${LOG_PREFIX} pairing failed: ${error instanceof Error ? error.message : String(error)}`)
@@ -191,7 +191,7 @@ export async function runPairCommand(args: PairCommandArgs, deps: PairCommandDep
 
     case "status": {
       if (!identity) {
-        log(`${LOG_PREFIX} not paired — get a pairing code at https://kanna.sh/machines`)
+        log(`${LOG_PREFIX} not paired — get a pairing code at https://kanna.sh/fleet`)
         return 0
       }
       log(`${LOG_PREFIX} paired as ${identity.appOrigin}${identity.enabled ? "" : " (disabled)"}`)

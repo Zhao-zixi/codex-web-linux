@@ -1,13 +1,15 @@
-import { useMemo } from "react"
-import { ArrowUpRight, Check, RefreshCw } from "lucide-react"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { ArrowUpRight, Check, Copy, RefreshCw } from "lucide-react"
 import { renderSVG } from "uqr"
+import { copyTextToClipboard } from "../../lib/clipboard"
 import { displayClaimUrl, type PairSessionState } from "../../lib/pairSession"
-import { CopyButton } from "../ui/copy-button"
+import { cn } from "../../lib/utils"
 
 const FLEET_URL = "https://kanna.sh/fleet"
 
-const PRIMARY_ACTION_CLASS =
-  "inline-flex h-9 items-center justify-center gap-1.5 rounded-full bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+/** Presses in a touch (scale 0.97) so the button feels like it heard you. */
+export const PRIMARY_ACTION_CLASS =
+  "inline-flex h-10 items-center justify-center gap-1.5 rounded-full bg-primary px-5 text-sm font-medium text-primary-foreground transition-[transform,background-color] duration-150 ease-out hover:bg-primary/90 active:scale-[0.97]"
 
 /**
  * QR for the claim URL. Always dark-on-white regardless of theme — phone
@@ -17,7 +19,7 @@ function ClaimQr({ url }: { url: string }) {
   const svg = useMemo(() => renderSVG(url, { ecc: "M", border: 2, pixelSize: 8 }), [url])
   return (
     <div
-      className="mx-auto w-[172px] rounded-lg bg-white p-2 [&>svg]:h-full [&>svg]:w-full"
+      className="mx-auto w-[152px] rounded-xl bg-white p-2 shadow-sm ring-1 ring-black/5 [&>svg]:h-full [&>svg]:w-full"
       // uqr returns a self-contained <svg> string built from the URL above.
       dangerouslySetInnerHTML={{ __html: svg }}
     />
@@ -68,17 +70,52 @@ export function PairedSuccess({ appOrigin }: { appOrigin: string }) {
 }
 
 /**
+ * Copy, then a check for a moment. The two icons cross-fade with a touch of
+ * blur and scale, so the swap reads as one icon changing, not two popping.
+ */
+function CopyLinkButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
+  useEffect(() => () => clearTimeout(timer.current), [])
+
+  const iconClass = "absolute inset-0 m-auto size-3.5 transition-[opacity,transform,filter] duration-150 ease-out"
+  return (
+    <button
+      type="button"
+      title={copied ? "Copied" : "Copy link"}
+      aria-label={copied ? "Copied" : "Copy link"}
+      onClick={() => {
+        void copyTextToClipboard(text).then((ok) => {
+          if (!ok) return
+          setCopied(true)
+          clearTimeout(timer.current)
+          timer.current = setTimeout(() => setCopied(false), 1600)
+        })
+      }}
+      className="relative size-7 shrink-0 rounded-full text-muted-foreground transition-[transform,background-color,color] duration-150 ease-out hover:bg-foreground/5 hover:text-foreground active:scale-[0.92]"
+    >
+      <Copy className={cn(iconClass, copied ? "scale-50 opacity-0 blur-[2px]" : "scale-100 opacity-100")} />
+      <Check className={cn(iconClass, "text-emerald-500", copied ? "scale-100 opacity-100" : "scale-50 opacity-0 blur-[2px]")} />
+    </button>
+  )
+}
+
+/**
  * The claim URL as a link and a QR, plus every state the session can be in.
- * Shared by the sidebar's setup dialog and the onboarding wizard's last step.
+ * Shared by the sidebar's setup dialog and the onboarding wizard's Kanna
+ * Cloud step. The wizard puts its own Open button in its footer, so it
+ * passes `showOpenButton={false}` rather than showing two primary actions.
  */
 export function CloudPairPanel({
   session,
   starting,
   onRetry,
+  showOpenButton = true,
 }: {
   session: PairSessionState
   starting: boolean
   onRetry: () => void
+  showOpenButton?: boolean
 }) {
   const claimUrl = session.claimUrl ?? ""
 
@@ -116,30 +153,27 @@ export function CloudPairPanel({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col items-center gap-4">
       <ClaimQr url={claimUrl} />
 
-      <div className="flex items-center gap-2 overflow-hidden rounded-lg border bg-muted/40 px-3 py-2">
+      <div className="flex h-9 max-w-full items-center gap-1 rounded-full border border-border bg-muted/40 pl-3.5 pr-1">
         <a
           href={claimUrl}
           target="_blank"
           rel="noreferrer"
-          className="min-w-0 flex-1 truncate font-mono text-xs hover:underline"
+          className="min-w-0 truncate font-mono text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
         >
           {displayClaimUrl(claimUrl)}
         </a>
-        <CopyButton text={claimUrl} title="Copy link" />
+        <CopyLinkButton text={claimUrl} />
       </div>
 
-      <a href={claimUrl} target="_blank" rel="noreferrer" className={`${PRIMARY_ACTION_CLASS} flex`}>
-        Open link & sign in
-        <ArrowUpRight className="h-4 w-4" />
-      </a>
-
-      <p className="text-center text-xs text-muted-foreground">
-        Or scan the code to do the whole thing on your phone. Sign in, pick a name — this machine
-        comes online on its own.
-      </p>
+      {showOpenButton ? (
+        <a href={claimUrl} target="_blank" rel="noreferrer" className={cn(PRIMARY_ACTION_CLASS, "mt-1 w-full")}>
+          Open link & sign in
+          <ArrowUpRight className="h-4 w-4" />
+        </a>
+      ) : null}
     </div>
   )
 }

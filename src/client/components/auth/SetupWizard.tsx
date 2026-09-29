@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
-import { Check, ChevronLeft, Cloud, Flower, LaptopMinimal } from "lucide-react"
+import { ArrowUpRight, Check, ChevronLeft, Cloud, Flower, LaptopMinimal } from "lucide-react"
 import { AUTH_SERVICE_LABELS, type AuthServiceId } from "../../../shared/types"
 import { cn } from "../../lib/utils"
 import { displayClaimUrl } from "../../lib/pairSession"
@@ -41,19 +41,27 @@ function StepHeading({ title, description }: { title: string; description: strin
  *   [ (‹)  |        Continue        ]
  *              Skip for now
  * Back is a circular icon button inline with Continue; Skip sits below.
+ *
+ * A step whose own action happens elsewhere (Kanna Cloud's sign-in link)
+ * passes `link`: until the step is done, that link takes Continue's place,
+ * so the step never shows a dead Continue next to the thing to do.
  */
+const FOOTER_PRESS = "transition-[transform,background-color,color,border-color] duration-150 ease-out active:scale-[0.97]"
+
 function StepFooter({
   canContinue,
   onContinue,
   onBack,
   onSkip,
   hint,
+  link,
 }: {
   canContinue: boolean
   onContinue: () => void
   onBack?: () => void
   onSkip?: () => void
   hint?: string
+  link?: { href: string; label: string }
 }) {
   return (
     <div className="mt-auto space-y-2 pt-10">
@@ -65,16 +73,40 @@ function StepFooter({
             variant="outline"
             aria-label="Back"
             onClick={onBack}
-            className="h-11 w-11 shrink-0 rounded-full p-0"
+            className={cn("h-11 w-11 shrink-0 rounded-full p-0", FOOTER_PRESS)}
           >
             <ChevronLeft className="h-4 w-4" />
           </Button>
         ) : (
           <div aria-hidden className="h-11 w-11 shrink-0" />
         )}
-        <Button className="h-11 flex-1" disabled={!canContinue} onClick={onContinue}>
-          Continue
-        </Button>
+        {link && !canContinue ? (
+          <a
+            href={link.href}
+            target="_blank"
+            rel="noreferrer"
+            className={cn(
+              "inline-flex h-11 flex-1 items-center justify-center gap-1.5 rounded-full bg-primary text-sm font-medium text-primary-foreground hover:bg-primary/90",
+              FOOTER_PRESS,
+            )}
+          >
+            {link.label}
+            <ArrowUpRight className="h-4 w-4" />
+          </a>
+        ) : (
+          // Disabled reads as not-yet, not as a broken button: a quiet muted
+          // fill instead of a half-transparent primary.
+          <Button
+            className={cn(
+              "h-11 flex-1 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100",
+              FOOTER_PRESS,
+            )}
+            disabled={!canContinue}
+            onClick={onContinue}
+          >
+            Continue
+          </Button>
+        )}
         <div aria-hidden className="h-11 w-11 shrink-0" />
       </div>
       {/* The skip slot always occupies its height so the row above never jumps. */}
@@ -82,7 +114,7 @@ function StepFooter({
         <Button
           variant="ghost"
           onClick={onSkip}
-          className="h-10 w-full text-muted-foreground hover:bg-transparent dark:hover:bg-transparent hover:border-transparent hover:text-foreground"
+          className="mx-auto flex h-10 w-auto px-4 text-muted-foreground transition-colors duration-150 hover:bg-transparent dark:hover:bg-transparent hover:border-transparent hover:text-foreground"
         >
           Skip for now
         </Button>
@@ -344,13 +376,14 @@ export const SetupWizard = memo(function SetupWizard() {
             <>
               <StepHeading
                 title="Use this machine from anywhere"
-                description="Get a personal URL that works from any browser, 100% free. Open the link or scan it with your phone — this machine comes online on its own."
+                description="A personal URL for this machine that works from any browser. Free."
               />
               <div className="mt-8">
                 <CloudPairPanel
                   session={cloud.session}
                   starting={cloud.starting}
                   onRetry={cloud.begin}
+                  showOpenButton={false}
                 />
               </div>
               <StepFooter
@@ -358,6 +391,9 @@ export const SetupWizard = memo(function SetupWizard() {
                 onContinue={goNext}
                 onBack={goBack}
                 onSkip={!machinePaired ? goNext : undefined}
+                link={cloud.session.status === "waiting" && cloud.session.claimUrl
+                  ? { href: cloud.session.claimUrl, label: "Open link & sign in" }
+                  : undefined}
               />
             </>
           ) : null}

@@ -1,5 +1,5 @@
 import { Check } from "lucide-react"
-import { AppDragTile, useMacSetupState } from "../../components/auth/MacSetupStep"
+import { FULL_DISK_ACCESS_STEPS, useMacSetupState } from "../../components/auth/MacSetupStep"
 import { Button } from "../../components/ui/button"
 import { Switch } from "../../components/ui/switch"
 import { macSetup } from "../../lib/macApp"
@@ -85,7 +85,7 @@ export function MacSection() {
           description={
             <>
               {SETTINGS_ROWS.fullDiskAccess.description}
-              {state.fullDiskAccess ? null : <AppDragTile className="mt-3 max-w-sm" />}
+              {state.fullDiskAccess ? null : <span className="mt-1 block">{FULL_DISK_ACCESS_STEPS}</span>}
             </>
           }
         >

@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from "react"
-import { Check, Coffee, Flower, HardDrive, Hand, Power } from "lucide-react"
+import { Check, Coffee, HardDrive, Power } from "lucide-react"
 import {
   macSetup,
   macSetupAvailable,
@@ -85,32 +85,8 @@ function Granted() {
   )
 }
 
-/**
- * Kanna, to drag into System Settings' Full Disk Access list: dropping the
- * app there adds it, so the user only flips its switch. The app starts a real
- * drag of Kanna.app from here (MacSetup.startAppDrag).
- */
-export function AppDragTile({ className }: { className?: string }) {
-  return (
-    <div
-      draggable
-      onDragStart={(event) => {
-        event.preventDefault()
-        macSetup.startAppDrag()
-      }}
-      className={cn(
-        "flex cursor-grab items-center gap-2.5 rounded-xl border border-dashed border-border bg-muted/40 px-3 py-2 active:cursor-grabbing",
-        className,
-      )}
-    >
-      <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-background shadow-sm">
-        <Flower className="size-5 text-logo" />
-      </span>
-      <span className="flex-1 text-xs text-muted-foreground">Drag Kanna into the list, then turn it on.</span>
-      <Hand className="size-4 shrink-0 text-muted-foreground" />
-    </div>
-  )
-}
+/** What to do in System Settings once Open Settings takes you there. */
+export const FULL_DISK_ACCESS_STEPS = "In the list, click +, choose Kanna in Applications, then turn it on."
 
 export function MacSetupCards({ state }: { state: MacSetupState | null }) {
   if (!state) {
@@ -194,7 +170,7 @@ export function MacSetupCards({ state }: { state: MacSetupState | null }) {
               Without it, macOS stops your agents to ask about Desktop, Documents, Downloads and iCloud Drive, one
               folder at a time.
             </Note>
-            <AppDragTile className="mt-1" />
+            <Note>{FULL_DISK_ACCESS_STEPS}</Note>
           </>
         )}
       </Card>

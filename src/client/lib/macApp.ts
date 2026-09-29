@@ -86,5 +86,4 @@ export const macSetup = {
   setKeepAwake: (change: { onPower?: boolean; onBattery?: boolean }) =>
     postToMacApp({ type: "macSetup.setKeepAwake", ...change }),
   openFullDiskAccess: () => postToMacApp({ type: "macSetup.openFullDiskAccess" }),
-  startAppDrag: () => postToMacApp({ type: "macSetup.startAppDrag" }),
 }

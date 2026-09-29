@@ -200,7 +200,7 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
       overlay.show(
         busy: false,
         title: "Install Kanna",
-        detail: "Kanna runs from the kanna command, the same one you'd use in a terminal, and it isn't on this Mac yet. Installing adds Bun (if needed) and kanna-code to ~/.bun. If you just installed it yourself, choose Check Again.",
+        detail: "Kanna runs on the kanna command, the same one you'd use in a terminal, and it isn't on this Mac yet. Installing adds Bun and kanna-code to ~/.bun and takes about a minute.",
         actions: [
           .init(title: "Check Again", isDefault: false) { agent.retry() },
           .init(title: "Install Kanna", isDefault: true) { agent.install() },
@@ -660,86 +660,6 @@ final class PopupWindowController: NSWindowController, NSWindowDelegate, WKUIDel
 
   func windowWillClose(_ notification: Notification) {
     onClose?()
-  }
-}
-
-/// Covers the web view until the server answers: while it starts, when
-/// `kanna` still has to be installed, and when it can't start.
-final class StatusOverlay: NSView {
-  struct Action {
-    let title: String
-    let isDefault: Bool
-    let perform: () -> Void
-  }
-
-  var backgroundColor: NSColor = .windowBackgroundColor {
-    didSet { needsDisplay = true }
-  }
-
-  private let spinner = NSProgressIndicator()
-  private let title = NSTextField(labelWithString: "")
-  private let detail = NSTextField(wrappingLabelWithString: "")
-  private let buttons = NSStackView()
-  private var actions: [Action] = []
-
-  override init(frame: NSRect) {
-    super.init(frame: frame)
-    spinner.style = .spinning
-    spinner.controlSize = .small
-    title.font = .systemFont(ofSize: 15, weight: .semibold)
-    title.alignment = .center
-    detail.font = .systemFont(ofSize: 12)
-    detail.textColor = .secondaryLabelColor
-    detail.alignment = .center
-    detail.preferredMaxLayoutWidth = 460
-    detail.isSelectable = true
-    buttons.spacing = 8
-
-    let stack = NSStackView(views: [spinner, title, detail, buttons])
-    stack.orientation = .vertical
-    stack.spacing = 12
-    stack.translatesAutoresizingMaskIntoConstraints = false
-    addSubview(stack)
-    NSLayoutConstraint.activate([
-      stack.centerXAnchor.constraint(equalTo: centerXAnchor),
-      stack.centerYAnchor.constraint(equalTo: centerYAnchor),
-      stack.widthAnchor.constraint(lessThanOrEqualToConstant: 480),
-    ])
-  }
-
-  required init?(coder: NSCoder) { fatalError() }
-
-  override func draw(_ dirtyRect: NSRect) {
-    backgroundColor.setFill()
-    dirtyRect.fill()
-  }
-
-  func hide() {
-    isHidden = true
-    spinner.stopAnimation(nil)
-  }
-
-  func show(busy: Bool, title: String, detail: String? = nil, monospaced: Bool = false, actions: [Action] = []) {
-    isHidden = false
-    spinner.isHidden = !busy
-    if busy { spinner.startAnimation(nil) } else { spinner.stopAnimation(nil) }
-    self.title.stringValue = title
-    self.detail.stringValue = detail ?? ""
-    self.detail.isHidden = detail == nil
-    self.detail.font = monospaced ? .monospacedSystemFont(ofSize: 11, weight: .regular) : .systemFont(ofSize: 12)
-    self.actions = actions
-    buttons.arrangedSubviews.forEach { $0.removeFromSuperview() }
-    for (index, action) in actions.enumerated() {
-      let button = NSButton(title: action.title, target: self, action: #selector(clicked(_:)))
-      button.tag = index
-      if action.isDefault { button.keyEquivalent = "\r" }
-      buttons.addArrangedSubview(button)
-    }
-    buttons.isHidden = actions.isEmpty
-  }
-
-  @objc private func clicked(_ sender: NSButton) {
-    actions[sender.tag].perform()
   }
 }
 

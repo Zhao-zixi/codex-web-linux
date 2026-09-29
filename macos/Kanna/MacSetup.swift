@@ -14,7 +14,6 @@ import WebKit
 final class MacSetup {
   weak var webView: KannaWebView?
   private var fileVaultOn: Bool?
-  private lazy var dragSource = AppDragSource()
 
   init() {
     Task.detached {
@@ -39,8 +38,6 @@ final class MacSetup {
       if let onBattery = body["onBattery"] as? Bool { KeepAwake.shared.onBattery = onBattery }
     case "macSetup.openFullDiskAccess":
       FullDiskAccess.openSettings()
-    case "macSetup.startAppDrag":
-      startAppDrag()
     default:
       break
     }
@@ -77,24 +74,5 @@ final class MacSetup {
     )
     guard let data = try? JSONEncoder().encode(state) else { return }
     webView?.evaluateJavaScript("window.__kannaSetMacSetup?.(\(String(decoding: data, as: UTF8.self)))")
-  }
-
-  /// Dragging Kanna into the Full Disk Access list adds it there, so the user
-  /// only flips the switch. The page cancels its own drag of the icon and
-  /// asks for this one, which carries the app itself. It starts from the
-  /// mousedown WebKit just handled, the way Electron's startDrag does.
-  private func startAppDrag() {
-    guard let webView, let event = webView.lastMouseDown else { return }
-    let item = NSDraggingItem(pasteboardWriter: Bundle.main.bundleURL as NSURL)
-    let icon = NSWorkspace.shared.icon(forFile: Bundle.main.bundlePath)
-    let point = webView.convert(event.locationInWindow, from: nil)
-    item.setDraggingFrame(NSRect(x: point.x - 16, y: point.y - 16, width: 32, height: 32), contents: icon)
-    webView.beginDraggingSession(with: [item], event: event, source: dragSource)
-  }
-}
-
-private final class AppDragSource: NSObject, NSDraggingSource {
-  func draggingSession(_ session: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation {
-    context == .outsideApplication ? .copy : []
   }
 }

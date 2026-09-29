@@ -15,49 +15,52 @@ export function QueuedUserMessage({ message, onRemove, onSendNow }: QueuedUserMe
     <div className="flex flex-col items-end gap-2 py-2">
       <UserMessageAttachments attachments={message.attachments} />
       <div className="flex max-w-[85%] sm:max-w-[80%] flex-col items-end">
-        {message.content ? (
-          <div className="relative group">
-            {/* min-w-0 on the grid and on the text track: a `1fr` track sizes to
-                min-content by default, so an unbreakable token (a long URL)
-                widens the bubble past the column instead of wrapping the way it
-                does in UserMessage. */}
-            <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-end gap-2.5 rounded-2xl border border-dashed border-border bg-transparent pl-3.5 pr-1.5 py-1.5 prose prose-sm prose-invert text-left text-primary [&_p]:whitespace-pre-line">
-              <div className="min-w-0">
+        {/* Rendered even for an attachment-only message: the bubble carries
+            Send now and Remove, and without it an image queued with no text
+            could not be sent early or taken back. */}
+        <div className="relative group">
+          {/* min-w-0 on the grid and on the text track: a `1fr` track sizes to
+              min-content by default, so an unbreakable token (a long URL)
+              widens the bubble past the column instead of wrapping the way it
+              does in UserMessage. */}
+          <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-end gap-2.5 rounded-2xl border border-dashed border-border bg-transparent pl-3.5 pr-1.5 py-1.5 prose prose-sm prose-invert text-left text-primary [&_p]:whitespace-pre-line">
+            <div className="min-w-0">
+              {message.content ? (
                 <TranscriptMarkdown text={message.content} />
-              </div>
-              <Button
-                type="button"
-                variant="default"
-                size="none"
-                className="shrink-0 rounded-full size-[24px] bg-muted text-muted-foreground border border-primary/10 group-hover:!text-primary hover:bg-muted/60"
-                onClick={onSendNow}
-              >
-                <ArrowUp className="size-3.5"/>
-              </Button>
+              ) : (
+                <p className="text-muted-foreground">Queued</p>
+              )}
             </div>
             <Button
               type="button"
-              variant="none"
+              variant="default"
               size="none"
-              className="opacity-0 scale-[0.1] group-hover:scale-[1.0] group-hover:opacity-100 !p-0.5 border rounded-full text-xs font-medium text-muted-foreground hover:text-foreground gap-0.5 absolute top-0 left-0 bg-background -translate-x-[28%] -translate-y-[28%]"
-              onClick={onRemove}
-            >
-              <X className="size-3"/>
-            </Button>
-
-            {/* <Button
-              type="button"
-              variant="none"
-              size="none"
-              className="!p-1 border rounded-full text-xs font-medium text-muted-foreground hover:text-foreground gap-0.5 absolute top-0 right-0 bg-background translate-x-[30%] -translate-y-[30%]"
+              className="shrink-0 rounded-full size-[24px] bg-muted text-muted-foreground border border-primary/10 group-hover:!text-primary hover:bg-muted/60"
               onClick={onSendNow}
             >
-              <ArrowUp className="size-3"/>
-            </Button> */}
+              <ArrowUp className="size-3.5"/>
+            </Button>
           </div>
-          
-        ) : null}
+          <Button
+            type="button"
+            variant="none"
+            size="none"
+            className="opacity-0 scale-[0.1] group-hover:scale-[1.0] group-hover:opacity-100 !p-0.5 border rounded-full text-xs font-medium text-muted-foreground hover:text-foreground gap-0.5 absolute top-0 left-0 bg-background -translate-x-[28%] -translate-y-[28%]"
+            onClick={onRemove}
+          >
+            <X className="size-3"/>
+          </Button>
 
+          {/* <Button
+            type="button"
+            variant="none"
+            size="none"
+            className="!p-1 border rounded-full text-xs font-medium text-muted-foreground hover:text-foreground gap-0.5 absolute top-0 right-0 bg-background translate-x-[30%] -translate-y-[30%]"
+            onClick={onSendNow}
+          >
+            <ArrowUp className="size-3"/>
+          </Button> */}
+        </div>
       </div>
     </div>
   )

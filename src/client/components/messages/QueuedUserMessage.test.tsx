@@ -24,4 +24,33 @@ describe("QueuedUserMessage", () => {
     expect(html).toContain("text-left")
     expect(html).not.toContain("text-right")
   })
+
+  test("an attachment-only message still gets the Send now and Remove controls", () => {
+    const message: QueuedChatMessage = {
+      id: "queued-2",
+      content: "",
+      attachments: [{
+        id: "attachment-1",
+        kind: "image",
+        displayName: "screenshot.png",
+        absolutePath: "/tmp/screenshot.png",
+        relativePath: "screenshot.png",
+        contentUrl: "/media/screenshot.png",
+        mimeType: "image/png",
+        size: 1024,
+      }],
+      createdAt: Date.now(),
+    }
+
+    const html = renderToStaticMarkup(
+      <QueuedUserMessage
+        message={message}
+        onRemove={() => undefined}
+        onSendNow={() => undefined}
+      />
+    )
+
+    expect(html).toContain("Queued")
+    expect(html.match(/<button/g)?.length ?? 0).toBeGreaterThanOrEqual(2)
+  })
 })

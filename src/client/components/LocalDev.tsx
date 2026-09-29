@@ -1,39 +1,26 @@
-import { forwardRef, useMemo, useState, type ComponentPropsWithoutRef, type ComponentType, type ReactNode } from "react"
+import { type ComponentType, type ReactNode } from "react"
 import {
   ArrowLeftRight,
   ChevronRight,
   CodeXml,
-  Folder,
   Loader2,
   Monitor,
-  Plus,
-  SquarePen,
   Terminal,
 } from "lucide-react"
 import { APP_NAME, getCliInvocation, SDK_CLIENT_APP } from "../../shared/branding"
-import type { LocalProjectSummary, LocalProjectsSnapshot } from "../../shared/types"
 import type { SocketStatus } from "../app/socket"
 import { PageHeader } from "../app/PageHeader"
-import { filterProjects, getLocalProjectTitle, groupProjectsByRecency } from "../lib/project-groups"
-import { cn } from "../lib/utils"
-import { openCommandPalette } from "./command-palette/CommandPalette"
-import { Button } from "./ui/button"
 import { CopyButton } from "./ui/copy-button"
-import { Input } from "./ui/input"
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip"
 
+/**
+ * The "/" page's frame: while the server connects (or isn't running) it
+ * explains how to start it; once connected it shows `children`, the
+ * projects list (home/ProjectsHome.tsx).
+ */
 interface LocalDevProps {
   connectionStatus: SocketStatus
   ready: boolean
-  snapshot: LocalProjectsSnapshot | null
-  startingLocalPath: string | null
-  commandError: string | null
-  onOpenProject: (localPath: string) => Promise<void>
-  renderProjectMenu: (project: LocalProjectSummary, card: ReactNode) => ReactNode
-  /** Setup entry card (renders itself only when onboarding is unfinished). */
-  providerCards?: ReactNode
-  /** Recent GitHub repos section (renders itself only when `gh` is signed in). */
-  githubSection?: ReactNode
+  children: ReactNode
 }
 
 function CodeBlock({ children }: { children: string }) {
@@ -112,63 +99,11 @@ function Step({
   )
 }
 
-const ProjectCard = forwardRef<HTMLButtonElement, ComponentPropsWithoutRef<"button"> & {
-  localPath: string
-  title: string
-  loading: boolean
-}>(function ProjectCard({
-  localPath,
-  title,
-  loading,
-  onClick,
-  ...buttonProps
-}, ref) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          {...buttonProps}
-          ref={ref}
-          className={cn(
-            "border border-border hover:border-primary/30 group rounded-lg bg-card px-4 py-3 flex items-center gap-3 w-full text-left hover:bg-muted/50 transition-colors",
-            loading && "opacity-50 cursor-not-allowed"
-          )}
-          disabled={loading}
-          onClick={onClick}
-        >
-          <Folder className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-          <span className="font-medium text-foreground truncate flex-1">
-            {title}
-          </span>
-          {loading ? (
-            <Loader2 className="h-4 w-4 text-muted-foreground group-hover:text-primary animate-spin flex-shrink-0" />
-          ) : (
-            <SquarePen className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
-          )}
-        </button>
-      </TooltipTrigger>
-      <TooltipContent>
-        <p>{localPath}</p>
-      </TooltipContent>
-    </Tooltip>
-  )
-})
-
 export function LocalDev({
   connectionStatus,
   ready,
-  snapshot,
-  startingLocalPath,
-  commandError,
-  onOpenProject,
-  renderProjectMenu,
-  providerCards,
-  githubSection,
+  children,
 }: LocalDevProps) {
-  const projects = useMemo(() => snapshot?.projects ?? [], [snapshot?.projects])
-  const [projectSearch, setProjectSearch] = useState("")
-  const visibleProjects = useMemo(() => filterProjects(projects, projectSearch), [projectSearch, projects])
-  const projectGroups = useMemo(() => groupProjectsByRecency(visibleProjects), [visibleProjects])
   const isConnecting = connectionStatus === "connecting" || !ready
   const isConnected = connectionStatus === "connected" && ready
 
@@ -253,74 +188,7 @@ export function LocalDev({
           </div>
         </>
       ) : (
-        <>
-          <PageHeader
-            title={snapshot?.machine.displayName ?? "Local Projects"}
-            subtitle={`${APP_NAME} is connected, choose a project below to get started.`}
-          />
-
-          <div className="w-full px-6 mb-10">
-            {providerCards}
-            {projects.length > 0 ? (
-              <>
-                <div className="mb-8 flex items-center gap-2">
-                  <Input
-                    type="search"
-                    aria-label="Search projects"
-                    placeholder="Search projects..."
-                    value={projectSearch}
-                    onChange={(event) => setProjectSearch(event.target.value)}
-                    className="min-w-0 flex-1"
-                  />
-                  <Button
-                    variant="default"
-                    size="sm"
-                    className="gap-2"
-                    onClick={() => openCommandPalette("add-project")}
-                  >
-                    <Plus className="size-3.5" data-icon="inline-start" />
-                    Project
-                  </Button>
-                </div>
-                <div className="flex flex-col gap-8">
-                  {projectGroups.length > 0 ? projectGroups.map((group) => (
-                    <section key={group.key} aria-labelledby={`project-group-${group.key}`}>
-                      <h3
-                        id={`project-group-${group.key}`}
-                        className="mb-3 text-[13px] font-medium uppercase tracking-wider text-muted-foreground"
-                      >
-                        {group.title}
-                      </h3>
-                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-4 3xl:grid-cols-5">
-                        {group.projects.map((project) => renderProjectMenu(project,
-                          <ProjectCard
-                            key={project.localPath}
-                            localPath={project.localPath}
-                            title={getLocalProjectTitle(project)}
-                            loading={startingLocalPath === project.localPath}
-                            onClick={() => {
-                              void onOpenProject(project.localPath)
-                            }}
-                          />
-                        ))}
-                      </div>
-                    </section>
-                  )) : (
-                    <InfoCard>
-                      <p className="text-sm text-muted-foreground">No projects match your search.</p>
-                    </InfoCard>
-                  )}
-                </div>
-              </>
-            ) : null}
-            {githubSection}
-            {commandError ? (
-              <div className="text-sm text-destructive border border-destructive/20 bg-destructive/5 rounded-xl px-4 py-3 mt-4">
-                {commandError}
-              </div>
-            ) : null}
-          </div>
-        </>
+        children
       )}
 
       <div className="py-4 text-center">

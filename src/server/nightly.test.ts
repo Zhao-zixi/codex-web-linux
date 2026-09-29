@@ -143,7 +143,7 @@ describe("installNightlyBuild", () => {
       expect.stringContaining("tar -xzf"),
       "bun install",
       "bun run build",
-      "bun bin/kanna --version",
+      "bun dist/server/entry.js --version",
       "bun pm pack",
       // The existing registry entry must go first — bun can't switch an
       // installed package to a tarball spec in place (DependencyLoop).

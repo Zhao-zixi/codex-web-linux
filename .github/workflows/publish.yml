@@ -36,6 +36,11 @@ jobs:
 
       - run: bun run build
 
+      # The server ships as a bundle (scripts/build-server.ts), which can build
+      # fine and still fail at runtime. Install the packed package into an
+      # empty folder and start it before anything is uploaded or published.
+      - run: bun run smoke:package
+
       - run: bun run prepare:export-viewer-release-assets
 
       - name: Upload export viewer release assets

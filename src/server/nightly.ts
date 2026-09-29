@@ -227,8 +227,10 @@ export async function installNightlyBuild(deps: NightlyBuildDeps = {}): Promise<
   // Startup probe BEFORE replacing the global install: `--version` in child
   // mode loads the entire server module graph, so a main that can't even
   // start never reaches users' PATH — the current install stays untouched.
+  // It runs the bundle the install will ship (scripts/build-server.ts), not
+  // the source bin/kanna prefers in a checkout.
   log(`${LOG_PREFIX} nightly: verifying the build…`)
-  const probe = await runCommand("bun", ["bin/kanna", "--version"], srcDir, {
+  const probe = await runCommand("bun", ["dist/server/entry.js", "--version"], srcDir, {
     [CLI_CHILD_MODE_ENV_VAR]: CLI_CHILD_MODE,
     KANNA_DISABLE_SELF_UPDATE: "1",
   })

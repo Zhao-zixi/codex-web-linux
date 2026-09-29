@@ -44,6 +44,9 @@ final class StatusOverlay: NSView {
     detail.preferredMaxLayoutWidth = Self.columnWidth
     buttons.orientation = .horizontal
     buttons.spacing = 8
+    // Hug the buttons: a horizontal stack otherwise stretches to the
+    // column's width and puts them at its leading edge.
+    buttons.setHuggingPriority(.required, for: .horizontal)
 
     let column = NSStackView(views: [logo, bar, title, detail, buttons])
     column.orientation = .vertical
@@ -89,7 +92,7 @@ final class StatusOverlay: NSView {
       if let percent = Self.percent(in: line) {
         progress = percent
         text = lastWords
-      } else if !line.trimmingCharacters(in: .whitespaces).isEmpty {
+      } else if !Self.isProgressNoise(line) {
         lastWords = line
       } else {
         text = lastWords
@@ -133,6 +136,11 @@ final class StatusOverlay: NSView {
 
   @objc private func clicked(_ sender: NSButton) {
     actions[sender.tag].perform()
+  }
+
+  /// curl's bar before it has a percentage ("#=#=-#   #"), or a blank line.
+  private static func isProgressNoise(_ line: String) -> Bool {
+    line.range(of: #"^[#=\-O>\s]*$"#, options: .regularExpression) != nil
   }
 
   private static func percent(in line: String) -> Double? {

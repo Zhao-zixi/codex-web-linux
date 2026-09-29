@@ -3,6 +3,8 @@
 #
 #   ASC_PROFILE=<asc profile> ./build.sh [--publish]
 #
+#   --test stops at a signed DMG, not notarized and not published: quick
+#   builds to hand to a test Mac, which then needs right-click › Open once.
 #   --publish uploads the result to the kanna-releases R2 bucket, which
 #   kanna.sh serves at /downloads/mac/ (kanna-site, src/worker/mac-releases.ts):
 #   the homepage's Download for Mac button and every installed app's update
@@ -31,12 +33,14 @@ OUT="$(pwd)/build/release"
 
 SIGN_IDENTITY=${SIGN_IDENTITY:-"Developer ID Application: Jake Mor (QK9365HKRK)"}
 PUBLISH=false
+TEST=false
 case "${1:-}" in
   --publish) PUBLISH=true ;;
+  --test) TEST=true ;;
   "") ;;
-  *) echo "usage: build.sh [--publish]" >&2; exit 1 ;;
+  *) echo "usage: build.sh [--publish | --test]" >&2; exit 1 ;;
 esac
-: "${ASC_PROFILE:?set ASC_PROFILE to the asc profile that notarizes (asc auth status)}"
+$TEST || : "${ASC_PROFILE:?set ASC_PROFILE to the asc profile that notarizes (asc auth status)}"
 
 BUILD_NUMBER=$(git rev-list --count HEAD)
 rm -rf "$OUT"
@@ -72,6 +76,13 @@ codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG"
 MOUNT=$(hdiutil attach -readonly -nobrowse -noautoopen "$DMG" | tail -1 | awk -F'\t' '{print $NF}')
 codesign --verify --deep --strict "$MOUNT/Kanna.app"
 hdiutil detach -quiet "$MOUNT"
+
+if $TEST; then
+  rm -rf "$APP"
+  echo
+  echo "test build (signed, not notarized): $DMG"
+  exit 0
+fi
 
 # 4. Notarize the DMG (its ticket covers the app inside) and staple it, so it
 # opens without a network check.

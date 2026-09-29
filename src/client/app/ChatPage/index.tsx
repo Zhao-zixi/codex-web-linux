@@ -644,8 +644,6 @@ export function ChatPage() {
   const showTerminalPane = Boolean(projectId && terminalLayout.isVisible && hasTerminals)
   const shouldRenderTerminalLayout = Boolean(projectId && hasTerminals)
   const showRightSidebar = Boolean(projectId && widgetsOpen)
-  // Set by the new-chat auto-open below; the toggle animation consumes it.
-  const skipNextOpenAnimationRef = useRef(false)
   const shouldRenderRightSidebarLayout = Boolean(projectId)
   const shouldRenderDesktopRightSidebarLayout = shouldRenderRightSidebarLayout && !isMobileViewport
   const layoutWidth = useLayoutWidth(layoutRootRef)
@@ -682,7 +680,6 @@ export function ChatPage() {
     shouldRenderRightSidebarLayout: shouldRenderDesktopRightSidebarLayout,
     showRightSidebar,
     rightSidebarSizePercent: effectiveRightSidebarSize,
-    skipNextOpenAnimationRef,
   })
 
   const {
@@ -828,18 +825,6 @@ export function ChatPage() {
     // lands somewhere visible.
     if (isMobileViewport && projectId) hideWidgets(projectId)
   }, [activeChatId, hideWidgets, isMobileViewport, navigate, projectId])
-
-  // A new chat on desktop opens with the widgets already showing: no slide-in,
-  // since nobody asked for them, and a layout effect so the closed frame never
-  // paints. Keyed on the chat, so closing them on that page sticks until the
-  // next new chat.
-  const openWidgets = useRightSidebarStore((store) => store.openWidgets)
-  useLayoutEffect(() => {
-    if (!showEmptyState || isMobileViewport || !projectId) return
-    if (useRightSidebarStore.getState().projects[projectId]?.widgetsOpen) return
-    skipNextOpenAnimationRef.current = true
-    openWidgets(projectId)
-  }, [activeChatId, isMobileViewport, openWidgets, projectId, showEmptyState])
 
   // On a phone the widget column is a sheet over the chat, and the viewer
   // opens over the chat: close the sheet so what you opened is what you see.

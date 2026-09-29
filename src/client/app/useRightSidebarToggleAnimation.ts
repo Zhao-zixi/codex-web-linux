@@ -7,8 +7,6 @@ type UseRightSidebarToggleAnimationParams = {
   shouldRenderRightSidebarLayout: boolean
   showRightSidebar: boolean
   rightSidebarSizePercent: number
-  /** When set, the next open snaps into place instead of sliding; cleared once used. */
-  skipNextOpenAnimationRef?: RefObject<boolean>
 }
 
 type UseRightSidebarToggleAnimationResult = {
@@ -23,8 +21,7 @@ export function useRightSidebarToggleAnimation({
   shouldRenderRightSidebarLayout,
   showRightSidebar,
   rightSidebarSizePercent,
-  skipNextOpenAnimationRef,
-}: UseRightSidebarToggleAnimationParams): UseRightSidebarToggleAnimationResult {
+}:UseRightSidebarToggleAnimationParams): UseRightSidebarToggleAnimationResult {
   const panelGroupRef = useRef<GroupImperativeHandle | null>(null)
   const sidebarPanelRef = useRef<HTMLDivElement | null>(null)
   const sidebarVisualRef = useRef<HTMLDivElement | null>(null)
@@ -77,9 +74,7 @@ export function useRightSidebarToggleAnimation({
     const isInitialOpen = showRightSidebar && !previousShowRightSidebarRef.current
     const isInitialRender = !previousShouldRenderRightSidebarLayoutRef.current
     const targetLayout: [number, number] = showRightSidebar ? [100 - rightSidebarSizePercent, rightSidebarSizePercent] : [100, 0]
-    const skipOpenRequested = showRightSidebar && skipNextOpenAnimationRef?.current === true
-    if (skipOpenRequested) skipNextOpenAnimationRef.current = false
-    const shouldSkipAnimation = didProjectChange || (isInitialRender && showRightSidebar) || skipOpenRequested
+    const shouldSkipAnimation = didProjectChange || (isInitialRender && showRightSidebar)
     const currentLayout: [number, number] = isInitialOpen || isInitialRender
       ? [100, 0]
       : [

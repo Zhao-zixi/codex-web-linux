@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react"
-import { ChevronDown, Cloud, ExternalLink, LaptopMinimal } from "lucide-react"
+import { ChevronsUpDown, Cloud, ExternalLink, LaptopMinimal, Loader2, Settings2 } from "lucide-react"
 import {
   Dialog,
   DialogBody,
@@ -20,8 +20,18 @@ import type { CloudMachineSummary } from "../../shared/cloud-api"
 const FLEET_URL = "https://kanna.sh/fleet"
 const THIS_MAC_NAME = "This Mac"
 
-/** Shared trigger padding: borderless, but keeps the same net inset as before. */
-const TRIGGER_CLASS = "w-full justify-between py-1.5 rounded-md hover:bg-transparent"
+/**
+ * Shared trigger padding: borderless, but keeps the same net inset as before.
+ * With no fill, the text brightening is the hover and open-state feedback.
+ */
+const TRIGGER_CLASS = "w-full justify-between py-1.5 rounded-md transition-colors duration-150 hover:bg-transparent hover:text-foreground data-[state=open]:text-foreground"
+
+/**
+ * How long the picker shows a switch as pending. Leaving the page (or Kanna
+ * for Mac reporting the new machine) normally ends it first; this covers a
+ * switch that went nowhere, like the Mac app sending you to sign in.
+ */
+const SWITCH_PENDING_MS = 8_000
 
 const SIDEBAR_BUTTON_CLASS = cn(
   "flex items-center gap-1.5 px-[10px] text-sm text-muted-foreground [&>svg]:shrink-0 [&>span]:whitespace-nowrap",
@@ -33,12 +43,12 @@ function MachineSection({ children }: { children: ReactNode }) {
   return <div className="pl-2.5 pr-[7px] py-1 border-t ">{children}</div>
 }
 
+/** Centred in an icon-sized box, so machine names line up with Manage Fleet's icon row. */
 function OnlineDot({ online }: { online: boolean }) {
   return (
-    <span
-      className={`inline-block h-2 w-2 shrink-0 rounded-full ${online ? "bg-emerald-500" : "bg-slate-400 dark:bg-slate-600"}`}
-      aria-hidden
-    />
+    <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden>
+      <span className={`size-2 rounded-full ${online ? "bg-emerald-500" : "bg-slate-400 dark:bg-slate-600"}`} />
+    </span>
   )
 }
 
@@ -61,6 +71,27 @@ export function MachineSwitcher() {
   const [pairDialogOpen, setPairDialogOpen] = useState(false)
   const { session, starting, begin } = useCloudPairSession({ enabled: mode === "local" })
   const startedRef = useRef(false)
+  // The machine being switched to. Loading another machine takes a moment
+  // (a new origin, a new socket), and without this the picker closes and
+  // nothing seems to happen.
+  const [switchingTo, setSwitchingTo] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (switchingTo === null) return
+    const timeout = window.setTimeout(() => setSwitchingTo(null), SWITCH_PENDING_MS)
+    // Back/forward restores this page from the cache mid-switch.
+    const onPageShow = () => setSwitchingTo(null)
+    window.addEventListener("pageshow", onPageShow)
+    return () => {
+      window.clearTimeout(timeout)
+      window.removeEventListener("pageshow", onPageShow)
+    }
+  }, [switchingTo])
+
+  // Kanna for Mac reports the machine it now shows.
+  useEffect(() => {
+    setSwitchingTo(null)
+  }, [showingMachine])
 
   useEffect(() => {
     if (mode === "unknown") {
@@ -124,6 +155,8 @@ export function MachineSwitcher() {
   // and lists it first as This machine. The Mac app lists this Mac even when
   // it isn't on Kanna Cloud, so there's a way back.
   const knowsSelf = fromMacApp || thisMachineSubdomain !== null
+  // Kanna for Mac is always on a Mac; a localhost page could be any machine.
+  const thisMachineLabel = fromMacApp ? THIS_MAC_NAME : "This machine"
   const thisMachine = knowsSelf ? machines.find((machine) => machine.subdomain === thisMachineSubdomain) : undefined
   const currentMachine = knowsSelf
     ? machines.find((machine) => machine.subdomain === (showingMachine ?? thisMachineSubdomain)) ?? null
@@ -133,6 +166,7 @@ export function MachineSwitcher() {
     ? machines.filter((machine) => machine.subdomain !== thisMachineSubdomain)
     : machines
   const open = (machine: CloudMachineSummary | null) => {
+    setSwitchingTo(machine?.name ?? thisMachine?.name ?? THIS_MAC_NAME)
     if (fromMacApp) {
       postToMacApp({ type: "openMachine", subdomain: machine?.subdomain ?? null })
     } else if (machine) {
@@ -149,10 +183,16 @@ export function MachineSwitcher() {
             <span className="flex min-w-0 items-center gap-2">
               <LaptopMinimal className="size-4 shrink-0" />
               <span className="truncate text-xs font-medium">
-                {currentMachine?.name ?? (showingThisMac ? THIS_MAC_NAME : window.location.hostname)}
+                {switchingTo ?? currentMachine?.name ?? (showingThisMac ? THIS_MAC_NAME : window.location.hostname)}
               </span>
             </span>
-            <ChevronDown className="size-3.5 shrink-0 opacity-60" />
+            {/* The list opens upward from the footer, so the chevron points
+                both ways, as a macOS pop-up button does. */}
+            {switchingTo !== null ? (
+              <Loader2 aria-label={`Switching to ${switchingTo}`} className="size-3.5 shrink-0 animate-spin" />
+            ) : (
+              <ChevronsUpDown className="size-3.5 shrink-0 opacity-60" />
+            )}
           </>
         }
       >
@@ -166,13 +206,13 @@ export function MachineSwitcher() {
                 }}
                 selected={showingThisMac}
                 icon={<OnlineDot online />}
-                label={
-                  <>
-                    {thisMachine?.name ?? THIS_MAC_NAME}{" "}
-                    <span className="text-muted-foreground">(This machine)</span>
-                  </>
-                }
-                description={thisMachine ? `${thisMachine.subdomain}.kanna.sh` : "Not on Kanna Cloud"}
+                // Named once: off Kanna Cloud the label is the name.
+                label={<span className="[overflow-wrap:anywhere]">{thisMachine?.name ?? thisMachineLabel}</span>}
+                // Kept whole: a long name wraps in the label instead of
+                // squeezing this, even one with no spaces to break at.
+                trailing={thisMachine ? (
+                  <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">{thisMachineLabel}</span>
+                ) : undefined}
               />
             ) : null}
             {otherMachines.map((machine) => {
@@ -186,8 +226,8 @@ export function MachineSwitcher() {
                   }}
                   selected={isCurrent}
                   icon={<OnlineDot online={machine.online} />}
+                  // The dot says online or offline; the address isn't needed to pick one.
                   label={machine.name}
-                  description={`${machine.subdomain}.kanna.sh${machine.online ? "" : " · offline"}`}
                 />
               )
             })}
@@ -197,9 +237,10 @@ export function MachineSwitcher() {
                 window.open(FLEET_URL, "_blank", "noopener")
               }}
               selected={false}
-              icon={<ExternalLink className="h-4 w-4" />}
+              icon={<Settings2 className="size-4 shrink-0 text-muted-foreground" />}
               label="Manage Fleet"
-              description="Add or remove machines on kanna.sh"
+              // Says it leaves the app, on the side the other rows use.
+              trailing={<ExternalLink className="size-3.5 shrink-0 text-muted-foreground" />}
             />
           </>
         )}

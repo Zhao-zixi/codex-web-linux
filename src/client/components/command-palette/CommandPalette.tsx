@@ -62,6 +62,7 @@ import {
 import { filterProjects, getLocalProjectTitle, groupProjectsByRecency, groupProjectsForNewChat } from "../../lib/project-groups"
 import { usePendingSendStore } from "../../stores/pendingSendStore"
 import { useRightSidebarStore, useWidgetsOpen } from "../../stores/rightSidebarStore"
+import { getPaneChatKey, usePaneChatKey } from "../../lib/paneVisibility"
 import { setFocusMode, useFocusModeEnabled } from "../../stores/focusModeStore"
 import { useSidebarStore } from "../../stores/sidebarStore"
 import { useTerminalLayoutStore } from "../../stores/terminalLayoutStore"
@@ -266,7 +267,8 @@ export function CommandPalette({ state }: { state: KannaState }) {
   const onChatPage = Boolean(state.activeChatId)
   const projectId = state.activeProjectId
   // Reactive so the palette's Show/Hide Widgets label tracks the navbar toggle.
-  const widgetsOpen = useWidgetsOpen(projectId)
+  const widgetsChatKey = usePaneChatKey("widgets", state.activeChatId)
+  const widgetsOpen = useWidgetsOpen(projectId, widgetsChatKey)
   const isMac = (state.localProjects?.machine.platform ?? "darwin") === "darwin"
   // Reactive so the action's label flips between Focus and Exit Focus Mode.
   const focusModeEnabled = useFocusModeEnabled()
@@ -636,7 +638,7 @@ export function CommandPalette({ state }: { state: KannaState }) {
         shortcut: chatShortcuts("toggleRightSidebar"),
         run: () => {
           close()
-          useRightSidebarStore.getState().toggleWidgets(projectId)
+          useRightSidebarStore.getState().toggleWidgets(projectId, widgetsChatKey)
         },
       })
       list.push({
@@ -649,11 +651,12 @@ export function CommandPalette({ state }: { state: KannaState }) {
           close()
           const store = useTerminalLayoutStore.getState()
           const layout = store.projects[projectId]
+          const terminalChatKey = getPaneChatKey("terminal", state.activeChatId)
           if (!layout || layout.terminals.length === 0) {
-            store.addTerminal(projectId)
+            store.addTerminal(projectId, undefined, terminalChatKey)
             return
           }
-          store.toggleVisibility(projectId)
+          store.toggleVisibility(projectId, terminalChatKey)
         },
       })
       list.push({
@@ -927,6 +930,7 @@ export function CommandPalette({ state }: { state: KannaState }) {
     projectId,
     pushPage,
     resolvedTheme,
+    widgetsChatKey,
     widgetsOpen,
     setTheme,
     state.activeChatId,

@@ -41,6 +41,24 @@ describe("rightSidebarStore", () => {
     expect(useRightSidebarStore.getState().projects[PROJECT_ID]).toEqual({ widgetsOpen: false })
   })
 
+  test("a chat key keeps each chat's state apart from the project's and from other chats", () => {
+    const store = useRightSidebarStore.getState()
+    store.toggleWidgets(PROJECT_ID, "chat-a")
+
+    expect(useRightSidebarStore.getState().projects[PROJECT_ID]).toEqual({ widgetsOpen: false, chats: { "chat-a": true } })
+
+    store.toggleWidgets(PROJECT_ID)
+    store.hideWidgets(PROJECT_ID, "chat-a")
+    store.openWidgets(PROJECT_ID, "chat-b")
+    expect(useRightSidebarStore.getState().projects[PROJECT_ID]).toEqual({
+      widgetsOpen: true,
+      chats: { "chat-a": false, "chat-b": true },
+    })
+
+    store.clearProject(PROJECT_ID)
+    expect(useRightSidebarStore.getState().projects[PROJECT_ID]).toBeUndefined()
+  })
+
   test("clamps the size between the minimum and the left sidebar's maximum", () => {
     useRightSidebarStore.getState().setSize(100)
     expect(useRightSidebarStore.getState().size).toBe(RIGHT_SIDEBAR_MIN_WIDTH_PX)

@@ -27,6 +27,10 @@ export function mergeAppSettingsPatch(
       ...settings.transcript,
       ...patch.transcript,
     },
+    paneVisibility: {
+      ...settings.paneVisibility,
+      ...patch.paneVisibility,
+    },
     // Same deep-merge the server applies in app-settings.ts applyPatch, so the
     // optimistic snapshot matches what the ack will confirm.
     providerDefaults: mergeProviderDefaultsPatch(settings.providerDefaults, patch.providerDefaults),

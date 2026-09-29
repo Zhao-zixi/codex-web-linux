@@ -92,6 +92,7 @@ const DEFAULT_APP_SETTINGS_SNAPSHOT: AppSettingsSnapshot = {
   chatSoundId: "funk",
   chatBrowserNotificationPreference: "never",
   submitWhileRunning: "queue",
+  paneVisibility: { widgets: "chat", terminal: "chat" },
   terminal: {
     scrollbackLines: 1_000,
     minColumnWidth: 450,

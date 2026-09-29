@@ -69,8 +69,11 @@ export function MacSection() {
             ? "On battery now: this Mac sleeps when idle until it's plugged in."
             : undefined}
         >
+          {/* Shows what's in effect: with Keep Awake off, nothing stays awake
+              on battery either, so this slides off. The saved choice is
+              kept, and it slides back on with Keep Awake. */}
           <Switch
-            checked={state.keepAwakeOnBattery}
+            checked={state.keepAwakeOnPower && state.keepAwakeOnBattery}
             disabled={!state.keepAwakeOnPower}
             onCheckedChange={(onBattery) => macSetup.setKeepAwake({ onBattery })}
             aria-label={SETTINGS_ROWS.keepAwakeOnBattery.title}

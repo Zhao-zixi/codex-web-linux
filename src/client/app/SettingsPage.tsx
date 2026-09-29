@@ -159,6 +159,17 @@ export function SettingsPage() {
       : selectedSection.subtitle
   const showFooter = !isConnecting
 
+  // Picking another section fades its content in, so the swap reads as one
+  // page changing rather than a cut. Opening Settings doesn't: that is often
+  // ⌘, and a shortcut should land at once.
+  const shownSectionRef = useRef(selectedPage)
+  const sectionSwitchedRef = useRef(false)
+  if (shownSectionRef.current !== selectedPage) {
+    shownSectionRef.current = selectedPage
+    sectionSwitchedRef.current = true
+  }
+  const sectionSwitched = sectionSwitchedRef.current
+
   async function handleSidebarSignOut() {
     if (signingOut) return
     setSigningOut(true)
@@ -278,7 +289,13 @@ export function SettingsPage() {
             {isConnecting ? (
               <SettingsPlaceholder loading className="mx-auto max-w-4xl">Loading machine settings…</SettingsPlaceholder>
             ) : (
-              <div className="@container mx-auto max-w-4xl">
+              <div
+                key={selectedPage}
+                className={cn(
+                  "@container mx-auto max-w-4xl",
+                  sectionSwitched && "transition-opacity duration-150 ease-snappy starting:opacity-0",
+                )}
+              >
                 <div className={cn("pb-8", SETTINGS_INSET_X_CLASS)}>
                   <div className="flex items-center justify-between gap-4 min-h-[34px]">
                     <div className="text-lg font-semibold tracking-[-0.2px] text-foreground">

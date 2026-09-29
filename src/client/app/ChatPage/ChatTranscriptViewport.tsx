@@ -1117,6 +1117,7 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
         <MessageScroller className="h-full flex-1">
           <MessageScrollerViewport
             ref={viewportRef}
+            data-navbar-scroller
             className="h-full overflow-x-hidden overscroll-y-contain px-3 scrollbar-hide"
             style={{ scrollPaddingTop: headerOffsetPx }}
           >

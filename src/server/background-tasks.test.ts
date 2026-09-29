@@ -47,6 +47,24 @@ describe("normalizeClaudeTaskMessage", () => {
     expect(update).toMatchObject({ kind: "started", type: "monitor", label: "Watch the deploy log for errors" })
   })
 
+  test("a foreground shell is held back, and a background one starts", () => {
+    const shell = { ...base, subtype: "task_started", task_id: "b1", tool_use_id: "toolu_3", description: "Find viewport meta tag", task_type: "local_bash" }
+    expect(normalizeClaudeTaskMessage({ ...shell, is_backgrounded: false })).toMatchObject({
+      kind: "foreground",
+      task: { id: "b1", type: "shell", label: "Find viewport meta tag", toolUseId: "toolu_3" },
+    })
+    expect(normalizeClaudeTaskMessage({ ...shell, is_backgrounded: true })).toMatchObject({ kind: "started", type: "shell" })
+    // A CLI that doesn't say starts it as before.
+    expect(normalizeClaudeTaskMessage(shell)).toMatchObject({ kind: "started", type: "shell" })
+  })
+
+  test("a move to the background is reported, and an end still wins", () => {
+    const updated = { ...base, subtype: "task_updated", task_id: "b1" }
+    expect(normalizeClaudeTaskMessage({ ...updated, patch: { is_backgrounded: true } })).toEqual({ kind: "backgrounded", id: "b1" })
+    expect(normalizeClaudeTaskMessage({ ...updated, patch: { is_backgrounded: true, status: "completed" } })).toEqual({ kind: "stopped", id: "b1", failed: false })
+    expect(normalizeClaudeTaskMessage({ ...updated, patch: { is_backgrounded: false } })).toBeNull()
+  })
+
   test("a workflow starts under its script's name", () => {
     expect(normalizeClaudeTaskMessage({
       ...base,

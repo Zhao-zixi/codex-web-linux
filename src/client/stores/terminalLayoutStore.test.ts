@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test"
-import { getDefaultProjectTerminalLayout, useTerminalLayoutStore } from "./terminalLayoutStore"
+import { getDefaultProjectTerminalLayout, isTerminalVisible, useTerminalLayoutStore } from "./terminalLayoutStore"
 
 const PROJECT_ID = "project-1"
 
@@ -54,6 +54,31 @@ describe("terminalLayoutStore", () => {
     const shown = useTerminalLayoutStore.getState().projects[PROJECT_ID] ?? getDefaultProjectTerminalLayout()
     expect(shown.isVisible).toBe(true)
     expect(shown.terminals[0]?.id).toBe(terminalId)
+  })
+
+  test("a chat key shows and hides the pane for that chat only", () => {
+    const store = useTerminalLayoutStore.getState()
+    store.addTerminal(PROJECT_ID, undefined, "chat-a")
+
+    const layout = () => useTerminalLayoutStore.getState().projects[PROJECT_ID] ?? getDefaultProjectTerminalLayout()
+    expect(isTerminalVisible(layout(), "chat-a")).toBe(true)
+    expect(isTerminalVisible(layout(), "chat-b")).toBe(false)
+    expect(isTerminalVisible(layout())).toBe(false)
+
+    store.toggleVisibility(PROJECT_ID, "chat-b")
+    store.hideTerminals(PROJECT_ID, "chat-a")
+    expect(isTerminalVisible(layout(), "chat-a")).toBe(false)
+    expect(isTerminalVisible(layout(), "chat-b")).toBe(true)
+    expect(layout().terminals).toHaveLength(1)
+  })
+
+  test("removing the last terminal forgets every chat's visibility", () => {
+    const terminalId = useTerminalLayoutStore.getState().addTerminal(PROJECT_ID, undefined, "chat-a")
+    useTerminalLayoutStore.getState().removeTerminal(PROJECT_ID, terminalId)
+
+    const layout = useTerminalLayoutStore.getState().projects[PROJECT_ID] ?? getDefaultProjectTerminalLayout()
+    expect(layout.chatVisibility).toBeUndefined()
+    expect(isTerminalVisible(layout, "chat-a")).toBe(false)
   })
 
   test("resetting main sizes restores the default split without removing terminals", () => {

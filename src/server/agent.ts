@@ -91,6 +91,7 @@ import {
   normalizeClaudeTaskMessage,
   pruneTaskLog,
   type SubagentActivityUpdate,
+  type TaskStart,
 } from "./background-tasks"
 
 export type { SubagentActivityUpdate } from "./background-tasks"
@@ -1083,6 +1084,13 @@ export class AgentCoordinator {
    * without this it would surface them as work.
    */
   private readonly ambientTaskIds = new Map<string, Set<string>>()
+  /**
+   * Foreground shells per chat, held back from the log with the time they
+   * started, so one moved to the background gets its row from its real start.
+   * Each leaves at its end, or at the Stop sweep, when no foreground step can
+   * still be running.
+   */
+  private readonly foregroundTasks = new Map<string, Map<string, { task: TaskStart; startedAt: number }>>()
   readonly claudeSessions = new Map<string, ClaudeSessionState>()
 
   constructor(args: AgentCoordinatorArgs) {
@@ -1232,6 +1240,24 @@ export class AgentCoordinator {
       ambient.add(update.id)
       return
     }
+    if (update.kind === "foreground") {
+      let held = this.foregroundTasks.get(chatId)
+      if (!held) {
+        held = new Map()
+        this.foregroundTasks.set(chatId, held)
+      }
+      held.set(update.task.id, { task: update.task, startedAt: now })
+      return
+    }
+    if (update.kind === "backgrounded") {
+      const held = this.foregroundTasks.get(chatId)?.get(update.id)
+      if (!held) return
+      this.foregroundTasks.get(chatId)?.delete(update.id)
+      this.applySubagentActivity(chatId, { kind: "started", ...held.task }, held.startedAt)
+      return
+    }
+    if (update.kind === "stopped") this.foregroundTasks.get(chatId)?.delete(update.id)
+    if (update.kind === "inFlight") this.foregroundTasks.delete(chatId)
 
     let byId = this.subagents.get(chatId)
     if (!byId) {
@@ -2676,6 +2702,7 @@ export class AgentCoordinator {
       if (!this.claudeSessions.has(session.chatId)) {
         this.closeRunningSubagents(session.chatId)
         this.ambientTaskIds.delete(session.chatId)
+        this.foregroundTasks.delete(session.chatId)
       }
       session.session.close()
       this.emitStateChange(session.chatId)

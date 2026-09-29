@@ -18,6 +18,11 @@ export type DefaultProviderPreference = "last_used" | AgentProvider
  * does the other one, so either is one keystroke away whatever the default.
  */
 export type SubmitWhileRunning = "queue" | "steer"
+/**
+ * Whose open/closed state a pane beside the chat follows: each chat keeps its
+ * own, or every chat in a project shares one.
+ */
+export type PaneVisibilityScope = "chat" | "project"
 export type EditorPreset = "cursor" | "vscode" | "zed" | "xcode" | "windsurf" | "custom"
 export const DEFAULT_OPENAI_SDK_MODEL = "gpt-5.4-mini"
 export const DEFAULT_OPENROUTER_SDK_MODEL = "moonshotai/kimi-k2.5:nitro"
@@ -1253,6 +1258,11 @@ export interface AppSettingsSnapshot {
   defaultProvider: DefaultProviderPreference
   /** Default action for Enter while a turn is running. ⌘Enter does the other. */
   submitWhileRunning: SubmitWhileRunning
+  /** Whether the widget column and the terminal open and close per chat or per project. */
+  paneVisibility: {
+    widgets: PaneVisibilityScope
+    terminal: PaneVisibilityScope
+  }
   providerDefaults: ChatProviderPreferences
   /** Labs: the tabbed Chats/Projects "New Sidebar". On by default; false opts back into the legacy sidebar. */
   newSidebarEnabled: boolean
@@ -1314,6 +1324,7 @@ export interface AppSettingsPatch {
   terminal?: Partial<AppSettingsSnapshot["terminal"]>
   editor?: Partial<AppSettingsSnapshot["editor"]>
   transcript?: Partial<AppSettingsSnapshot["transcript"]>
+  paneVisibility?: Partial<AppSettingsSnapshot["paneVisibility"]>
   defaultProvider?: DefaultProviderPreference
   providerDefaults?: {
     claude?: Partial<Omit<ProviderPreference<ClaudeModelOptions>, "modelOptions">> & {

@@ -3,6 +3,7 @@ import { ArrowLeft, Flower, House, Loader2, PanelLeft, Search, Plus, Settings, S
 import { useLocation, useNavigate } from "react-router-dom"
 import { APP_NAME } from "../../shared/branding"
 import { Button } from "../components/ui/button"
+import { StillTooltips } from "../components/ui/tooltip"
 import { buildChatJumpLocationState, type ChatJumpRole } from "../lib/chat-navigation"
 import { cn, normalizeChatId } from "../lib/utils"
 import { ArchivedChatsDialog } from "../components/chat-ui/sidebar/ArchivedChatsDialog"
@@ -550,7 +551,8 @@ function KannaSidebarImpl({
   const isUpdating = updateSnapshot?.status === "updating" || updateSnapshot?.status === "restart_pending"
 
   return (
-    <>
+    // Scanned by sweeping the pointer down the list; see StillTooltips.
+    <StillTooltips>
       {showMobileBackButton && (
         <Button
           variant="ghost"
@@ -1018,7 +1020,7 @@ function KannaSidebarImpl({
         onOpenChat={onOpenArchivedChat}
         onRestoreChat={handleRestoreChat}
       />
-    </>
+    </StillTooltips>
   )
 }
 

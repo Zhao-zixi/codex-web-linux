@@ -16,7 +16,7 @@ export const SETTINGS_SECTIONS = [
     id: "general",
     label: "General",
     icon: Settings2 as LucideIcon,
-    subtitle: "Appearance, notifications, chats, editor, and terminal.",
+    subtitle: "Appearance, notifications, chats, layout, editor, and terminal.",
   },
   {
     id: "mac",
@@ -135,6 +135,18 @@ export const SETTINGS_ROWS = defineRows({
     title: "Enter While Running",
     description: "What Enter does while an agent is working. ⌘Enter always does the other one.",
     keywords: ["queue", "steer", "interrupt", "enter", "send", "composer"],
+  },
+  widgetsVisibility: {
+    sectionId: "general",
+    title: "Widgets Visibility",
+    description: "Show and hide the widget column for each chat on its own, or once for every chat in the project.",
+    keywords: ["right sidebar", "panel", "widgets", "per chat", "per project", "remember", "layout"],
+  },
+  terminalVisibility: {
+    sectionId: "general",
+    title: "Terminal Visibility",
+    description: "Show and hide the terminal for each chat on its own, or once for every chat in the project. The terminals themselves belong to the project either way.",
+    keywords: ["terminal", "shell", "panel", "per chat", "per project", "remember", "layout"],
   },
   defaultEditor: {
     sectionId: "general",

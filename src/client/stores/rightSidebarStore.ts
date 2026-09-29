@@ -7,12 +7,20 @@ import { SIDEBAR_MAX_WIDTH_PX } from "../lib/sidebarWidth"
 /**
  * The chat page's panes beside the chat, and the one record of how they're
  * laid out. The widget column (agents, git, attachments, ports, quick
- * actions, usage) is open or closed per project; there are no panels to pick
+ * actions, usage) is open or closed per chat or per project, as the
+ * `paneVisibility.widgets` setting says; there are no panels to pick
  * between. The viewer's pane holds what's open per chat, so going to another
  * chat and back finds it as you left it, and so does a reload.
  */
 export interface ProjectRightSidebarVisibilityState {
+  /** The project's own state, which every chat follows when the setting is per project. */
   widgetsOpen: boolean
+  /**
+   * Each chat's state when the setting is per chat, by chat id. Kept under
+   * the chat's project so removing the project clears them. A chat with no
+   * entry starts closed.
+   */
+  chats?: Record<string, boolean>
 }
 
 /** The widget disclosures whose open state is remembered per project. */
@@ -52,9 +60,13 @@ interface RightSidebarState {
   projectUi: Record<string, ProjectRightSidebarUiState>
   /** By chat id; see viewerStore for who reads and writes it. */
   chatViewers: Record<string, ChatViewerState>
-  toggleWidgets: (projectId: string) => void
-  openWidgets: (projectId: string) => void
-  hideWidgets: (projectId: string) => void
+  /**
+   * `chatKey` is the chat whose own state to change (see lib/paneVisibility);
+   * null or omitted changes the project's.
+   */
+  toggleWidgets: (projectId: string, chatKey?: string | null) => void
+  openWidgets: (projectId: string, chatKey?: string | null) => void
+  hideWidgets: (projectId: string, chatKey?: string | null) => void
   setSize: (size: number) => void
   setWidgetExpanded: (projectId: string, id: WidgetDisclosureId, expanded: boolean) => void
   setCommitDraft: (projectId: string, draft: Pick<ProjectRightSidebarUiState, "summary" | "description">) => void
@@ -82,8 +94,27 @@ function createDefaultProjectUiState(): ProjectRightSidebarUiState {
   }
 }
 
-function isWidgetsOpen(projects: Record<string, ProjectRightSidebarVisibilityState>, projectId: string) {
-  return projects[projectId]?.widgetsOpen ?? false
+function isWidgetsOpen(
+  projects: Record<string, ProjectRightSidebarVisibilityState>,
+  projectId: string,
+  chatKey?: string | null,
+) {
+  const layout = projects[projectId]
+  if (chatKey) return layout?.chats?.[chatKey] ?? false
+  return layout?.widgetsOpen ?? false
+}
+
+function withWidgetsOpen(
+  projects: Record<string, ProjectRightSidebarVisibilityState>,
+  projectId: string,
+  chatKey: string | null | undefined,
+  open: boolean,
+) {
+  const layout = projects[projectId] ?? { widgetsOpen: false }
+  const next = chatKey
+    ? { ...layout, chats: { ...layout.chats, [chatKey]: open } }
+    : { ...layout, widgetsOpen: open }
+  return { ...projects, [projectId]: next }
 }
 
 /**
@@ -99,7 +130,7 @@ export function migrateRightSidebarStore(persistedState: unknown, version = 0) {
 
   const state = persistedState as {
     size?: number
-    projects?: Record<string, Partial<{ isVisible: boolean; rightPanel: string; widgetsOpen: boolean }>>
+    projects?: Record<string, Partial<{ isVisible: boolean; rightPanel: string; widgetsOpen: boolean; chats: Record<string, boolean> }>>
     projectUi?: Record<string, Partial<ProjectRightSidebarUiState> & { viewMode?: unknown }>
     chatViewers?: Record<string, ChatViewerState>
   }
@@ -109,6 +140,7 @@ export function migrateRightSidebarStore(persistedState: unknown, version = 0) {
       {
         widgetsOpen: layout.widgetsOpen
           ?? (layout.rightPanel !== undefined ? layout.rightPanel !== "hidden" : Boolean(layout.isVisible)),
+        ...(layout.chats ? { chats: layout.chats } : {}),
       },
     ])
   )
@@ -157,17 +189,17 @@ export const useRightSidebarStore = create<RightSidebarState>()(
       projects: {},
       projectUi: {},
       chatViewers: {},
-      toggleWidgets: (projectId) =>
+      toggleWidgets: (projectId, chatKey) =>
         set((state) => ({
-          projects: { ...state.projects, [projectId]: { widgetsOpen: !isWidgetsOpen(state.projects, projectId) } },
+          projects: withWidgetsOpen(state.projects, projectId, chatKey, !isWidgetsOpen(state.projects, projectId, chatKey)),
         })),
-      openWidgets: (projectId) =>
-        set((state) => (isWidgetsOpen(state.projects, projectId)
+      openWidgets: (projectId, chatKey) =>
+        set((state) => (isWidgetsOpen(state.projects, projectId, chatKey)
           ? state
-          : { projects: { ...state.projects, [projectId]: { widgetsOpen: true } } })),
-      hideWidgets: (projectId) =>
-        set((state) => (isWidgetsOpen(state.projects, projectId)
-          ? { projects: { ...state.projects, [projectId]: { widgetsOpen: false } } }
+          : { projects: withWidgetsOpen(state.projects, projectId, chatKey, true) })),
+      hideWidgets: (projectId, chatKey) =>
+        set((state) => (isWidgetsOpen(state.projects, projectId, chatKey)
+          ? { projects: withWidgetsOpen(state.projects, projectId, chatKey, false) }
           : state)),
       setSize: (size) => set({ size: clampSize(size) }),
       setWidgetExpanded: (projectId, id, expanded) => set((state) => {
@@ -243,7 +275,7 @@ export const useRightSidebarStore = create<RightSidebarState>()(
   )
 )
 
-/** Reactive: whether this project's widget column is open. */
-export function useWidgetsOpen(projectId: string | null | undefined) {
-  return useRightSidebarStore((store) => (projectId ? isWidgetsOpen(store.projects, projectId) : false))
+/** Reactive: whether the widget column is open, for this chat (`chatKey`) or else the project. */
+export function useWidgetsOpen(projectId: string | null | undefined, chatKey?: string | null) {
+  return useRightSidebarStore((store) => (projectId ? isWidgetsOpen(store.projects, projectId, chatKey) : false))
 }

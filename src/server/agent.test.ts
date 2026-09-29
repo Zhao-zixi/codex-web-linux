@@ -3170,6 +3170,23 @@ describe("subagent activity", () => {
     expect(agent.getSubagents("chat-1")[0]).toMatchObject({ startedAt: 1000, label: "Run tests", toolUseId: "t1" })
   })
 
+  test("a foreground shell gets no row unless it moves to the background", () => {
+    const agent = coordinator()
+    const task = { id: "sh1", type: "shell", label: "Find viewport meta tag", stoppable: true }
+    agent.applySubagentActivity("chat-1", { kind: "foreground", task }, 1000)
+    agent.applySubagentActivity("chat-1", { kind: "stopped", id: "sh1", failed: false }, 2000)
+    expect(agent.getSubagents("chat-1")).toEqual([])
+    // Its end took it off the held list, so a stray move can't raise it.
+    agent.applySubagentActivity("chat-1", { kind: "backgrounded", id: "sh1" }, 2500)
+    expect(agent.getSubagents("chat-1")).toEqual([])
+
+    agent.applySubagentActivity("chat-1", { kind: "foreground", task: { ...task, id: "sh2" } }, 3000)
+    agent.applySubagentActivity("chat-1", { kind: "backgrounded", id: "sh2" }, 9000)
+    expect(agent.getSubagents("chat-1")).toEqual([
+      { id: "sh2", type: "shell", label: "Find viewport meta tag", status: "running", startedAt: 3000, stoppable: true },
+    ])
+  })
+
   test("a Claude session's task reports reach the registry, and Stop reaches the CLI", async () => {
     const events = new AsyncEventQueue<any>()
     const stopped: string[] = []

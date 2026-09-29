@@ -81,10 +81,13 @@ function WidgetsSidebarImpl({
   }, [onRunQuickAction])
 
   return (
-    <div className="h-full min-h-0 overflow-y-auto overflow-x-hidden md:min-w-[370px]">
+    <div data-navbar-scroller className="h-full min-h-0 overflow-y-auto overflow-x-hidden md:min-w-[370px]">
       {/* No gap: each slot carries its own top spacing, so a card's gap folds
           away with it. */}
-      <div className="flex flex-col px-2 pb-2">
+      {/* Clears the chat navbar the column scrolls under on desktop. The
+          phone's sheet is outside where the chat page sets the height, so
+          it gets nothing. */}
+      <div className="flex flex-col px-2 pb-2 pt-[var(--chat-navbar-h,0px)]">
         <WidgetPresence show={tasks.length > 0}>
           <TasksWidget
             tasks={tasks}

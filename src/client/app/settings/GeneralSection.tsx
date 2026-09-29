@@ -3,7 +3,7 @@ import { DownloadCloud, Monitor, Moon, Sun } from "lucide-react"
 import { useNavigate } from "react-router-dom"
 import { ANALYTICS_STATIC_EVENT_NAMES, ANALYTICS_STATIC_PROPERTY_NAMES } from "../../../shared/analytics"
 import type { EditorPreset } from "../../../shared/protocol"
-import { DEFAULT_NEW_PROJECTS_DIRECTORY, isNightlyVersion, type SubmitWhileRunning } from "../../../shared/types"
+import { DEFAULT_NEW_PROJECTS_DIRECTORY, isNightlyVersion, type PaneVisibilityScope, type SubmitWhileRunning } from "../../../shared/types"
 import { EDITOR_OPTIONS, EditorIcon } from "../../components/editor-icons"
 import { useInstalledEditors } from "../../components/open-external-menu"
 import { Button } from "../../components/ui/button"
@@ -74,6 +74,11 @@ const chatSoundPreferenceOptions: { value: ChatSoundPreference; label: string }[
   { value: "always", label: "Always" },
 ]
 
+const paneVisibilityScopeOptions: { value: PaneVisibilityScope; label: string }[] = [
+  { value: "chat", label: "Per Chat" },
+  { value: "project", label: "Per Project" },
+]
+
 const chatBrowserNotificationPreferenceOptions: { value: ChatBrowserNotificationPreference; label: string }[] = [
   { value: "never", label: "Never" },
   { value: "unfocused", label: "When Unfocused" },
@@ -118,6 +123,7 @@ export function GeneralSection({
   const newProjectsDirectory = appSettings?.newProjectsDirectory ?? DEFAULT_NEW_PROJECTS_DIRECTORY
   const [newProjectsDirectoryDraft, setNewProjectsDirectoryDraft] = useState(newProjectsDirectory)
   const submitWhileRunning = appSettings?.submitWhileRunning ?? "queue"
+  const paneVisibility = appSettings?.paneVisibility ?? { widgets: "chat", terminal: "chat" }
   const transcriptWindow = appSettings?.transcript?.windowAssistantMessages ?? DEFAULT_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES
   const [transcriptWindowDraft, setTranscriptWindowDraft] = useState(String(transcriptWindow))
   const [appSettingsError, setAppSettingsError] = useState<string | null>(null)
@@ -277,6 +283,12 @@ export function GeneralSection({
         setAppSettingsError(error instanceof Error ? error.message : "Unable to save chat notification settings.")
       }
     })()
+  }
+
+  function handlePaneVisibilityChange(pane: "widgets" | "terminal", scope: PaneVisibilityScope) {
+    void handleWriteAppSettings({ paneVisibility: { [pane]: scope } }).catch((error) => {
+      setAppSettingsError(error instanceof Error ? error.message : "Unable to save layout settings.")
+    })
   }
 
   async function handleAnalyticsPreferenceChange(enabled: boolean) {
@@ -464,6 +476,33 @@ export function GeneralSection({
               />
             </SettingsField>
           </SettingsRow>
+        </SettingsGroup>
+
+        <SettingsGroup title="Layout">
+          {([
+            ["widgets", SETTINGS_ROWS.widgetsVisibility],
+            ["terminal", SETTINGS_ROWS.terminalVisibility],
+          ] as const).map(([pane, def]) => (
+            <SettingsRow key={pane} def={def}>
+              <Select
+                value={paneVisibility[pane]}
+                onValueChange={(value) => handlePaneVisibilityChange(pane, value as PaneVisibilityScope)}
+              >
+                <SelectTrigger className={SETTINGS_CONTROL_CLASS}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {paneVisibilityScopeOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </SettingsRow>
+          ))}
         </SettingsGroup>
 
         <SettingsGroup title="Editor & Projects">

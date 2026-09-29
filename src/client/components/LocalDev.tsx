@@ -1,4 +1,4 @@
-import { type ComponentType, type ReactNode } from "react"
+import { useRef, useState, type ComponentType, type ReactNode } from "react"
 import {
   ArrowLeftRight,
   ChevronRight,
@@ -10,6 +10,8 @@ import {
 import { APP_NAME, getCliInvocation, SDK_CLIENT_APP } from "../../shared/branding"
 import type { SocketStatus } from "../app/socket"
 import { PageHeader } from "../app/PageHeader"
+import { SettingsGroupHeading } from "../app/settings/shared"
+import { cn } from "../lib/utils"
 import { CopyButton } from "./ui/copy-button"
 
 /**
@@ -43,12 +45,57 @@ function InfoCard({ children }: { children: ReactNode }) {
   return <div className="bg-card border border-border rounded-2xl p-4">{children}</div>
 }
 
-function SectionHeader({ children }: { children: ReactNode }) {
-  return (
-    <h2 className="text-[13px] font-medium text-muted-foreground uppercase tracking-wider mb-3">
-      {children}
-    </h2>
-  )
+/**
+ * Most connections land well inside this, so the connecting screen waits it
+ * out before fading in rather than flashing for a frame on every load.
+ */
+const CONNECTING_REVEAL_DELAY_MS = 400
+
+/**
+ * How long attempts must keep failing before the page offers setup help.
+ * A server that is still booting (Kanna for Mac starts it alongside the
+ * window) refuses the first attempt or two; that is not a reason to tell
+ * anyone to run a command.
+ */
+const SETUP_HELP_AFTER_MS = 1_500
+
+/**
+ * Whether the page should show setup help. The socket retries on a backoff,
+ * so status cycles connecting → disconnected on every attempt. Once help is
+ * showing it stays through the retries instead of swapping layouts each time,
+ * until a connection lands.
+ */
+function useConnectionFailed(connectionStatus: SocketStatus) {
+  const failingSinceRef = useRef<number | null>(null)
+  const [failed, setFailed] = useState(false)
+  if (connectionStatus === "connected") {
+    failingSinceRef.current = null
+    if (failed) setFailed(false)
+  } else {
+    failingSinceRef.current ??= Date.now()
+    if (!failed && connectionStatus === "disconnected" && Date.now() - failingSinceRef.current > SETUP_HELP_AFTER_MS) {
+      setFailed(true)
+    }
+  }
+  return failed
+}
+
+/**
+ * True when the connecting screen was on screen long enough to be seen, so
+ * the page it hands over to fades in instead of cutting. A fast connection
+ * shows the page as it would without this.
+ */
+function useRevealAfterWait(waiting: boolean) {
+  const waitingSinceRef = useRef<number | null>(null)
+  const revealRef = useRef(false)
+  if (waiting) {
+    waitingSinceRef.current ??= Date.now()
+    revealRef.current = false
+  } else if (waitingSinceRef.current !== null) {
+    revealRef.current = Date.now() - waitingSinceRef.current > CONNECTING_REVEAL_DELAY_MS
+    waitingSinceRef.current = null
+  }
+  return revealRef.current
 }
 
 function HowItWorksItem({
@@ -104,43 +151,52 @@ export function LocalDev({
   ready,
   children,
 }: LocalDevProps) {
-  const isConnecting = connectionStatus === "connecting" || !ready
   const isConnected = connectionStatus === "connected" && ready
+  const needsSetup = useConnectionFailed(connectionStatus)
+  const revealChildren = useRevealAfterWait(!isConnected)
 
   return (
     <div className="flex-1 flex flex-col min-w-0 bg-background overflow-y-auto">
-      {!isConnected ? (
-        <>
+      {isConnected ? (
+        <div className={cn(revealChildren && "transition-opacity duration-200 ease-snappy starting:opacity-0")}>
+          {children}
+        </div>
+      ) : !needsSetup ? (
+        // A transient state, so it stays quiet: no page chrome, one line.
+        // Hidden through the reveal delay so fast connections never show it.
+        <div
+          role="status"
+          className="flex flex-1 flex-col items-center justify-center gap-3 px-6 transition-opacity duration-200 ease-snappy starting:opacity-0"
+          style={{ transitionDelay: `${CONNECTING_REVEAL_DELAY_MS}ms` }}
+        >
+          <Loader2 className="size-5 animate-spin text-muted-foreground" />
+          <p className="text-sm text-muted-foreground">Connecting to {APP_NAME}…</p>
+        </div>
+      ) : (
+        <div className="transition-opacity duration-200 ease-snappy starting:opacity-0">
           <PageHeader
             narrow
             icon={CodeXml}
-            title={isConnecting ? `Connecting ${APP_NAME}` : `Connect ${APP_NAME}`}
-            subtitle={isConnecting
-              ? `${APP_NAME} is starting up and loading your local projects.`
-              : `Run ${APP_NAME} directly on your machine with full access to your local files and agent project history.`}
+            title={`Connect ${APP_NAME}`}
+            subtitle={`Run ${APP_NAME} directly on your machine with full access to your local files and agent project history.`}
           />
           <div className="max-w-2xl w-full mx-auto pb-12 px-6">
-            <SectionHeader>Status</SectionHeader>
             <div className="mb-8">
+              <SettingsGroupHeading>Status</SettingsGroupHeading>
               <InfoCard>
-                <div className="flex items-center gap-3">
-                  <Loader2 className="h-4 w-4 text-muted-foreground animate-spin" />
+                {/* Worded for the whole retry loop, so it doesn't change
+                    between attempts; the spinner is the retrying. */}
+                <div role="status" className="flex items-center gap-3">
+                  <Loader2 className="h-4 w-4 shrink-0 text-muted-foreground animate-spin" />
                   <span className="text-sm text-muted-foreground">
-                    {isConnecting ? (
-                      `Connecting to your local ${APP_NAME} server...`
-                    ) : (
-                      <>
-                        Not connected. Run <code className="bg-background border border-border rounded-md mx-0.5 p-1 font-mono text-xs text-foreground">{getCliInvocation()}</code> from any terminal on this machine.
-                      </>
-                    )}
+                    Waiting for {APP_NAME}. Run <code className="bg-background border border-border rounded-md mx-0.5 p-1 font-mono text-xs text-foreground">{getCliInvocation()}</code> from any terminal on this machine.
                   </span>
                 </div>
               </InfoCard>
             </div>
 
-            {!isConnecting ? (
-              <div className="mb-10">
-              <SectionHeader>How it works</SectionHeader>
+            <div className="mb-10">
+              <SettingsGroupHeading>How it works</SettingsGroupHeading>
               <InfoCard>
                 <div className="flex items-center justify-around gap-6 py-4 px-2">
                   <HowItWorksItem icon={Terminal} title={`${APP_NAME} CLI`} subtitle="On Your Machine" />
@@ -150,12 +206,10 @@ export function LocalDev({
                   <HowItWorksItem icon={CodeXml} title={`${APP_NAME} UI`} subtitle="Project Chat" />
                 </div>
               </InfoCard>
-              </div>
-            ) : null}
+            </div>
 
-            {!isConnecting ? (
-              <div className="mb-10">
-              <SectionHeader>Setup</SectionHeader>
+            <div className="mb-10">
+              <SettingsGroupHeading>Setup</SettingsGroupHeading>
               <InfoCard>
                 <div className="space-y-4">
                   <Step number={1} title={`Start ${APP_NAME}`}>
@@ -169,7 +223,7 @@ export function LocalDev({
                   </Step>
 
                   <div className="mt-8">
-                    <h3 className="text-sm font-medium text-muted-foreground uppercase tracking-wider mb-4">Notes</h3>
+                    <h3 className="text-sm text-muted-foreground mb-3">Notes</h3>
                     <div className="space-y-3 text-sm">
                       <div className="flex gap-4">
                         <code className="font-mono text-foreground whitespace-nowrap">{getCliInvocation("").trim()}</code>
@@ -183,12 +237,9 @@ export function LocalDev({
                   </div>
                 </div>
               </InfoCard>
-              </div>
-            ) : null}
+            </div>
           </div>
-        </>
-      ) : (
-        children
+        </div>
       )}
 
       <div className="py-4 text-center">

@@ -922,6 +922,7 @@ export function createDemoAppSettings(theme: AppThemePreference): AppSettingsSna
     transcript: { windowAssistantMessages: DEFAULT_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES },
     defaultProvider: "claude",
     submitWhileRunning: "queue",
+    paneVisibility: { widgets: "chat", terminal: "chat" },
     providerDefaults: createDefaultProviderDefaults(),
     newSidebarEnabled: true,
     newProjectsDirectory: "~/Kanna",

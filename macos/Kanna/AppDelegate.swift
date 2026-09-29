@@ -138,6 +138,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     main.go(to: "/settings/general")
   }
 
+  @objc func uninstallKanna(_ sender: Any?) {
+    bringToFront()
+    Uninstall.confirmAndRun(window: main.window)
+  }
+
   @objc func toggleKeepAwake(_ sender: Any?) {
     KeepAwake.shared.onPower.toggle()
   }
@@ -325,6 +330,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuItemValidation, 
     app.addItem(item("Settings…", #selector(showSettings(_:)), key: ","))
     app.addItem(item("Setup…", #selector(showSetup(_:))))
     app.addItem(item("Keep Mac Awake While Plugged In", #selector(toggleKeepAwake(_:))))
+    app.addItem(.separator())
+    app.addItem(item("Uninstall Kanna…", #selector(uninstallKanna(_:))))
     app.addItem(.separator())
     let services = NSMenuItem(title: "Services", action: nil, keyEquivalent: "")
     services.submenu = NSMenu()

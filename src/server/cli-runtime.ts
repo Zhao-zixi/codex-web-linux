@@ -1,7 +1,7 @@
 import process from "node:process"
 import { spawnSync } from "node:child_process"
 import { hasCommand, spawnDetached } from "./process-utils"
-import { APP_NAME, CLI_COMMAND, getDataDirDisplay, LOG_PREFIX, PACKAGE_NAME } from "../shared/branding"
+import { APP_NAME, CLI_COMMAND, getDataDirDisplay, getDataRootDirDisplay, LOG_PREFIX, PACKAGE_NAME } from "../shared/branding"
 import type { ShareMode } from "../shared/share"
 import { assertNoHostOverride, getShareCliFlag, isShareEnabled, isTokenShareMode } from "../shared/share"
 import type { UpdateInstallErrorCode } from "../shared/types"
@@ -152,7 +152,11 @@ Options:
   --no-open            Don't open browser automatically
   --no-cloud           Skip bringing a paired machine online for this run
   --cloud              Run as a cloud dev-box (direct mode, no cloudflared)
-  --version            Print version and exit
+  --inspect[=<port>]   Run the server under Bun's inspector: debugger, CPU profiles,
+                       heap snapshots (also --inspect-wait, --inspect-brk)
+  --profile            Write a CPU profile and heap snapshot to ${getDataRootDirDisplay()}/profiles
+                       when the server stops
+  --version          Print version and exit
   --help               Show this help message`)
 }
 

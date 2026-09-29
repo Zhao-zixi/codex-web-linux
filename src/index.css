@@ -154,6 +154,10 @@
   --color-section-title: var(--section-title);
   /* Starts fast and settles: for UI that enters, opens or answers a press. */
   --ease-snappy: cubic-bezier(0.23, 1, 0.32, 1);
+  /* iOS's glide (from Ionic): for a part that travels across its control, like
+     a switch's knob. Snappy front-loads so hard that short travel looks
+     instant; this keeps the move visible and still settles softly. */
+  --ease-glide: cubic-bezier(0.32, 0.72, 0, 1);
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
   --radius-sm: calc(var(--radius) - 4px);
@@ -264,6 +268,75 @@
   18% {
     opacity: 1;
     transform: scaleX(1);
+  }
+}
+
+/*
+ * Floating surfaces: popovers, context menus, selects, hover cards and
+ * tooltips. This is the one place their motion lives; the ui/ primitives put
+ * `floating-surface` on their content and callers add nothing.
+ *
+ * They open tens of times a day, so the entrance is barely there: a 150ms
+ * grow from 0.97, out of the trigger rather than the surface's own centre
+ * (Radix names the origin per primitive, and only the one in use is set).
+ * Closing is shorter and only fades, since by then attention has moved on.
+ *
+ * Tooltips enter faster (125ms) and only on their first, delayed open. Once
+ * one is showing, the next opens as `instant-open` and appears at once, so a
+ * pointer sweeping a toolbar isn't made to wait on each.
+ *
+ * Keyframes rather than transitions because Radix keeps a closing surface
+ * mounted only while a CSS animation runs on it.
+ */
+.floating-surface {
+  transform-origin: var(
+    --radix-popover-content-transform-origin,
+    var(
+      --radix-tooltip-content-transform-origin,
+      var(
+        --radix-hover-card-content-transform-origin,
+        var(--radix-context-menu-content-transform-origin, var(--radix-select-content-transform-origin, center))
+      )
+    )
+  );
+}
+
+.floating-surface[data-state="open"] {
+  animation: floating-surface-in 150ms var(--ease-snappy);
+}
+
+.floating-surface[data-state="delayed-open"] {
+  animation: floating-surface-in 125ms var(--ease-snappy);
+}
+
+.floating-surface[data-state="closed"] {
+  animation: floating-surface-out 100ms var(--ease-snappy) forwards;
+}
+
+@keyframes floating-surface-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
+@keyframes floating-surface-out {
+  to {
+    opacity: 0;
+  }
+}
+
+/* Reduced motion keeps the fade, which says a surface arrived, and drops the grow. */
+@keyframes floating-surface-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .floating-surface[data-state="open"],
+  .floating-surface[data-state="delayed-open"] {
+    animation-name: floating-surface-fade-in;
   }
 }
 

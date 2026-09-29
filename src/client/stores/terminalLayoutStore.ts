@@ -8,19 +8,30 @@ export interface TerminalPaneLayout {
 }
 
 export interface ProjectTerminalLayout {
+  /** The project's own visibility, which every chat follows when the setting is per project. */
   isVisible: boolean
+  /**
+   * Each chat's visibility when the `paneVisibility.terminal` setting is per
+   * chat, by chat id. The terminals themselves stay the project's; only
+   * whether the pane shows is the chat's. A chat with no entry starts hidden.
+   */
+  chatVisibility?: Record<string, boolean>
   mainSizes: [number, number]
   terminals: TerminalPaneLayout[]
   nextTerminalIndex: number
 }
 
+/**
+ * `chatKey` on the actions below is the chat whose own visibility to change
+ * (see lib/paneVisibility); null or omitted changes the project's.
+ */
 interface TerminalLayoutState {
   projects: Record<string, ProjectTerminalLayout>
-  addTerminal: (projectId: string, afterTerminalId?: string) => string
+  addTerminal: (projectId: string, afterTerminalId?: string, chatKey?: string | null) => string
   removeTerminal: (projectId: string, terminalId: string) => void
-  toggleVisibility: (projectId: string) => void
+  toggleVisibility: (projectId: string, chatKey?: string | null) => void
   /** Collapse the panel without touching panes, so their shells keep running. */
-  hideTerminals: (projectId: string) => void
+  hideTerminals: (projectId: string, chatKey?: string | null) => void
   resetMainSizes: (projectId: string) => void
   setMainSizes: (projectId: string, sizes: number[]) => void
   setTerminalSizes: (projectId: string, sizes: number[]) => void
@@ -40,6 +51,18 @@ function createDefaultProjectLayout(): ProjectTerminalLayout {
 
 function getProjectLayout(projects: Record<string, ProjectTerminalLayout>, projectId: string): ProjectTerminalLayout {
   return projects[projectId] ?? createDefaultProjectLayout()
+}
+
+/** Whether the pane is set to show, for this chat (`chatKey`) or else the project. */
+export function isTerminalVisible(layout: ProjectTerminalLayout, chatKey?: string | null) {
+  if (chatKey) return layout.chatVisibility?.[chatKey] ?? false
+  return layout.isVisible
+}
+
+function withTerminalVisible(layout: ProjectTerminalLayout, chatKey: string | null | undefined, visible: boolean): ProjectTerminalLayout {
+  return chatKey
+    ? { ...layout, chatVisibility: { ...layout.chatVisibility, [chatKey]: visible } }
+    : { ...layout, isVisible: visible }
 }
 
 function normalizeSizes(values: number[]): number[] {
@@ -85,7 +108,7 @@ export const useTerminalLayoutStore = create<TerminalLayoutState>()(
   persist(
     (set) => ({
       projects: {},
-      addTerminal: (projectId, afterTerminalId) => {
+      addTerminal: (projectId, afterTerminalId, chatKey) => {
         const layout = getProjectLayout(useTerminalLayoutStore.getState().projects, projectId)
         const terminalId = globalThis.crypto?.randomUUID?.() ?? `terminal-${Date.now()}-${layout.nextTerminalIndex}`
         set((state) => ({
@@ -100,8 +123,7 @@ export const useTerminalLayoutStore = create<TerminalLayoutState>()(
               ? Math.max(existing.findIndex((terminal) => terminal.id === afterTerminalId) + 1, 0)
               : existing.length
             return {
-              ...layout,
-              isVisible: true,
+              ...withTerminalVisible(layout, chatKey, true),
               nextTerminalIndex: layout.nextTerminalIndex + 1,
               terminals: [
                 ...existing.slice(0, insertIndex),
@@ -118,8 +140,11 @@ export const useTerminalLayoutStore = create<TerminalLayoutState>()(
           projects: withProjectLayout(state.projects, projectId, (layout) => {
             const remaining = layout.terminals.filter((terminal) => terminal.id !== terminalId)
             if (remaining.length === 0) {
+              // No terminals means no pane for any chat, so the next terminal
+              // opens only where it's asked for.
+              const { chatVisibility: _cleared, ...rest } = layout
               return {
-                ...layout,
+                ...rest,
                 isVisible: false,
                 terminals: [],
               }
@@ -134,19 +159,17 @@ export const useTerminalLayoutStore = create<TerminalLayoutState>()(
             }
           }),
         })),
-      toggleVisibility: (projectId) =>
+      toggleVisibility: (projectId, chatKey) =>
         set((state) => ({
-          projects: withProjectLayout(state.projects, projectId, (layout) => ({
-            ...layout,
-            isVisible: layout.terminals.length > 0 ? !layout.isVisible : false,
-          })),
+          projects: withProjectLayout(state.projects, projectId, (layout) => withTerminalVisible(
+            layout,
+            chatKey,
+            layout.terminals.length > 0 ? !isTerminalVisible(layout, chatKey) : false,
+          )),
         })),
-      hideTerminals: (projectId) =>
+      hideTerminals: (projectId, chatKey) =>
         set((state) => ({
-          projects: withProjectLayout(state.projects, projectId, (layout) => ({
-            ...layout,
-            isVisible: false,
-          })),
+          projects: withProjectLayout(state.projects, projectId, (layout) => withTerminalVisible(layout, chatKey, false)),
         })),
       resetMainSizes: (projectId) =>
         set((state) => ({

@@ -33,6 +33,7 @@ function expectedSettingsSnapshot(filePath: string, overrides: Partial<AppSettin
     chatSoundId: "funk",
     chatBrowserNotificationPreference: "never",
     submitWhileRunning: "queue",
+    paneVisibility: { widgets: "chat", terminal: "chat" },
     terminal: {
       scrollbackLines: 1_000,
       minColumnWidth: 450,
@@ -313,6 +314,22 @@ describe("AppSettingsManager", () => {
     await writeFile(filePath, JSON.stringify({ submitWhileRunning: "yolo" }), "utf8")
     await manager.reload()
     expect(manager.getSnapshot().submitWhileRunning).toBe("queue")
+
+    manager.dispose()
+  })
+
+  test("keeps pane visibility per chat by default, and patches one pane without the other", async () => {
+    const filePath = await createTempFilePath()
+    const manager = new AppSettingsManager(filePath)
+    await manager.initialize()
+
+    expect(manager.getSnapshot().paneVisibility).toEqual({ widgets: "chat", terminal: "chat" })
+    const next = await manager.writePatch({ paneVisibility: { terminal: "project" } })
+    expect(next.paneVisibility).toEqual({ widgets: "chat", terminal: "project" })
+
+    await writeFile(filePath, JSON.stringify({ paneVisibility: { widgets: "tab", terminal: "project" } }), "utf8")
+    await manager.reload()
+    expect(manager.getSnapshot().paneVisibility).toEqual({ widgets: "chat", terminal: "project" })
 
     manager.dispose()
   })

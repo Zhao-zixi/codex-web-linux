@@ -66,8 +66,11 @@ export function WidgetStrip({ leading, children, trailing, form, field = false }
   /**
    * Sets the strip as a filled field inset in the card rather than a bar
    * across it, so a search reads as something to type in, not as a second
-   * header. No border and no divider: the fill is the edge, and it is the
-   * rows' hover fill, so the column keeps one gray. The 6px inset is the
+   * header. No border and no divider: the fill is the edge. It is a shade
+   * further from the card than the rows' hover fill in both themes, since
+   * `bg-muted` sits too close to the card to read as a field. Its hue and
+   * saturation are `--muted`'s, so the field and a lit row read as one gray at
+   * two depths; keep them in step if `--muted` changes. The 6px inset is the
    * List's, so the field lines up with the rows under it, and its own padding
    * keeps the leading icon at 12px and the text at 36px.
    */
@@ -83,7 +86,7 @@ export function WidgetStrip({ leading, children, trailing, form, field = false }
   // A bar is divided from what follows it, but not from the card's own edge
   // when it is all the body holds.
   const className = field
-    ? "mx-1.5 mt-1.5 flex h-8 items-center gap-2 rounded-lg bg-muted pl-1.5 pr-0.5 last:mb-1.5"
+    ? "mx-1.5 mt-1.5 flex h-8 items-center gap-2 rounded-lg bg-[hsl(210_20%_95.5%)] dark:bg-[hsl(223_4%_21.5%)] pl-1.5 pr-0.5 last:mb-1.5"
     : "flex h-9 items-center gap-2 border-border pl-3 pr-2 not-last:border-b"
   return form ? <form {...form} className={className}>{content}</form> : <div className={className}>{content}</div>
 }

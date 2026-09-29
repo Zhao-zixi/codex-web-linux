@@ -1,6 +1,8 @@
 import process from "node:process"
+import path from "node:path"
+import { homedir } from "node:os"
 import { spawn } from "node:child_process"
-import { CLI_COMMAND, LOG_PREFIX } from "../shared/branding"
+import { CLI_COMMAND, getDataRootDir, LOG_PREFIX } from "../shared/branding"
 import {
   CLI_CHILD_ARGS_ENV_VAR,
   CLI_CHILD_COMMAND_ENV_VAR,
@@ -12,6 +14,8 @@ import {
   parseChildArgsEnv,
   sanitizeRestartArgv,
   shouldRestartCliProcess,
+  splitBunRuntimeFlags,
+  withBunRuntimeFlags,
 } from "./restart"
 import { exitWithParent } from "./mac-app"
 
@@ -21,9 +25,14 @@ interface ChildExit {
 }
 
 function getChildProcessSpec() {
+  const overridden = Boolean(process.env[CLI_CHILD_COMMAND_ENV_VAR])
   const command = process.env[CLI_CHILD_COMMAND_ENV_VAR] || CLI_COMMAND
   const args = parseChildArgsEnv(process.env[CLI_CHILD_ARGS_ENV_VAR])
-  return { command, args }
+  return withBunRuntimeFlags({ command, args }, bunArgs, {
+    execPath: process.execPath,
+    script: process.argv[1],
+    overridden,
+  })
 }
 
 function spawnChild(argv: string[]) {
@@ -84,7 +93,11 @@ exitWithParent(() => {
   if (currentChild && currentChild.exitCode === null) currentChild.kill("SIGTERM")
 })
 
-const argv = process.argv.slice(2)
+const profileDir = path.join(getDataRootDir(homedir()), "profiles")
+const { bunArgs, argv } = splitBunRuntimeFlags(process.argv.slice(2), profileDir, process.cwd())
+if (bunArgs.some((arg) => arg.startsWith("--cpu-prof"))) {
+  console.log(`${LOG_PREFIX} profiling: CPU profile and heap snapshot go to ${profileDir} when the server stops`)
+}
 // The original argv only applies to the first spawn: a `pair <code>` launch
 // must not replay the (single-use) pairing on update restarts.
 let currentArgv = argv

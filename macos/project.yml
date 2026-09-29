@@ -35,6 +35,9 @@ targets:
     deploymentTarget: "14.0"
     sources:
       - path: Kanna
+      # Kanna › Uninstall Kanna… runs it (Kanna/Uninstall.swift).
+      - path: uninstall.sh
+        buildPhase: resources
     dependencies:
       - package: Sparkle
     settings:

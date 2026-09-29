@@ -2,7 +2,7 @@ import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo,
 import type { GroupImperativeHandle } from "react-resizable-panels"
 import { useNavigate, useOutletContext } from "react-router-dom"
 import type { ChatInputHandle } from "../../components/chat-ui/ChatInput"
-import { ChatNavbar } from "../../components/chat-ui/ChatNavbar"
+import { ChatNavbar, ChatNavbarWash } from "../../components/chat-ui/ChatNavbar"
 import { WidgetsSidebar } from "../../components/chat-ui/widgets/WidgetsSidebar"
 // Code-split: GitWidgets pulls @pierre/diffs, which pulls shiki core and ~300
 // language grammars. The widget column is not first paint, so none of that
@@ -32,7 +32,8 @@ import { shouldOpenLocalFileLinkInEditor } from "../../lib/pathUtils"
 import { getChatViewer, openViewer, useChatViewer, useViewerStore } from "../../stores/viewerStore"
 import type { DiffViewerContext } from "../../components/chat-ui/git/DiffViewer"
 import { useProjectRepoUrl } from "../../stores/sidebarStore"
-import { DEFAULT_PROJECT_TERMINAL_LAYOUT, useTerminalLayoutStore } from "../../stores/terminalLayoutStore"
+import { DEFAULT_PROJECT_TERMINAL_LAYOUT, isTerminalVisible, useTerminalLayoutStore } from "../../stores/terminalLayoutStore"
+import { usePaneChatKey } from "../../lib/paneVisibility"
 import { useTerminalPreferencesStore } from "../../stores/terminalPreferencesStore"
 import { shouldCloseTerminalPane } from "../terminalLayoutResize"
 
@@ -383,9 +384,12 @@ const DesktopSidebarPane = memo(function DesktopSidebarPane({
       elementRef={sidebarPanelRef}
       groupResizeBehavior="preserve-pixel-size"
     >
+      {/* The navbar spans the chat and this column: the column scrolls under
+          it into the same fade as the transcript (WidgetsSidebar pads its
+          top by the navbar's height). */}
       <div
         ref={sidebarVisualRef}
-        className="h-full min-h-0 overflow-hidden"
+        className="relative h-full min-h-0 overflow-hidden"
         data-right-sidebar-open={showRightSidebar ? "true" : "false"}
         data-right-sidebar-animated="false"
         data-right-sidebar-visual
@@ -394,6 +398,7 @@ const DesktopSidebarPane = memo(function DesktopSidebarPane({
         } as CSSProperties}
       >
         {content}
+        <ChatNavbarWash stopAtTranscriptScrollbar={false} />
       </div>
     </ResizablePanel>
   )
@@ -547,6 +552,22 @@ function ChatWorkspace({
 export function ChatPage() {
   const state = useOutletContext<KannaState>()
   const layoutRootRef = useRef<HTMLDivElement>(null)
+  // Publishes the navbar's height as `--chat-navbar-h` on its parent, for
+  // what starts below it (the widget column, the viewer) and the transcript's
+  // fade under it. Its height moves with the viewport and the Mac app's
+  // traffic lights.
+  const navbarRef = useCallback((node: HTMLDivElement | null) => {
+    const host = node?.parentElement
+    if (!node || !host) return
+    const publish = () => host.style.setProperty("--chat-navbar-h", `${node.offsetHeight}px`)
+    publish()
+    const observer = new ResizeObserver(publish)
+    observer.observe(node)
+    return () => {
+      observer.disconnect()
+      host.style.removeProperty("--chat-navbar-h")
+    }
+  }, [])
   const transcriptListRef = useRef<TranscriptScrollHandle | null>(null)
   const isAtEndRef = useRef(true)
   const showScrollTimeoutRef = useRef<number | null>(null)
@@ -569,7 +590,11 @@ export function ChatPage() {
   const projectId = state.activeProjectId
   const projectTerminalLayout = useTerminalLayoutStore((store) => (projectId ? store.projects[projectId] : undefined))
   const storedTerminalLayout = projectTerminalLayout ?? DEFAULT_PROJECT_TERMINAL_LAYOUT
-  const widgetsOpen = useWidgetsOpen(projectId)
+  // Set to the active chat when that pane opens and closes per chat, null when
+  // it follows the project (see lib/paneVisibility).
+  const widgetsChatKey = usePaneChatKey("widgets", state.activeChatId)
+  const terminalChatKey = usePaneChatKey("terminal", state.activeChatId)
+  const widgetsOpen = useWidgetsOpen(projectId, widgetsChatKey)
   const globalRightSidebarSize = useRightSidebarStore((store) => store.size)
   const addTerminal = useTerminalLayoutStore((store) => store.addTerminal)
   const removeTerminal = useTerminalLayoutStore((store) => store.removeTerminal)
@@ -641,7 +666,7 @@ export function ChatPage() {
     return mainSizes === storedTerminalLayout.mainSizes ? storedTerminalLayout : { ...storedTerminalLayout, mainSizes }
   }, [isMobileViewport, storedTerminalLayout])
   const hasTerminals = terminalLayout.terminals.length > 0
-  const showTerminalPane = Boolean(projectId && terminalLayout.isVisible && hasTerminals)
+  const showTerminalPane = Boolean(projectId && isTerminalVisible(terminalLayout, terminalChatKey) && hasTerminals)
   const shouldRenderTerminalLayout = Boolean(projectId && hasTerminals)
   const showRightSidebar = Boolean(projectId && widgetsOpen)
   const shouldRenderRightSidebarLayout = Boolean(projectId)
@@ -666,7 +691,10 @@ export function ChatPage() {
   } = useTerminalToggleAnimation({
     showTerminalPane,
     shouldRenderTerminalLayout,
-    projectId,
+    // The hooks read a change of this id as a switch, which snaps the pane
+    // rather than animating it (and doesn't pull focus into the terminal).
+    // Per chat, going to another chat is that switch too.
+    projectId: terminalChatKey ?? projectId,
     terminalLayout,
     chatInputRef: chatInputElementRef,
   })
@@ -676,7 +704,7 @@ export function ChatPage() {
     sidebarPanelRef,
     sidebarVisualRef,
   } = useRightSidebarToggleAnimation({
-    projectId,
+    projectId: widgetsChatKey ?? projectId,
     shouldRenderRightSidebarLayout: shouldRenderDesktopRightSidebarLayout,
     showRightSidebar,
     rightSidebarSizePercent: effectiveRightSidebarSize,
@@ -770,12 +798,12 @@ export function ChatPage() {
   const handleToggleEmbeddedTerminal = useCallback(() => {
     if (!projectId) return
     if (hasTerminals) {
-      toggleVisibility(projectId)
+      toggleVisibility(projectId, terminalChatKey)
       return
     }
 
-    addTerminal(projectId)
-  }, [addTerminal, hasTerminals, projectId, toggleVisibility])
+    addTerminal(projectId, undefined, terminalChatKey)
+  }, [addTerminal, hasTerminals, projectId, terminalChatKey, toggleVisibility])
 
   const handleTerminalResize = useCallback((layout: Record<string, number>) => {
     if (!projectId || !showTerminalPane || isTerminalAnimating.current) {
@@ -798,22 +826,22 @@ export function ChatPage() {
     const containerHeight = layoutRootRef.current?.getBoundingClientRect().height ?? 0
     if (shouldCloseTerminalPane(containerHeight, terminalSize)) {
       resetMainSizes(projectId)
-      toggleVisibility(projectId)
+      toggleVisibility(projectId, terminalChatKey)
       return
     }
 
     setMainSizes(projectId, [chatSize, terminalSize])
-  }, [isMobileViewport, isTerminalAnimating, projectId, resetMainSizes, setMainSizes, showTerminalPane, toggleVisibility])
+  }, [isMobileViewport, isTerminalAnimating, projectId, resetMainSizes, setMainSizes, showTerminalPane, terminalChatKey, toggleVisibility])
 
   const handleCloseRightSidebar = useCallback(() => {
     if (!projectId) return
-    hideWidgets(projectId)
-  }, [hideWidgets, projectId])
+    hideWidgets(projectId, widgetsChatKey)
+  }, [hideWidgets, projectId, widgetsChatKey])
 
   const handleToggleWidgets = useCallback(() => {
     if (!projectId) return
-    toggleWidgets(projectId)
-  }, [projectId, toggleWidgets])
+    toggleWidgets(projectId, widgetsChatKey)
+  }, [projectId, toggleWidgets, widgetsChatKey])
 
   const activeChatId = state.activeChatId
   const handleJumpToToolCall = useCallback((toolId: string) => {
@@ -823,23 +851,23 @@ export function ChatPage() {
     navigate(`/chat/${activeChatId}`, { state: buildChatJumpLocationState({ toolId }) })
     // On a phone the column is a sheet over the chat: close it so the jump
     // lands somewhere visible.
-    if (isMobileViewport && projectId) hideWidgets(projectId)
-  }, [activeChatId, hideWidgets, isMobileViewport, navigate, projectId])
+    if (isMobileViewport && projectId) hideWidgets(projectId, widgetsChatKey)
+  }, [activeChatId, hideWidgets, isMobileViewport, navigate, projectId, widgetsChatKey])
 
   // On a phone the widget column is a sheet over the chat, and the viewer
   // opens over the chat: close the sheet so what you opened is what you see.
   useEffect(() => {
-    if (viewerOpen && isMobileViewport && projectId) hideWidgets(projectId)
-  }, [hideWidgets, isMobileViewport, projectId, viewerOpen])
+    if (viewerOpen && isMobileViewport && projectId) hideWidgets(projectId, widgetsChatKey)
+  }, [hideWidgets, isMobileViewport, projectId, viewerOpen, widgetsChatKey])
 
   const handleRunQuickAction = useCallback((command: string) => {
     if (!projectId) return
-    const terminalId = addTerminal(projectId)
+    const terminalId = addTerminal(projectId, undefined, terminalChatKey)
     setPendingTerminalCommands((current) => ({
       ...current,
       [terminalId]: command,
     }))
-  }, [addTerminal, projectId])
+  }, [addTerminal, projectId, terminalChatKey])
 
   const handleInitialTerminalCommandSent = useCallback((terminalId: string) => {
     setPendingTerminalCommands((current) => {
@@ -874,7 +902,7 @@ export function ChatPage() {
       // Closing the only pane hides the panel instead of killing the shell:
       // the pane stays mounted, so reopening returns to the same session and
       // scrollback with whatever was running still running.
-      hideTerminals(currentProjectId)
+      hideTerminals(currentProjectId, terminalChatKey)
       return
     }
 
@@ -885,7 +913,7 @@ export function ChatPage() {
     // entry chunk. Removing a terminal implies the module is already loaded, so
     // this resolves from cache.
     void import("../../components/chat-ui/TerminalPane").then((m) => m.disposeCachedTerminal(terminalId))
-  }, [hideTerminals, removeTerminal, state.socket])
+  }, [hideTerminals, removeTerminal, state.socket, terminalChatKey])
 
   const clearShowScrollTimeout = useCallback(() => {
     if (showScrollTimeoutRef.current !== null) {
@@ -1006,13 +1034,13 @@ export function ChatPage() {
 
       if (actionMatchesEvent(resolvedKeybindings, "addSplitTerminal", event)) {
         event.preventDefault()
-        addTerminal(projectId)
+        addTerminal(projectId, undefined, terminalChatKey)
       }
     }
 
     window.addEventListener("keydown", handleGlobalKeydown)
     return () => window.removeEventListener("keydown", handleGlobalKeydown)
-  }, [addTerminal, handleToggleEmbeddedTerminal, handleToggleWidgets, projectId, resolvedKeybindings, state.handleOpenExternal])
+  }, [addTerminal, handleToggleEmbeddedTerminal, handleToggleWidgets, projectId, resolvedKeybindings, state.handleOpenExternal, terminalChatKey])
 
   // Re-checking "is the reader at the end" after a terminal toggle or a window
   // resize used to live here. The transcript observes its own element now, so
@@ -1163,32 +1191,7 @@ export function ChatPage() {
       onDrop={handleTranscriptDrop}
     >
       <CardContent className="flex flex-1 min-h-0 flex-col overflow-hidden p-0 relative">
-        <ChatNavbar
-          sidebarCollapsed={state.sidebarCollapsed}
-          onOpenSidebar={state.openSidebar}
-          onExpandSidebar={state.expandSidebar}
-          localPath={state.navbarLocalPath}
-          embeddedTerminalVisible={showTerminalPane}
-          onToggleEmbeddedTerminal={projectId ? handleToggleEmbeddedTerminal : undefined}
-          widgetsOpen={showRightSidebar}
-          onToggleWidgets={projectId ? handleToggleWidgets : undefined}
-          onOpenExternal={handleOpenExternal}
-          onExportTranscript={state.activeChatId ? handleExportTranscript : undefined}
-          canExportTranscript={Boolean(state.activeChatId) && !state.isExportingStandalone}
-          isExportingTranscript={state.isExportingStandalone}
-          exportTranscriptComplete={state.standaloneShareComplete}
-          editorPreset={editorPreset}
-          editorCommandTemplate={editorCommandTemplate}
-          platform={state.localProjects?.machine.platform}
-          finderShortcut={resolvedKeybindings.bindings.openInFinder}
-          editorShortcut={resolvedKeybindings.bindings.openInEditor}
-          terminalShortcut={resolvedKeybindings.bindings.toggleEmbeddedTerminal}
-          rightSidebarShortcut={resolvedKeybindings.bindings.toggleRightSidebar}
-          branchName={state.chatDiffSnapshot?.branchName}
-          repoUrl={activeProjectRepoUrl}
-          hasGitRepo={state.chatDiffSnapshot?.status !== "no_repo"}
-          gitStatus={state.chatDiffSnapshot?.status}
-        />
+        <ChatNavbarWash resetKey={state.activeChatId} />
         <TranscriptRenderOptionsProvider value={transcriptRenderOptions}>
         <ToolPayloadProvider store={toolPayloadStore}>
         <ChatTranscriptViewport
@@ -1301,13 +1304,17 @@ export function ChatPage() {
     </div>
   )
   // No right padding beside the widget column: its own 8px gutter is the
-  // gap, and the viewer's on top of it read as a double margin.
+  // gap, and the viewer's on top of it read as a double margin. On desktop
+  // the navbar stays over the viewer, docked or expanded, so the card starts
+  // below it, level with the widget column's top card (navbar + 1px, as
+  // WidgetsSidebar and WidgetPresence place it); on a phone the viewer covers
+  // the navbar too.
   const viewerLayer = (
     <ViewerLayer
       diff={diffViewerContext}
       onOpenLocalLink={handleViewerLocalLink}
       placement={viewerPaneAvailable ? viewerPlacement : undefined}
-      className={showRightSidebar && !isMobileViewport ? "pr-0" : undefined}
+      className={isMobileViewport ? undefined : cn("pt-[calc(var(--chat-navbar-h,53px)+1px)]", showRightSidebar && "pr-0")}
     />
   )
   const workspace = viewerPaneAvailable ? (
@@ -1491,9 +1498,53 @@ export function ChatPage() {
     workspace
   )
 
+  // The navbar spans the chat, the viewer's pane and the widget column, over
+  // the top of all three: the transcript and the widget column scroll under
+  // it, and the viewer starts below it. The column slides in beneath it
+  // rather than pushing its buttons along. Painted above the viewer (z-30)
+  // and its resize handle (z-40) on desktop; on a phone the viewer covers
+  // the chat, navbar included, as a sheet.
+  const navbar = (
+    <ChatNavbar
+      headerRef={navbarRef}
+      className={isMobileViewport ? undefined : "z-40"}
+      inert={isMobileViewport && viewerOpen}
+      sidebarCollapsed={state.sidebarCollapsed}
+      onOpenSidebar={state.openSidebar}
+      onExpandSidebar={state.expandSidebar}
+      localPath={state.navbarLocalPath}
+      embeddedTerminalVisible={showTerminalPane}
+      onToggleEmbeddedTerminal={projectId ? handleToggleEmbeddedTerminal : undefined}
+      widgetsOpen={showRightSidebar}
+      onToggleWidgets={projectId ? handleToggleWidgets : undefined}
+      onOpenExternal={handleOpenExternal}
+      onExportTranscript={state.activeChatId ? handleExportTranscript : undefined}
+      canExportTranscript={Boolean(state.activeChatId) && !state.isExportingStandalone}
+      isExportingTranscript={state.isExportingStandalone}
+      exportTranscriptComplete={state.standaloneShareComplete}
+      editorPreset={editorPreset}
+      editorCommandTemplate={editorCommandTemplate}
+      platform={state.localProjects?.machine.platform}
+      finderShortcut={resolvedKeybindings.bindings.openInFinder}
+      editorShortcut={resolvedKeybindings.bindings.openInEditor}
+      terminalShortcut={resolvedKeybindings.bindings.toggleEmbeddedTerminal}
+      rightSidebarShortcut={resolvedKeybindings.bindings.toggleRightSidebar}
+      branchName={state.chatDiffSnapshot?.branchName}
+      repoUrl={activeProjectRepoUrl}
+      hasGitRepo={state.chatDiffSnapshot?.status !== "no_repo"}
+      gitStatus={state.chatDiffSnapshot?.status}
+    />
+  )
+  const panesWithNavbar = (
+    <div className="relative flex h-full min-h-0 flex-1 flex-col">
+      {panes}
+      {navbar}
+    </div>
+  )
+
   const chatWorkspace = projectId ? (
     <ChatWorkspace
-      content={panes}
+      content={panesWithNavbar}
       projectId={projectId}
       shouldRenderTerminalLayout={shouldRenderTerminalLayout}
       showTerminalPane={showTerminalPane}
@@ -1518,7 +1569,7 @@ export function ChatPage() {
       onLayoutChanged={handleTerminalResize}
     />
   ) : (
-    panes
+    panesWithNavbar
   )
 
   return (

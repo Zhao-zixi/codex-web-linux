@@ -218,15 +218,20 @@ export function LoginFlowPanel({
  * Provider auth card, following the usage-card design:
  * `[ icon Service v1.2.3  <spacer>  Log In | Update to v1.2.4 | account ]`
  * with the live sign-in flow rendered inline below the header.
+ *
+ * `row` drops the card's own box so several can share one card with
+ * hairlines between them (the setup wizard's SetupList).
  */
 export function AuthCard({
   service,
   socket,
   className,
+  row = false,
 }: {
   service: AuthServiceSnapshot
   socket: KannaSocket
   className?: string
+  row?: boolean
 }) {
   const Icon = AUTH_SERVICE_ICONS[service.service]
   const version = displayVersion(service.version)
@@ -275,7 +280,7 @@ export function AuthCard({
   } else if (service.authStatus === "signed_in") {
     action = (
       <span className="flex shrink-0 items-center pr-2" title={service.account ?? "Connected"}>
-        <Check className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+        <Check className="h-3.5 w-3.5 shrink-0 text-emerald-500 animate-in fade-in zoom-in-90 duration-200 ease-out" />
       </span>
     )
   } else if (service.authStatus === "outdated") {
@@ -295,11 +300,11 @@ export function AuthCard({
   }
 
   return (
-    <div className={cn("rounded-2xl border border-border bg-card/40 px-3.5 py-3 text-left", className)}>
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2.5">
+    <div className={cn(row ? "px-4 py-3 text-left" : "rounded-2xl border border-border bg-card/40 px-3.5 py-3 text-left", className)}>
+      <div className="flex min-h-7 items-center justify-between gap-3">
+        <div className={cn("flex min-w-0 items-center", row ? "gap-3" : "gap-2.5")}>
           <Icon className="h-4 w-4 shrink-0 text-foreground" />
-          <span className="truncate text-sm font-semibold text-foreground">{service.label}</span>
+          <span className={cn("truncate text-sm text-foreground", row ? "font-medium" : "font-semibold")}>{service.label}</span>
           {version ? (
             <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{version}</span>
           ) : null}

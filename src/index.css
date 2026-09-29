@@ -826,3 +826,112 @@
     @apply bg-background text-foreground;
   }
 }
+
+/*
+ * Setup wizard motion (components/auth/SetupWizard.tsx). Onboarding is seen
+ * once, so it gets a composed hand-off, but only transform and opacity move.
+ *
+ * Steps push sideways: forward, the step leaves left as the next arrives
+ * from the right; back is the exact reverse. The exit is quick (180ms) and
+ * the entry settles (380ms), its title, card and footer 45ms apart, the
+ * card's rows fading in behind them. The last step arrives slower, and the
+ * logo and bar lift away first: it's the resolution, not another step.
+ */
+.wizard-step,
+.wizard-leave {
+  --wizard-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --wizard-push: 36px;
+}
+
+.wizard-step > * {
+  animation: wizard-in-forward 380ms var(--wizard-ease-out) both;
+}
+.wizard-step > :nth-child(2) { animation-delay: 45ms; }
+.wizard-step > :nth-child(3) { animation-delay: 90ms; }
+.wizard-step > :nth-child(4) { animation-delay: 135ms; }
+
+.wizard-step[data-direction="back"] > * { animation-name: wizard-in-back; }
+.wizard-step[data-direction="open"] > * { animation-name: wizard-in-open; animation-duration: 460ms; }
+.wizard-step[data-direction="finish"] > * { animation-name: wizard-in-open; animation-duration: 520ms; }
+.wizard-step[data-direction="finish"] > :nth-child(1) { animation-delay: 160ms; }
+.wizard-step[data-direction="finish"] > :nth-child(2) { animation-delay: 230ms; }
+.wizard-step[data-direction="finish"] > :nth-child(3) { animation-delay: 300ms; }
+
+/* Rows land after their card has arrived; fade only, so a row never drifts
+   inside a card that's still moving. */
+.wizard-step [data-setup-list] > * {
+  animation: wizard-fade 260ms var(--wizard-ease-out) both;
+  animation-delay: calc(120ms + var(--wizard-row, 0) * 40ms);
+}
+.wizard-step [data-setup-list] > :nth-child(2) { --wizard-row: 1; }
+.wizard-step [data-setup-list] > :nth-child(3) { --wizard-row: 2; }
+.wizard-step [data-setup-list] > :nth-child(4) { --wizard-row: 3; }
+.wizard-step [data-setup-list] > :nth-child(5) { --wizard-row: 4; }
+.wizard-step [data-setup-list] > :nth-child(n + 6) { --wizard-row: 5; }
+.wizard-step[data-direction="finish"] [data-setup-list] > * {
+  animation-delay: calc(360ms + var(--wizard-row, 0) * 55ms);
+}
+
+.wizard-leave {
+  animation: wizard-out-forward 180ms var(--wizard-ease-out) both;
+}
+.wizard-leave[data-direction="back"] { animation-name: wizard-out-back; }
+
+@keyframes wizard-in-forward {
+  from { opacity: 0; transform: translateX(var(--wizard-push)); }
+}
+@keyframes wizard-in-back {
+  from { opacity: 0; transform: translateX(calc(var(--wizard-push) * -1)); }
+}
+@keyframes wizard-in-open {
+  from { opacity: 0; transform: translateY(8px) scale(0.99); }
+}
+@keyframes wizard-fade {
+  from { opacity: 0; }
+}
+@keyframes wizard-out-forward {
+  to { opacity: 0; transform: translateX(calc(var(--wizard-push) * -0.6)); }
+}
+@keyframes wizard-out-back {
+  to { opacity: 0; transform: translateX(calc(var(--wizard-push) * 0.6)); }
+}
+
+/* The bar is pushed by Continue, so it earns a small overshoot (about 10%)
+   before it settles. It slides inside its track (SetupWizard) to keep its
+   round end. */
+.wizard-progress {
+  transition: transform 560ms cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+
+/* The flower and bar arrive with the wizard, then lift away on the last
+   step once the bar has filled. */
+.wizard-header {
+  /* backwards, not both: once it has arrived, the lift-away transition owns it. */
+  animation: wizard-in-open 460ms cubic-bezier(0.23, 1, 0.32, 1) backwards;
+  transition: opacity 260ms cubic-bezier(0.23, 1, 0.32, 1) 420ms, transform 260ms cubic-bezier(0.23, 1, 0.32, 1) 420ms;
+}
+.wizard-header[data-finished] {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wizard-step > *,
+  .wizard-step [data-setup-list] > *,
+  .wizard-header {
+    animation-name: wizard-fade;
+  }
+  .wizard-leave {
+    animation-name: wizard-fade-out;
+  }
+  .wizard-progress {
+    transition-duration: 0ms;
+  }
+  .wizard-header[data-finished] {
+    transform: none;
+  }
+}
+
+@keyframes wizard-fade-out {
+  to { opacity: 0; }
+}

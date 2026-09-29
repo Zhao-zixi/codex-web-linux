@@ -54,7 +54,7 @@ export function PairedSuccess({ appOrigin }: { appOrigin: string }) {
   const host = displayClaimUrl(appOrigin)
   return (
     <div className="space-y-4 py-2 text-center">
-      <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-emerald-500/15">
+      <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-emerald-500/15 animate-in fade-in zoom-in-90 duration-300 ease-out">
         <Check className="h-5 w-5 text-emerald-500" />
       </div>
       <p className="text-sm text-muted-foreground">

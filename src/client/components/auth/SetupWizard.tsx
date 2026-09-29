@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react"
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useNavigate } from "react-router-dom"
 import { ArrowUpRight, Check, ChevronLeft, Cloud, Flower, LaptopMinimal } from "lucide-react"
 import { AUTH_SERVICE_LABELS, type AuthServiceId } from "../../../shared/types"
@@ -10,7 +10,7 @@ import { useCloudPairSession } from "../cloud/useCloudPairSession"
 import { AUTH_SERVICE_ICONS } from "../provider-icons"
 import { Button } from "../ui/button"
 import { AuthCard } from "./AuthCard"
-import { MacSetupCards, macSetupAvailable, macSetupSatisfied, useMacSetupState } from "./MacSetupStep"
+import { Done, MacSetupCards, SetupList, SetupRow, macSetupAvailable, macSetupSatisfied, useMacSetupState } from "./MacSetupStep"
 
 /**
  * The cloud step is dropped entirely when this machine can't use it (already
@@ -27,11 +27,12 @@ const AUTO_ADVANCE_MS = 900
 
 const AGENT_SERVICES: AuthServiceId[] = ["claude", "codex", "cursor"]
 
-function StepHeading({ title, description }: { title: string; description: string }) {
+/** A title and, at most, one short line. The card under it says the rest. */
+function StepHeading({ title, description }: { title: string; description?: string }) {
   return (
-    <div className="space-y-2 text-center">
+    <div className="space-y-1.5 text-center">
       <h1 className="text-xl font-semibold text-foreground">{title}</h1>
-      <p className="mx-auto max-w-sm text-sm leading-6 text-muted-foreground">{description}</p>
+      {description ? <p className="mx-auto max-w-sm text-sm text-muted-foreground">{description}</p> : null}
     </div>
   )
 }
@@ -47,6 +48,8 @@ function StepHeading({ title, description }: { title: string; description: strin
  * so the step never shows a dead Continue next to the thing to do.
  */
 const FOOTER_PRESS = "transition-[transform,background-color,color,border-color] duration-150 ease-out active:scale-[0.97]"
+/** Back, Continue and the link that stands in for it: one height, so the row reads as one control. */
+const FOOTER_HEIGHT = "h-11 min-h-11"
 
 function StepFooter({
   canContinue,
@@ -73,12 +76,12 @@ function StepFooter({
             variant="outline"
             aria-label="Back"
             onClick={onBack}
-            className={cn("h-11 w-11 shrink-0 rounded-full p-0", FOOTER_PRESS)}
+            className={cn(FOOTER_HEIGHT, "w-11 shrink-0 rounded-full p-0", FOOTER_PRESS)}
           >
             <ChevronLeft className="h-4 w-4" />
           </Button>
         ) : (
-          <div aria-hidden className="h-11 w-11 shrink-0" />
+          <div aria-hidden className={cn(FOOTER_HEIGHT, "w-11 shrink-0")} />
         )}
         {link && !canContinue ? (
           <a
@@ -86,7 +89,8 @@ function StepFooter({
             target="_blank"
             rel="noreferrer"
             className={cn(
-              "inline-flex h-11 flex-1 items-center justify-center gap-1.5 rounded-full bg-primary text-sm font-medium text-primary-foreground hover:bg-primary/90",
+              FOOTER_HEIGHT,
+              "inline-flex flex-1 items-center justify-center gap-1.5 rounded-full bg-primary text-sm font-medium text-primary-foreground hover:bg-primary/90",
               FOOTER_PRESS,
             )}
           >
@@ -98,7 +102,8 @@ function StepFooter({
           // fill instead of a half-transparent primary.
           <Button
             className={cn(
-              "h-11 flex-1 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100",
+              FOOTER_HEIGHT,
+              "flex-1 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100",
               FOOTER_PRESS,
             )}
             disabled={!canContinue}
@@ -107,7 +112,7 @@ function StepFooter({
             Continue
           </Button>
         )}
-        <div aria-hidden className="h-11 w-11 shrink-0" />
+        <div aria-hidden className={cn(FOOTER_HEIGHT, "w-11 shrink-0")} />
       </div>
       {/* The skip slot always occupies its height so the row above never jumps. */}
       {onSkip ? (
@@ -124,6 +129,23 @@ function StepFooter({
         </div>
       )}
     </div>
+  )
+}
+
+/** A row of the final summary: done, or quietly skipped. */
+function SummaryRow({ icon, title, done, pending = "Skipped" }: {
+  icon: ReactNode
+  title: string
+  done: boolean
+  pending?: string
+}) {
+  return (
+    <SetupRow
+      icon={icon}
+      title={title}
+      muted={!done}
+      action={done ? <Done /> : <span className="pr-1 text-xs text-muted-foreground/70">{pending}</span>}
+    />
   )
 }
 
@@ -158,6 +180,9 @@ export const SetupWizard = memo(function SetupWizard() {
 
   // A property of the page (the app, this Mac's own server), not of the run.
   const [macStepEnabled] = useState(macSetupAvailable)
+  // GitHub already connected (say, gh signed in before Kanna existed): no
+  // step to show. Decided on open, so connecting mid-step can't pull it away.
+  const [githubStepEnabled, setGithubStepEnabled] = useState(true)
   const macState = useMacSetupState(open && macStepEnabled)
 
   // Kanna › Setup… in the Mac app opens this wizard; its Fleet menu's Put
@@ -197,16 +222,34 @@ export const SetupWizard = memo(function SetupWizard() {
   const steps = useMemo<SetupStep[]>(
     () => [
       ...(macStepEnabled ? (["mac"] as const) : []),
-      ...BASE_STEPS,
+      ...BASE_STEPS.filter((base) => base !== "github" || githubStepEnabled),
       ...(cloudStepEnabled ? (["cloud"] as const) : []),
       "done",
     ],
-    [macStepEnabled, cloudStepEnabled]
+    [macStepEnabled, githubStepEnabled, cloudStepEnabled]
   )
+
+  // Steps push sideways: forward, the step leaves to the left as the next
+  // arrives from the right; back is the exact reverse. The leaving step stays
+  // on screen, inert, for its short exit (index.css .wizard-leave). A second
+  // press mid-transition replaces it, so nothing ever waits.
+  type Direction = "open" | "forward" | "back" | "finish"
+  const [leaving, setLeaving] = useState<{ from: SetupStep; direction: "forward" | "back"; id: number } | null>(null)
+  const [enterDirection, setEnterDirection] = useState<Direction>("open")
+  const go = (next: SetupStep) => {
+    if (next === step) return
+    const direction = steps.indexOf(next) >= steps.indexOf(step) ? "forward" : "back"
+    setLeaving({ from: step, direction, id: Date.now() })
+    setEnterDirection(next === "done" && direction === "forward" ? "finish" : direction)
+    setStep(next)
+  }
 
   // On open, start at the first unsatisfied step (all satisfied → done).
   useEffect(() => {
     if (open && !wasOpenRef.current) {
+      setLeaving(null)
+      setEnterDirection("open")
+      setGithubStepEnabled(!status.githubConnected)
       setStep(
         macStepEnabled && !macSetupSatisfied(macState) ? "mac"
         : !status.githubConnected ? "github"
@@ -240,11 +283,11 @@ export const SetupWizard = memo(function SetupWizard() {
     prevOpenRouterRef.current = status.openRouterConnected
     if (!open) return
     if (step === "github" && githubJustConnected) {
-      const timer = setTimeout(() => setStep("agents"), AUTO_ADVANCE_MS)
+      const timer = setTimeout(() => go("agents"), AUTO_ADVANCE_MS)
       return () => clearTimeout(timer)
     }
     if (step === "openrouter" && openRouterJustConnected) {
-      const timer = setTimeout(() => setStep(cloudStepEnabled ? "cloud" : "done"), AUTO_ADVANCE_MS)
+      const timer = setTimeout(() => go(cloudStepEnabled ? "cloud" : "done"), AUTO_ADVANCE_MS)
       return () => clearTimeout(timer)
     }
   }, [open, step, status.githubConnected, status.openRouterConnected, cloudStepEnabled])
@@ -257,7 +300,7 @@ export const SetupWizard = memo(function SetupWizard() {
     const justPaired = !prevPairedRef.current && machinePaired
     prevPairedRef.current = machinePaired
     if (!open || step !== "cloud" || !justPaired) return
-    const timer = setTimeout(() => setStep("done"), AUTO_ADVANCE_MS * 2)
+    const timer = setTimeout(() => go("done"), AUTO_ADVANCE_MS * 2)
     return () => clearTimeout(timer)
   }, [open, step, machinePaired])
 
@@ -274,40 +317,17 @@ export const SetupWizard = memo(function SetupWizard() {
 
   if (!open || !socket) return null
 
-  const goBack = () => setStep(steps[Math.max(0, stepIndex - 1)])
-  const goNext = () => setStep(steps[Math.min(steps.length - 1, stepIndex + 1)])
+  const goBack = () => go(steps[Math.max(0, stepIndex - 1)])
+  const goNext = () => go(steps[Math.min(steps.length - 1, stepIndex + 1)])
 
-  return (
-    <div className="fixed inset-0 z-[70] overflow-y-auto bg-background animate-in fade-in duration-300">
-      {/* Low-emphasis escape hatch — suppresses auto-launch, keeps the Setup card. */}
-      <button
-        type="button"
-        onClick={dismissSetupWizard}
-        className="absolute right-4 top-4 z-10 rounded-full px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
-      >
-        Set up later
-      </button>
-
-      <div className="mx-auto flex min-h-full w-full max-w-md flex-col px-6 pb-10 pt-14 sm:pt-20">
-        {/* Logo + progress — hidden on the final step, which stands alone. */}
-        {step !== "done" ? (
-          <div className="mb-10 flex flex-col items-center gap-5">
-            <Flower className="h-7 w-7 text-logo" />
-            <div className="h-1 w-44 overflow-hidden rounded-full bg-muted">
-              <div
-                className="h-full rounded-full bg-logo transition-[width] duration-500 ease-out"
-                style={{ width: `${progressPercent}%` }}
-              />
-            </div>
-          </div>
-        ) : null}
-
-        <div key={step} className="flex flex-1 flex-col animate-in fade-in slide-in-from-bottom-2 duration-300">
-          {step === "mac" ? (
+  // Any step, for the one entering and the one leaving alike.
+  const renderStep = (current: SetupStep) => (
+    <>
+          {current === "mac" ? (
             <>
               <StepHeading
                 title="Set up this Mac"
-                description="Your agents run on this Mac. These keep them running, and this Mac reachable, while you're away."
+                description="Keep your agents running while you're away."
               />
               <div className="mt-8">
                 <MacSetupCards state={macState} />
@@ -316,53 +336,52 @@ export const SetupWizard = memo(function SetupWizard() {
             </>
           ) : null}
 
-          {step === "github" ? (
+          {current === "github" ? (
             <>
               <StepHeading
                 title="Connect GitHub"
-                description="Clone repos, publish projects, and open pull requests without leaving Kanna."
+                description="Clone repos and open pull requests."
               />
-              <div className="mt-8 space-y-3">
-                {services.gh ? <AuthCard service={services.gh} socket={socket} /> : null}
-              </div>
+              <SetupList className="mt-8">
+                {services.gh ? <AuthCard row service={services.gh} socket={socket} /> : null}
+              </SetupList>
               <StepFooter
                 canContinue={status.githubConnected}
                 onContinue={goNext}
-                onBack={macStepEnabled ? goBack : undefined}
+                onBack={stepIndex > 0 ? goBack : undefined}
                 onSkip={!status.githubConnected ? goNext : undefined}
               />
             </>
           ) : null}
 
-          {step === "agents" ? (
+          {current === "agents" ? (
             <>
               <StepHeading
-                title="Connect your coding agents"
-                description="Kanna drives the agents you already use. Connect at least one — you can add the rest anytime."
+                title="Connect your agents"
+                description="At least one to start."
               />
-              <div className="mt-8 space-y-3">
+              <SetupList className="mt-8">
                 {services.agents.map((service) => (
-                  <AuthCard key={service.service} service={service} socket={socket} />
+                  <AuthCard row key={service.service} service={service} socket={socket} />
                 ))}
-              </div>
+              </SetupList>
               <StepFooter
                 canContinue={status.anyAgentConnected}
                 onContinue={goNext}
-                onBack={goBack}
-                hint={!status.anyAgentConnected ? "Connect at least one agent to continue." : undefined}
+                onBack={stepIndex > 0 ? goBack : undefined}
               />
             </>
           ) : null}
 
-          {step === "openrouter" ? (
+          {current === "openrouter" ? (
             <>
               <StepHeading
                 title="Connect OpenRouter"
-                description="Powers the Pi harness and extras like chat naming and commit messages. Pay per token — no subscription needed."
+                description="Powers Pi, chat names and commit messages."
               />
-              <div className="mt-8 space-y-3">
-                {services.openrouter ? <AuthCard service={services.openrouter} socket={socket} /> : null}
-              </div>
+              <SetupList className="mt-8">
+                {services.openrouter ? <AuthCard row service={services.openrouter} socket={socket} /> : null}
+              </SetupList>
               <StepFooter
                 canContinue={status.openRouterConnected}
                 onContinue={goNext}
@@ -372,11 +391,11 @@ export const SetupWizard = memo(function SetupWizard() {
             </>
           ) : null}
 
-          {step === "cloud" ? (
+          {current === "cloud" ? (
             <>
               <StepHeading
-                title="Use this machine from anywhere"
-                description="A personal URL for this machine that works from any browser. Free."
+                title="Use this machine anywhere"
+                description="A free URL for it, in any browser."
               />
               <div className="mt-8">
                 <CloudPairPanel
@@ -398,95 +417,97 @@ export const SetupWizard = memo(function SetupWizard() {
             </>
           ) : null}
 
-          {step === "done" ? (
+          {current === "done" ? (
             <>
               <div className="flex flex-col items-center gap-4">
                 <div className="flex h-12 w-12 items-center justify-center rounded-full border border-emerald-500/30 bg-emerald-500/10">
                   <Check className="h-6 w-6 text-emerald-500" />
                 </div>
-                <StepHeading
-                  title="You're all set"
-                  description="Kanna is ready. Manage providers anytime in Settings."
-                />
+                <StepHeading title="You're all set" />
               </div>
-              <div className="mt-8 space-y-2">
+              <SetupList className="mt-8">
                 {(["claude", "codex", "cursor", "gh", "openrouter"] as AuthServiceId[]).map((id) => {
-                  const service = selectAuthService(snapshot, id)
-                  const connected = service?.authStatus === "signed_in"
+                  const connected = selectAuthService(snapshot, id)?.authStatus === "signed_in"
                   const Icon = AUTH_SERVICE_ICONS[id]
                   return (
-                    <div
+                    <SummaryRow
                       key={id}
-                      className="flex items-center gap-2.5 rounded-2xl border border-border bg-card/40 px-3.5 py-2.5"
-                    >
-                      <Icon className={cn("h-4 w-4 shrink-0", connected ? "text-foreground" : "text-muted-foreground/50")} />
-                      <span className={cn("flex-1 truncate text-sm", connected ? "font-medium text-foreground" : "text-muted-foreground")}>
-                        {AUTH_SERVICE_LABELS[id]}
-                      </span>
-                      {connected ? (
-                        <Check className="h-4 w-4 shrink-0 text-emerald-500" />
-                      ) : (
-                        <span className="shrink-0 text-xs text-muted-foreground/70">Skipped</span>
-                      )}
-                    </div>
+                      icon={<Icon className="size-4" />}
+                      title={AUTH_SERVICE_LABELS[id]}
+                      done={connected}
+                    />
                   )
                 })}
                 {macStepEnabled ? (
-                  <div className="flex items-center gap-2.5 rounded-2xl border border-border bg-card/40 px-3.5 py-2.5">
-                    <LaptopMinimal
-                      className={cn(
-                        "h-4 w-4 shrink-0",
-                        macSetupSatisfied(macState) ? "text-foreground" : "text-muted-foreground/50"
-                      )}
-                    />
-                    <span
-                      className={cn(
-                        "flex-1 truncate text-sm",
-                        macSetupSatisfied(macState) ? "font-medium text-foreground" : "text-muted-foreground"
-                      )}
-                    >
-                      This Mac
-                    </span>
-                    {macSetupSatisfied(macState) ? (
-                      <Check className="h-4 w-4 shrink-0 text-emerald-500" />
-                    ) : (
-                      <span className="shrink-0 text-xs text-muted-foreground/70">Partly set up</span>
-                    )}
-                  </div>
+                  <SummaryRow
+                    icon={<LaptopMinimal className="size-4" />}
+                    title="This Mac"
+                    done={macSetupSatisfied(macState)}
+                    pending="Partly"
+                  />
                 ) : null}
                 {cloudStepEnabled ? (
-                  <div className="flex items-center gap-2.5 rounded-2xl border border-border bg-card/40 px-3.5 py-2.5">
-                    <Cloud
-                      className={cn(
-                        "h-4 w-4 shrink-0",
-                        machinePaired ? "text-foreground" : "text-muted-foreground/50"
-                      )}
-                    />
-                    <span
-                      className={cn(
-                        "flex-1 truncate text-sm",
-                        machinePaired ? "font-medium text-foreground" : "text-muted-foreground"
-                      )}
-                    >
-                      {machinePaired && cloud.session.appOrigin
-                        ? displayClaimUrl(cloud.session.appOrigin)
-                        : "Kanna Cloud"}
-                    </span>
-                    {machinePaired ? (
-                      <Check className="h-4 w-4 shrink-0 text-emerald-500" />
-                    ) : (
-                      <span className="shrink-0 text-xs text-muted-foreground/70">Skipped</span>
-                    )}
-                  </div>
+                  <SummaryRow
+                    icon={<Cloud className="size-4" />}
+                    title={machinePaired && cloud.session.appOrigin ? displayClaimUrl(cloud.session.appOrigin) : "Kanna Cloud"}
+                    done={machinePaired}
+                  />
                 ) : null}
-              </div>
+              </SetupList>
               <div className="mt-auto pt-10">
-                <Button className="h-11 w-full" onClick={handleComplete}>
+                <Button className={cn(FOOTER_HEIGHT, "w-full", FOOTER_PRESS)} onClick={handleComplete}>
                   Start Building
                 </Button>
               </div>
             </>
           ) : null}
+    </>
+  )
+
+  return (
+    <div className="fixed inset-0 z-[70] overflow-y-auto overflow-x-hidden bg-background animate-in fade-in duration-300">
+      {/* Low-emphasis escape hatch — suppresses auto-launch, keeps the Setup card. */}
+      <button
+        type="button"
+        onClick={dismissSetupWizard}
+        className="absolute right-4 top-4 z-10 rounded-full px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+      >
+        Set up later
+      </button>
+
+      <div className="mx-auto flex min-h-full w-full max-w-md flex-col px-6 pb-10 pt-14 sm:pt-20">
+        {/* Logo + progress. On the last step the bar fills, then both lift
+            away and the ending stands alone (index.css .wizard-header). */}
+        <div className="wizard-header mb-10 flex flex-col items-center gap-5" data-finished={step === "done" || undefined}>
+          <Flower className="h-7 w-7 text-logo" />
+          <div className="h-1 w-44 overflow-hidden rounded-full bg-muted">
+            {/* Slides inside the track rather than changing width, so the
+                round end stays round through the overshoot. */}
+            <div
+              className="wizard-progress h-full w-full rounded-full bg-logo"
+              style={{ transform: `translateX(${progressPercent - 100}%)` }}
+            />
+          </div>
+        </div>
+
+        <div className="relative flex flex-1 flex-col">
+          {leaving ? (
+            <div
+              key={`leave-${leaving.id}`}
+              inert
+              aria-hidden
+              data-direction={leaving.direction}
+              className="wizard-leave pointer-events-none absolute inset-0 flex flex-col"
+              onAnimationEnd={(event) => {
+                if (event.target === event.currentTarget) setLeaving(null)
+              }}
+            >
+              {renderStep(leaving.from)}
+            </div>
+          ) : null}
+          <div key={step} data-direction={enterDirection} className="wizard-step flex flex-1 flex-col">
+            {renderStep(step)}
+          </div>
         </div>
       </div>
     </div>

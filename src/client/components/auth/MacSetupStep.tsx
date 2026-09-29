@@ -36,144 +36,133 @@ export function useMacSetupState(enabled: boolean) {
   return state
 }
 
-function Card({ icon, title, action, children }: {
-  icon: ReactNode
+/**
+ * The wizard's card: rows in one rounded card with hairlines between them,
+ * the way Settings groups its rows (app/settings/shared.tsx
+ * SETTINGS_LIST_CARD_CLASS), rather than a stack of separate boxes.
+ */
+export const SETUP_LIST_CLASS = "divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card/40 text-left"
+
+export function SetupList({ children, className }: { children: ReactNode; className?: string }) {
+  return <div data-setup-list className={cn(SETUP_LIST_CLASS, className)}>{children}</div>
+}
+
+/** One row: icon, a title with at most one short line under it, and its control. */
+export function SetupRow({ icon, title, detail, tone = "muted", action, nested = false, muted = false, className }: {
+  icon?: ReactNode
   title: string
+  detail?: ReactNode
+  tone?: "muted" | "warn"
   action: ReactNode
-  children?: ReactNode
+  nested?: boolean
+  /** Skipped or not done: the row steps back. */
+  muted?: boolean
+  className?: string
 }) {
   return (
-    <div className="rounded-2xl border border-border bg-card/40 px-3.5 py-3 text-left">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2.5">
+    <div className={cn("flex items-center gap-3 px-4 py-3", nested && "pl-11", className)}>
+      {icon ? (
+        <span className={cn("flex size-4 shrink-0 items-center justify-center", muted ? "text-muted-foreground/50" : "text-foreground")}>
           {icon}
-          <span className="truncate text-sm font-semibold text-foreground">{title}</span>
-        </div>
-        {action}
+        </span>
+      ) : null}
+      <div className="min-w-0 flex-1">
+        <div className={cn("truncate text-sm", nested || muted ? "text-muted-foreground" : "font-medium text-foreground")}>{title}</div>
+        {detail ? (
+          <div className={cn("mt-0.5 text-xs", tone === "warn" ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground")}>
+            {detail}
+          </div>
+        ) : null}
       </div>
-      {children ? <div className="mt-2 space-y-1.5">{children}</div> : null}
+      <div className="flex shrink-0 items-center">{action}</div>
     </div>
   )
 }
 
-function Note({ tone = "muted", children }: { tone?: "muted" | "warn"; children: ReactNode }) {
-  return (
-    <p className={cn("text-xs leading-5", tone === "warn" ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground")}>
-      {children}
-    </p>
-  )
-}
-
-function PillButton({ onClick, children }: { onClick: () => void; children: ReactNode }) {
+export function PillButton({ onClick, children }: { onClick: () => void; children: ReactNode }) {
   return (
     <Button
       variant="outline"
       size="sm"
       onClick={onClick}
-      className="h-7 shrink-0 rounded-full px-3 text-xs font-semibold"
+      className="h-7 shrink-0 rounded-full px-3 text-xs font-semibold transition-[transform,background-color] duration-150 ease-out active:scale-[0.96]"
     >
       {children}
     </Button>
   )
 }
 
-function Granted() {
+/** The check a row lands on; it settles in rather than blinking on. */
+export function Done() {
   return (
-    <span className="flex shrink-0 items-center pr-2" title="Done">
-      <Check className="h-4 w-4 text-emerald-500" />
+    <span className="flex size-7 items-center justify-center" title="Done">
+      <Check className="size-4 text-emerald-500 animate-in fade-in zoom-in-90 duration-200 ease-out" />
     </span>
   )
 }
 
 /** What to do in System Settings once Open Settings takes you there. */
-export const FULL_DISK_ACCESS_STEPS = "In the list, click +, choose Kanna in Applications, then turn it on."
+export const FULL_DISK_ACCESS_STEPS = "Click +, then choose Kanna."
 
 export function MacSetupCards({ state }: { state: MacSetupState | null }) {
   if (!state) {
     return <p className="text-center text-sm text-muted-foreground">Checking this Mac…</p>
   }
-  const iconClass = "h-4 w-4 shrink-0 text-foreground"
+  const iconClass = "size-4"
 
   return (
-    <div className="space-y-3">
-      <Card
+    <SetupList>
+      <SetupRow
         icon={<Power className={iconClass} />}
-        title="Open Kanna at login"
+        title="Open at login"
+        detail={state.loginItem === "requiresApproval" ? "Approve Kanna in Login Items." : "Back after a restart."}
+        tone={state.loginItem === "requiresApproval" ? "warn" : "muted"}
         action={state.loginItem === "requiresApproval" ? (
-          <PillButton onClick={macSetup.openLoginItems}>Open Login Items</PillButton>
+          <PillButton onClick={macSetup.openLoginItems}>Open</PillButton>
         ) : (
           <Switch
-            aria-label="Open Kanna at login"
+            aria-label="Open at login"
             checked={state.loginItem === "enabled"}
             onCheckedChange={macSetup.setLoginItem}
           />
         )}
-      >
-        {state.loginItem === "requiresApproval" ? (
-          <Note tone="warn">Turn Kanna on under Login Items to finish.</Note>
-        ) : (
-          <Note>Keeps your agents, and this Mac's Kanna Cloud address, going after a restart.</Note>
-        )}
-      </Card>
-
-      <Card
+      />
+      <SetupRow
         icon={<Coffee className={iconClass} />}
-        title="Keep this Mac awake"
+        title="Stay awake"
+        detail={state.lidClosingSleeps ? "Closing the lid still sleeps it." : "While plugged in."}
+        tone={state.lidClosingSleeps ? "warn" : "muted"}
         action={
           <Switch
-            aria-label="Keep this Mac awake while plugged in"
+            aria-label="Stay awake while plugged in"
             checked={state.keepAwakeOnPower}
             onCheckedChange={(onPower) => macSetup.setKeepAwake({ onPower })}
           />
         }
-      >
-        <Note>
-          While plugged in. A locked Mac keeps working; a sleeping one doesn't. The display still turns off and
-          locks as usual.
-        </Note>
-        <div className="flex items-center justify-between gap-3 pt-0.5">
-          <span className={cn("text-xs", state.keepAwakeOnPower ? "text-foreground" : "text-muted-foreground")}>
-            Also on battery
-          </span>
-          <Switch
-            aria-label="Also on battery"
-            checked={state.keepAwakeOnBattery}
-            disabled={!state.keepAwakeOnPower}
-            onCheckedChange={(onBattery) => macSetup.setKeepAwake({ onBattery })}
-          />
-        </div>
-        {!state.pluggedIn && !(state.keepAwakeOnPower && state.keepAwakeOnBattery) ? (
-          <Note tone="warn">On battery: this Mac sleeps when idle until it's plugged in.</Note>
-        ) : null}
-        {state.lidClosingSleeps ? (
-          <Note tone="warn">Closing the lid sleeps this Mac. Keep it open, or connect a display to run it closed.</Note>
-        ) : null}
-        <Note>
-          {state.fileVault === false
-            ? "After a restart, Kanna comes back once you log in, or by itself with automatic login."
-            : "After a restart, Kanna comes back once you log in."}
-        </Note>
-      </Card>
-
-      <Card
+      />
+      {state.keepAwakeOnPower ? (
+        <SetupRow
+          nested
+          // Opens out of the row above it, the switch that made it appear.
+          className="animate-in fade-in slide-in-from-top-1 duration-200 ease-out"
+          title="Also on battery"
+          action={
+            <Switch
+              aria-label="Also on battery"
+              checked={state.keepAwakeOnBattery}
+              onCheckedChange={(onBattery) => macSetup.setKeepAwake({ onBattery })}
+            />
+          }
+        />
+      ) : null}
+      <SetupRow
         icon={<HardDrive className={iconClass} />}
         title="Full Disk Access"
-        action={state.fullDiskAccess ? <Granted /> : (
+        detail={state.fullDiskAccess ? "Agents reach every folder." : FULL_DISK_ACCESS_STEPS}
+        action={state.fullDiskAccess ? <Done /> : (
           <PillButton onClick={macSetup.openFullDiskAccess}>Open Settings</PillButton>
         )}
-      >
-        {state.fullDiskAccess ? (
-          <Note>Agents can work on projects anywhere in your home folder.</Note>
-        ) : (
-          <>
-            <Note>
-              Without it, macOS stops your agents to ask about Desktop, Documents, Downloads and iCloud Drive, one
-              folder at a time.
-            </Note>
-            <Note>{FULL_DISK_ACCESS_STEPS}</Note>
-          </>
-        )}
-      </Card>
-    </div>
+      />
+    </SetupList>
   )
 }

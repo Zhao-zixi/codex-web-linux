@@ -57,9 +57,16 @@ export interface CachedSpan {
   endEntryId: string
 }
 
+/**
+ * Chats held in memory. The memory copy is what a reopened chat resumes from,
+ * so it holds the live window by reference — kept current on every push,
+ * streaming included, at no cost beyond a map write.
+ */
+const MAX_MEMORY_WINDOWS = 16
+
 const memoryWindows = new Map<string, CachedTranscriptWindow>()
 const diskWrites = new Map<string, CachedTranscriptWindow>()
-let diskWriteTimer: ReturnType<typeof setTimeout> | null = null
+let diskWriteScheduled = false
 
 export function readMemoryCachedWindow(chatId: string) {
   const cached = memoryWindows.get(chatId) ?? null
@@ -70,24 +77,67 @@ export function readMemoryCachedWindow(chatId: string) {
   return cached
 }
 
+function setMemoryWindow(window: CachedTranscriptWindow) {
+  memoryWindows.delete(window.chatId)
+  memoryWindows.set(window.chatId, window)
+  while (memoryWindows.size > MAX_MEMORY_WINDOWS) memoryWindows.delete(memoryWindows.keys().next().value!)
+}
+
+/**
+ * Point the memory copy at a chat's current window. No copy, no trim, no
+ * encoding: this runs on every push of a streaming turn. Readers trim.
+ */
+export function rememberWindow(chatId: string, snapshot: Pick<ChatSnapshot, "messages" | "startIndex">) {
+  if (snapshot.messages.length === 0) return
+  setMemoryWindow({
+    schemaVersion: CACHE_SCHEMA_VERSION,
+    chatId,
+    startIndex: snapshot.startIndex,
+    entries: snapshot.messages,
+    updatedAt: Date.now(),
+  })
+}
+
+/**
+ * Idle time rather than the next task. A write queued as a chat closes used
+ * to run in a `setTimeout(0)`, which landed between the click and the next
+ * chat's first frame — its size check stringifies the whole window.
+ * Safari has no `requestIdleCallback`; a short delay clears the switch there.
+ */
+function whenIdle(callback: () => void) {
+  if (typeof requestIdleCallback === "function") requestIdleCallback(callback, { timeout: 2000 })
+  else setTimeout(callback, 250)
+}
+
+/** A settled window: held in memory and queued for disk. */
+export function persistWindow(chatId: string, snapshot: Pick<ChatSnapshot, "messages" | "startIndex">) {
+  if (snapshot.messages.length === 0) return
+  retainWindow({
+    schemaVersion: CACHE_SCHEMA_VERSION,
+    chatId,
+    startIndex: snapshot.startIndex,
+    entries: snapshot.messages,
+    updatedAt: Date.now(),
+  })
+}
+
+/** Trim the window, hold it in memory, and queue it for disk. */
 function retainWindow(value: CachedTranscriptWindow) {
   const trimmed = trimTranscriptWindow(cachedWindowToMessages(value), DEFAULT_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES)
   const window = { ...value, startIndex: trimmed.startIndex, entries: trimmed.messages }
-  memoryWindows.delete(value.chatId)
-  memoryWindows.set(value.chatId, window)
-  while (memoryWindows.size > 8) memoryWindows.delete(memoryWindows.keys().next().value!)
+  setMemoryWindow(window)
   diskWrites.set(value.chatId, window)
   while (diskWrites.size > 8) diskWrites.delete(diskWrites.keys().next().value!)
-  if (diskWriteTimer !== null) return
-  // Encoding and IndexedDB writes occur after navigation can commit.
-  diskWriteTimer = setTimeout(() => {
-    diskWriteTimer = null
+  if (diskWriteScheduled) return
+  diskWriteScheduled = true
+  whenIdle(() => {
+    diskWriteScheduled = false
     const pending = [...diskWrites.values()]
     diskWrites.clear()
     for (const value of pending) {
       if (JSON.stringify(value.entries).length <= MAX_CACHED_WINDOW_BYTES) void writeCachedWindow(value)
     }
-  }, 0)
+  })
 }
 
 function openDatabase(): Promise<IDBDatabase | null> {
@@ -194,10 +244,10 @@ export function cachedWindowToMessages(window: CachedTranscriptWindow) {
 /**
  * Debounced writer, one per chat.
  *
- * Writes are skipped while a turn is streaming: the window changes many times
- * a second, the server stays the source of truth throughout, and encoding it
- * repeatedly would put cache work on the streaming path for no benefit. The
- * turn settling schedules the write that actually matters.
+ * Memory follows every change, streaming included (see `rememberWindow`).
+ * Disk writes are skipped while a turn is streaming: the window changes many
+ * times a second and encoding it repeatedly would put cache work on the
+ * streaming path. The turn settling schedules the write that actually matters.
  */
 export function createTranscriptCacheWriter() {
   let timer: ReturnType<typeof setTimeout> | null = null
@@ -219,6 +269,7 @@ export function createTranscriptCacheWriter() {
   return {
     schedule(chatId: string, snapshot: Pick<ChatSnapshot, "messages" | "startIndex">, isStreaming: boolean) {
       if (snapshot.messages.length === 0) return
+      rememberWindow(chatId, snapshot)
       pending = {
         schemaVersion: CACHE_SCHEMA_VERSION,
         chatId,

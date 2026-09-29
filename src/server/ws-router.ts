@@ -46,6 +46,14 @@ const MAX_TOOL_ENTRY_REQUEST = 256
 /** Coalescing window for transcript pushes — roughly one animation frame. */
 const CHAT_BROADCAST_INTERVAL_MS = 16
 
+/**
+ * Floor between pushes on a background chat subscription (see the `background`
+ * flag on the chat topic). Each push builds that chat's snapshot, a few ms on
+ * average, and a client holding every running chat would otherwise pay it for
+ * chats nobody is looking at on every streamed entry.
+ */
+const BACKGROUND_CHAT_PUSH_INTERVAL_MS = 2_000
+
 export interface ClientState {
   subscriptions: Map<string, SubscriptionTopic>
   snapshotSignatures: Map<string, string>
@@ -82,6 +90,11 @@ export interface ClientState {
    * next patch is diffed against. Absent means the next push is a reset.
    */
   sidebarPatchBases?: Map<string, SidebarSnapshotEntry>
+  /**
+   * When each background chat subscription was last pushed, and the trailing
+   * push waiting out the interval, if any.
+   */
+  chatBackgroundPushes?: Map<string, { at: number; timer: ReturnType<typeof setTimeout> | null }>
 }
 
 interface CreateWsRouterArgs {
@@ -120,6 +133,8 @@ interface CreateWsRouterArgs {
     | "exchangeOpenRouterCode"
     | "onChange"
   > | null
+  /** Overrides `BACKGROUND_CHAT_PUSH_INTERVAL_MS`; tests shorten it. */
+  backgroundChatPushIntervalMs?: number
 }
 
 interface SnapshotBroadcastFilter {
@@ -227,6 +242,7 @@ export function createWsRouter({
   updateManager,
   usageLimits,
   providerAuth,
+  backgroundChatPushIntervalMs = BACKGROUND_CHAT_PUSH_INTERVAL_MS,
 }: CreateWsRouterArgs) {
   const sockets = new Set<ServerWebSocket<ClientState>>()
   let pendingBroadcastTimer: ReturnType<typeof setTimeout> | null = null
@@ -741,6 +757,40 @@ export function createWsRouter({
     }
   }
 
+  /**
+   * Whether a background chat subscription may be pushed now. The first push
+   * always goes; after that one per interval, and a change inside the interval
+   * arms a single trailing push rather than being dropped, so the last state
+   * of a turn — its status flipping to idle — always arrives.
+   */
+  function admitBackgroundChatPush(ws: ServerWebSocket<ClientState>, subscriptionId: string) {
+    const pushes = ws.data.chatBackgroundPushes ??= new Map()
+    const entry = pushes.get(subscriptionId)
+    const now = Date.now()
+    if (!entry) {
+      pushes.set(subscriptionId, { at: now, timer: null })
+      return true
+    }
+    if (entry.timer) return false
+    const wait = entry.at + backgroundChatPushIntervalMs - now
+    if (wait <= 0) {
+      entry.at = now
+      return true
+    }
+    entry.timer = setTimeout(() => {
+      entry.timer = null
+      if (pushes.get(subscriptionId) !== entry || !ws.data.subscriptions.has(subscriptionId)) return
+      void pushSnapshots(ws, { skipPrune: true, onlySubscriptionId: subscriptionId })
+    }, wait)
+    return false
+  }
+
+  function clearBackgroundChatPush(ws: ServerWebSocket<ClientState>, subscriptionId: string) {
+    const entry = ws.data.chatBackgroundPushes?.get(subscriptionId)
+    if (entry?.timer) clearTimeout(entry.timer)
+    ws.data.chatBackgroundPushes?.delete(subscriptionId)
+  }
+
   async function pushSnapshots(
     ws: ServerWebSocket<ClientState>,
     options?: {
@@ -777,6 +827,7 @@ export function createWsRouter({
         continue
       }
       if (topic.type === "chat") {
+        if (topic.background && !admitBackgroundChatPush(ws, id)) continue
         if (store.prepareTranscript && store.getChat(topic.chatId)) await store.prepareTranscript(topic.chatId)
         if (ws.data.subscriptions.get(id) !== topic) continue
         const started = performance.now()
@@ -1625,7 +1676,7 @@ export function createWsRouter({
           // so scrolling stays free of fan-out, and a device sitting on an
           // open chat never gets its viewport yanked by another device.
           for (const [subscriptionId, topic] of ws.data.subscriptions) {
-            if (topic.type === "chat" && topic.chatId === command.chatId) {
+            if (topic.type === "chat" && topic.chatId === command.chatId && !topic.background) {
               (ws.data.chatFollowing ??= new Map()).set(subscriptionId, command.atEnd)
             }
           }
@@ -1677,7 +1728,7 @@ export function createWsRouter({
           const starts = ensureChatWindowStarts(ws)
           let startIndex = 0
           for (const [subscriptionId, topic] of ws.data.subscriptions.entries()) {
-            if (topic.type !== "chat" || topic.chatId !== command.chatId) continue
+            if (topic.type !== "chat" || topic.chatId !== command.chatId || topic.background) continue
             const current = getChatWindowStart(ws, subscriptionId, command.chatId)
             const next = store.widenTranscriptWindowStart(command.chatId, current, {
               assistantMessages: transcriptWindowAssistantMessages(),
@@ -1995,6 +2046,7 @@ export function createWsRouter({
       ws.data.chatFollowing?.clear()
       ws.data.chatWindowChecks?.clear()
       ws.data.sidebarPatchBases?.clear()
+      for (const id of [...(ws.data.chatBackgroundPushes?.keys() ?? [])]) clearBackgroundChatPush(ws, id)
     },
     broadcastSnapshots,
     broadcastChatStateImmediately,
@@ -2035,6 +2087,7 @@ export function createWsRouter({
         ws.data.chatFollowing?.delete(parsed.id)
         ws.data.chatWindowChecks?.delete(parsed.id)
         ws.data.sidebarPatchBases?.delete(parsed.id)
+        clearBackgroundChatPush(ws, parsed.id)
         if (parsed.topic.type === "chat" && store.prepareTranscript && store.getChat(parsed.topic.chatId)) {
           try {
             await store.prepareTranscript(parsed.topic.chatId)
@@ -2089,6 +2142,7 @@ export function createWsRouter({
         ws.data.chatFollowing?.delete(parsed.id)
         ws.data.chatWindowChecks?.delete(parsed.id)
         ws.data.sidebarPatchBases?.delete(parsed.id)
+        clearBackgroundChatPush(ws, parsed.id)
         send(ws, { v: PROTOCOL_VERSION, type: "ack", id: parsed.id })
         return
       }

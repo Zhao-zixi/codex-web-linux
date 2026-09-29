@@ -56,6 +56,7 @@ import { DEFAULT_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES, trimTranscriptWindow } fr
 import { CLOUD_WS_ENDPOINT_PATH, type CloudWsEndpointResponse } from "../../shared/cloud-api"
 import { KannaSocket, type SocketStatus } from "./socket"
 import { useAppSettingsSync } from "./useAppSettingsSync"
+import { useBackgroundChatSubscriptions } from "./useBackgroundChatSubscriptions"
 import { useChatCommands } from "./useChatCommands"
 import { useChatReadAnchor, type ChatReadAnchorState, type ReadAnchorLayoutSource } from "./useChatReadAnchor"
 import { useSendMessage } from "./useSendMessage"
@@ -97,6 +98,8 @@ const EMPTY_OUTLINE: TranscriptOutlineEntry[] = []
 // per render failed its shallow compare and re-rendered the whole viewport on
 // every push.
 const EMPTY_QUEUED_MESSAGES: ChatSnapshot["queuedMessages"] = []
+/** How long a chat open waits on the disk cache before subscribing without it. */
+const DISK_CACHE_WAIT_MS = 30
 
 function sameOriginWsUrl() {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
@@ -508,18 +511,38 @@ export function useKannaState(activeChatId: string | null): KannaState {
       )
     }
 
-    // Memory can seed a resumed subscription. Disk reads never delay the request.
+    // Memory seeds the subscription at once. On a miss the disk read gets a
+    // short head start: it averages under 10 ms, and a subscription that names
+    // the span it holds gets a tail back instead of the whole window, which
+    // otherwise lands as a second full render on top of the cached one. A read
+    // slower than the cap subscribes without it and still paints if it can.
+    let diskWait: ReturnType<typeof setTimeout> | null = null
     const memory = readMemoryCachedWindow(chatId)
-    subscribeToChat(memory)
-    if (!memory) void readCachedWindow(chatId).then(cached => {
-      if (cancelled || receivedSnapshot || !cached) return
-      const trimmed = trimTranscriptWindow(cachedWindowToMessages(cached), transcriptWindowSizeRef.current)
-      setCachedTranscript({ ...cached, entries: trimmed.messages, startIndex: trimmed.startIndex })
-      recordClientPerformance("chat_cache_ready_ms", performance.now() - openedAt)
-    })
+    if (memory) {
+      subscribeToChat(memory)
+    } else {
+      diskWait = setTimeout(() => {
+        diskWait = null
+        subscribeToChat(null)
+      }, DISK_CACHE_WAIT_MS)
+      void readCachedWindow(chatId).then(cached => {
+        if (cancelled) return
+        if (!subscribed) {
+          if (diskWait !== null) clearTimeout(diskWait)
+          diskWait = null
+          subscribeToChat(cached)
+          return
+        }
+        if (receivedSnapshot || !cached) return
+        const trimmed = trimTranscriptWindow(cachedWindowToMessages(cached), transcriptWindowSizeRef.current)
+        setCachedTranscript({ ...cached, entries: trimmed.messages, startIndex: trimmed.startIndex })
+        recordClientPerformance("chat_cache_ready_ms", performance.now() - openedAt)
+      })
+    }
 
     return () => {
       cancelled = true
+      if (diskWait !== null) clearTimeout(diskWait)
       unsubscribe?.()
       // A chat closed mid-turn never reaches a settled write, so take what is
       // pending rather than lose the window.
@@ -709,6 +732,10 @@ export function useKannaState(activeChatId: string | null): KannaState {
     if (!activeChatId || !chatSnapshot || chatSnapshot.runtime.chatId !== activeChatId) return
     transcriptCacheWriter.schedule(activeChatId, chatSnapshot, isProcessing)
   }, [activeChatId, chatSnapshot, isProcessing, transcriptCacheWriter])
+
+  // A chat left mid-turn is followed from the window it was just showing: the
+  // chat subscription's cleanup flushes that window before this effect runs.
+  useBackgroundChatSubscriptions(socket, activeChatId, transcriptWindowSizeRef)
 
   const canCancel = canCancelStatus(effectiveRuntimeStatus ?? undefined)
   const isDraining = runtime?.isDraining ?? false

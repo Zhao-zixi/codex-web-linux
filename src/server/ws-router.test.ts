@@ -2522,7 +2522,7 @@ describe("transcript windows", () => {
     ]
   }
 
-  function createWindowedRouter(entries: Array<Record<string, unknown>>) {
+  function createWindowedRouter(entries: Array<Record<string, unknown>>, overrides: Partial<CreateWsRouterArgs> = {}) {
     const state = createEmptyState()
     state.projectsById.set("project-1", { id: "project-1", localPath: "/tmp/project", title: "Project", createdAt: 1, updatedAt: 1 })
     state.chatsById.set("chat-1", {
@@ -2554,7 +2554,7 @@ describe("transcript windows", () => {
     const settings = createFakeAppSettings({
       getSnapshot: () => ({ ...DEFAULT_APP_SETTINGS_SNAPSHOT, transcript: { windowAssistantMessages: 2 } }),
     })
-    return createTestRouter({ store: fake, appSettings: settings })
+    return createTestRouter({ store: fake, appSettings: settings, ...overrides })
   }
 
   const chatData = (ws: FakeWebSocket, index: number) =>
@@ -2642,5 +2642,48 @@ describe("transcript windows", () => {
     } finally {
       resetServerProvidersForTests()
     }
+  })
+
+  test("a background subscription is pushed at most once per interval, and the last change still lands", async () => {
+    const entries = [...turn(1), ...turn(2)]
+    const router = createWindowedRouter(entries, { backgroundChatPushIntervalMs: 40 })
+    const ws = new FakeWebSocket()
+    router.handleOpen(ws as never)
+
+    await router.handleMessage(ws as never, JSON.stringify({
+      v: 1, type: "subscribe", id: "bg", topic: { type: "chat", chatId: "chat-1", background: true },
+    }))
+    // The first push is never held back.
+    expect(ws.sent).toHaveLength(1)
+
+    // Two changes inside the interval: neither goes out yet.
+    entries.push(...turn(3))
+    await router.broadcastSnapshots()
+    entries.push(...turn(4))
+    await router.broadcastSnapshots()
+    expect(ws.sent).toHaveLength(1)
+
+    // One trailing push carries both.
+    await Bun.sleep(80)
+    expect(ws.sent).toHaveLength(2)
+    expect(chatData(ws, 1).messages.map((entry) => entry._id)).toEqual(["p3", "a3", "b3", "p4", "a4", "b4"])
+  })
+
+  test("unsubscribing a background chat cancels its pending push", async () => {
+    const entries = [...turn(1), ...turn(2)]
+    const router = createWindowedRouter(entries, { backgroundChatPushIntervalMs: 40 })
+    const ws = new FakeWebSocket()
+    router.handleOpen(ws as never)
+    await router.handleMessage(ws as never, JSON.stringify({
+      v: 1, type: "subscribe", id: "bg", topic: { type: "chat", chatId: "chat-1", background: true },
+    }))
+    entries.push(...turn(3))
+    await router.broadcastSnapshots()
+
+    await router.handleMessage(ws as never, JSON.stringify({ v: 1, type: "unsubscribe", id: "bg" }))
+    await Bun.sleep(80)
+    // The first push and the unsubscribe ack, nothing after.
+    expect(ws.sent).toHaveLength(2)
+    expect(ws.sent[1]).toEqual({ v: PROTOCOL_VERSION, type: "ack", id: "bg" })
   })
 })

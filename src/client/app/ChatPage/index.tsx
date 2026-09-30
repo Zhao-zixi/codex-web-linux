@@ -26,7 +26,7 @@ import type { OpenLocalLinkTarget } from "../../components/messages/shared"
 import { shouldOpenLocalFileLinkInEditor } from "../../lib/pathUtils"
 import { getChatViewer, openViewer, useChatViewer, useViewerStore } from "../../stores/viewerStore"
 import type { DiffViewerContext } from "../../components/chat-ui/git/DiffViewer"
-import { useProjectRepoUrl } from "../../stores/sidebarStore"
+import { useProjectRepoUrl, useSidebarChatHasMessages } from "../../stores/sidebarStore"
 import { DEFAULT_PROJECT_TERMINAL_LAYOUT, isTerminalVisible, useTerminalLayoutStore } from "../../stores/terminalLayoutStore"
 import { usePaneChatKey } from "../../lib/paneVisibility"
 import { useTerminalPreferencesStore } from "../../stores/terminalPreferencesStore"
@@ -507,11 +507,15 @@ export function ChatPage() {
   const [defaultModelsDialogOpen, setDefaultModelsDialogOpen] = useState(false)
   // While the next chat's snapshot loads there's no runtime to judge by, so the
   // empty state holds whatever it last was. Dropping it for that gap is what
-  // made one new chat to another fade out and back in.
+  // made one new chat to another fade out and back in. Not for a chat the
+  // sidebar knows has messages, though: that one is headed for a transcript,
+  // and holding the empty state there left the new chat page's list over it
+  // until the snapshot came.
   const settledShowEmptyStateRef = useRef(false)
   const isChatLoading = Boolean(state.activeChatId && !state.runtime)
+  const activeChatHasMessages = useSidebarChatHasMessages(state.activeChatId)
   const showEmptyState = isChatLoading
-    ? settledShowEmptyStateRef.current
+    ? settledShowEmptyStateRef.current && !activeChatHasMessages
     : state.messages.length === 0 && state.runtime?.title === "New Chat"
   settledShowEmptyStateRef.current = showEmptyState
   const projectId = state.activeProjectId

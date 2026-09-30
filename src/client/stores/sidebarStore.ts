@@ -138,6 +138,23 @@ export function useSidebarChatStatus(chatId: string | null): KannaStatus | null 
   })
 }
 
+/**
+ * Whether the sidebar has heard of a message in the chat. Known before the
+ * chat's own snapshot arrives, like the status above; false for an unknown
+ * chat.
+ */
+export function useSidebarChatHasMessages(chatId: string | null): boolean {
+  return useSidebarStore((state) => {
+    if (!chatId) return false
+    for (const group of state.data.projectGroups) {
+      const chat = group.chats.find((row) => row.chatId === chatId)
+        ?? (group.archivedChats ?? []).find((row) => row.chatId === chatId)
+      if (chat) return chat.lastMessageAt != null
+    }
+    return false
+  })
+}
+
 /** The lead project group's identity — the app's fallback when nothing is open. */
 export function useFirstProjectGroup() {
   return useSidebarStore(useShallow((state) => ({

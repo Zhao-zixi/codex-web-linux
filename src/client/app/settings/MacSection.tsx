@@ -1,10 +1,17 @@
 import { Check } from "lucide-react"
 import { FULL_DISK_ACCESS_STEPS, useMacSetupState } from "../../components/auth/MacSetupStep"
 import { Button } from "../../components/ui/button"
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select"
 import { Switch } from "../../components/ui/switch"
-import { macSetup } from "../../lib/macApp"
+import { macSetup, type MacQuitBehavior } from "../../lib/macApp"
 import { SETTINGS_ROWS } from "./registry"
-import { SettingsGroup, SettingsGroups, SettingsPlaceholder, SettingsRow } from "./shared"
+import { SETTINGS_CONTROL_CLASS, SettingsGroup, SettingsGroups, SettingsPlaceholder, SettingsRow } from "./shared"
+
+const QUIT_BEHAVIOR_OPTIONS: { value: MacQuitBehavior; label: string }[] = [
+  { value: "ask", label: "Ask" },
+  { value: "keepOnline", label: "Keep Running" },
+  { value: "goOffline", label: "Stop Kanna" },
+]
 
 /**
  * Settings › This Mac, in Kanna for Mac only: the setup wizard's This Mac
@@ -79,6 +86,27 @@ export function MacSection() {
             aria-label={SETTINGS_ROWS.keepAwakeOnBattery.title}
           />
         </SettingsRow>
+        {state.quitBehavior ? (
+          <SettingsRow def={SETTINGS_ROWS.quitBehavior}>
+            <Select
+              value={state.quitBehavior}
+              onValueChange={(value) => macSetup.setQuitBehavior(value as MacQuitBehavior)}
+            >
+              <SelectTrigger className={SETTINGS_CONTROL_CLASS}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  {QUIT_BEHAVIOR_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </SettingsRow>
+        ) : null}
       </SettingsGroup>
 
       <SettingsGroup title="Permissions">

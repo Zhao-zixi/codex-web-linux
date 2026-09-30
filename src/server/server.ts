@@ -792,6 +792,9 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     updateManager,
     analytics,
     stop: shutdown,
+    /** For the single-instance lock's status (instance-socket.ts), which the
+     *  Mac app's quit dialog shows. */
+    state: () => ({ runningChats: agent.activeTurns.size, cloud: Boolean(options.cloud ?? selfPairedCloud) }),
   }
 }
 

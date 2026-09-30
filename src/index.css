@@ -877,6 +877,55 @@
     animation: kanna-empty-state-text-in 0.38s ease-out both;
   }
 
+  /*
+   * The new chat page's chat list, arriving a row at a time once the hero
+   * line has typed out, so the eye runs down the list instead of taking it
+   * in as one block. Short and small on purpose: the page opens tens of
+   * times a day, so it rises 4px, not a slide, and every row has started
+   * within 280ms. Rows past the eighth share the last step; a longer tail
+   * would read as the list loading.
+   *
+   * Delays by position rather than a per-row index, since the list's direct
+   * children mix the search field, group labels and rows. The first child is
+   * the sticky sentinel and the second the field, which lead together.
+   * `backwards` holds the start frame through the delay and hands back to
+   * the stylesheet at the end; the component drops the class once it's done
+   * so rows mounted later (a search) don't replay it.
+   */
+  .kanna-empty-state-cascade > * {
+    animation: kanna-empty-state-cascade-in 240ms var(--ease-snappy) backwards;
+    animation-delay: 280ms;
+  }
+
+  .kanna-empty-state-cascade > :nth-child(-n + 2) { animation-delay: 0ms; }
+  .kanna-empty-state-cascade > :nth-child(3) { animation-delay: 35ms; }
+  .kanna-empty-state-cascade > :nth-child(4) { animation-delay: 70ms; }
+  .kanna-empty-state-cascade > :nth-child(5) { animation-delay: 105ms; }
+  .kanna-empty-state-cascade > :nth-child(6) { animation-delay: 140ms; }
+  .kanna-empty-state-cascade > :nth-child(7) { animation-delay: 175ms; }
+  .kanna-empty-state-cascade > :nth-child(8) { animation-delay: 210ms; }
+  .kanna-empty-state-cascade > :nth-child(9) { animation-delay: 245ms; }
+
+  @keyframes kanna-empty-state-cascade-in {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+  }
+
+  /* Still one after the other, without the rise. */
+  @media (prefers-reduced-motion: reduce) {
+    .kanna-empty-state-cascade > * {
+      animation-name: kanna-empty-state-cascade-fade-in;
+    }
+  }
+
+  @keyframes kanna-empty-state-cascade-fade-in {
+    from {
+      opacity: 0;
+    }
+  }
+
   .kanna-typewriter-cursor-slot {
     display: inline-flex;
     align-items: center;

@@ -42,13 +42,30 @@ export function openInMacApp(localUrl: string, platform: NodeJS.Platform = proce
 
 /**
  * A server the app started should go when the app goes, crash included. A
- * crashed parent does not signal its children; they get reparented to launchd
- * (pid 1), so poll for that. The supervisor and its child both watch: the
- * supervisor for the app, the child for a supervisor that was killed outright.
+ * crashed parent does not signal its children, so poll for the parent. The
+ * supervisor and its child both watch: the supervisor for the app, the child
+ * for a supervisor that was killed outright.
+ *
+ * Poll the parent's pid, not `process.ppid`: Bun reads that once at start,
+ * so it never turns into launchd's 1 when the parent dies.
  */
-export function exitWithParent(onOrphaned: () => void, env: Record<string, string | undefined> = process.env) {
-  if (env[EXIT_WITH_PARENT_ENV_VAR] !== "1") return
+export function exitWithParent(
+  onOrphaned: () => void,
+  env: Record<string, string | undefined> = process.env,
+  parent: number = process.ppid,
+) {
+  if (env[EXIT_WITH_PARENT_ENV_VAR] !== "1" || parent <= 1) return
   setInterval(() => {
-    if (process.ppid === 1) onOrphaned()
+    if (!isAlive(parent)) onOrphaned()
   }, 2_000).unref()
+}
+
+function isAlive(pid: number) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    // EPERM: it's there, just not ours to signal.
+    return (error as NodeJS.ErrnoException).code === "EPERM"
+  }
 }

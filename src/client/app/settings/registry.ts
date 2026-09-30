@@ -252,6 +252,12 @@ export const SETTINGS_ROWS = defineRows({
     description: "Stay awake on battery too, not just when plugged in.",
     keywords: ["sleep", "battery", "power"],
   },
+  quitBehavior: {
+    sectionId: "mac",
+    title: "When You Quit",
+    description: "Kanna can keep running after the app quits, so this Mac stays online and running chats keep going.",
+    keywords: ["quit", "close", "background", "offline", "online", "keep running", "stop"],
+  },
   fullDiskAccess: {
     sectionId: "mac",
     title: "Full Disk Access",

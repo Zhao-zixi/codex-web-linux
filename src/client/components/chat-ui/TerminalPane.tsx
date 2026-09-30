@@ -472,7 +472,13 @@ export function TerminalPane({
       const terminal = new Terminal(getTerminalOptions(scrollback, theme))
       const serializeAddon = new SerializeAddon()
       terminal.loadAddon(serializeAddon)
-      terminal.loadAddon(new WebLinksAddon())
+      // The addon's default handler opens a blank window and points it at the
+      // link afterwards. The Mac app gives blank windows a real in-app popup
+      // (for the OpenRouter sign-in), so pass the URL up front and let it go
+      // to the browser.
+      terminal.loadAddon(new WebLinksAddon((_event, uri) => {
+        window.open(uri, "_blank", "noopener,noreferrer")
+      }))
       // Must match the shadow terminal on the server: xterm defaults to Unicode 6
       // width tables, which measure astral emoji as one cell instead of two. If
       // the two ends disagree, replayed snapshots land in the wrong columns.

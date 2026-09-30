@@ -18,6 +18,7 @@ import { fleet } from "./fleet"
 import { handleMacSetup, keepAwake } from "./mac-setup"
 import { dragWindow } from "./native-window"
 import { showSheet } from "./panels"
+import { installQuitHandler, isQuitting } from "./quit"
 import { agent, isLoopback } from "./server-agent"
 import { devCheckout, isCheckout, lastCustomURL, setDevCheckout, type ServerMode } from "./server-mode"
 import { shellEnv } from "./shell-env"
@@ -34,7 +35,6 @@ import { MainWindow } from "./window"
  */
 
 let main: MainWindow | null = null
-let quitting = false
 const pendingURLs: string[] = []
 
 if (!app.requestSingleInstanceLock()) {
@@ -59,10 +59,15 @@ app.whenReady().then(() => {
 
   main = new MainWindow()
   main.onChange = rebuildMenu
+  // Closing the window is quitting, which may ask about the server first
+  // (quit.ts): the window stays until that's answered, and stays on Cancel.
+  main.win.on("close", (event) => {
+    if (isQuitting()) return
+    event.preventDefault()
+    app.quit()
+  })
   main.win.on("closed", () => {
     main = null
-    // Closing the window is quitting, and the server the app started goes
-    // with it. Open at Login is how a Mac stays online.
     app.quit()
   })
   rebuildMenu()
@@ -95,12 +100,7 @@ app.whenReady().then(() => {
 
 app.on("did-become-active", () => void fleet.refresh())
 
-app.on("before-quit", (event) => {
-  if (quitting || !agent.isOwned) return
-  event.preventDefault()
-  quitting = true
-  agent.stop(() => app.quit())
-})
+installQuitHandler(() => main?.win ?? null)
 
 // Page messages
 

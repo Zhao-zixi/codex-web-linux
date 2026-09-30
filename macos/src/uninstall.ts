@@ -4,6 +4,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { disableLoginItem } from "./mac-setup"
+import { quitNow } from "./quit"
 import { showSheet } from "./panels"
 import { shellEnv } from "./shell-env"
 
@@ -90,8 +91,9 @@ async function start(window: BrowserWindow, flags: string[]) {
     await failed(window, String(error))
     return
   }
-  // Quitting stops the server the app started; the script waits for that.
-  app.quit()
+  // Stop the app's server without asking (the script stops a terminal's).
+  // The script waits for the app to go.
+  void quitNow("goOffline")
 }
 
 async function failed(window: BrowserWindow, message: string) {

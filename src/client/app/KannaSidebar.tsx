@@ -1,6 +1,6 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
-import { ArrowLeft, Flower, House, Loader2, PanelLeft, Search, Plus, Settings, Settings2, SquarePen, Terminal } from "lucide-react"
-import { useLocation, useNavigate } from "react-router-dom"
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type CSSProperties } from "react"
+import { ArrowLeft, ArrowRight, Flower, House, Loader2, PanelLeft, Search, Plus, Settings, Settings2, SquarePen, Terminal } from "lucide-react"
+import { useLocation, useNavigate, useNavigationType } from "react-router-dom"
 import { APP_NAME } from "../../shared/branding"
 import { Button } from "../components/ui/button"
 import { StillTooltips } from "../components/ui/tooltip"
@@ -116,12 +116,47 @@ interface KannaSidebarProps {
 }
 
 /**
- * The word in the header's DEV / Nightly / UPDATE pills. Caps sit above the
+ * The word in the header's DEV / NIGHTLY / UPDATE pills. Caps sit above the
  * middle of a line box, and tracking adds space after the last letter too, so
  * the box is trimmed to the cap height and the trailing tracking taken back:
  * centered both ways in the pill's fixed height.
  */
 const PILL_WORD = "block leading-none -mr-[0.05em] [text-box:trim-both_cap_alphabetic]"
+
+const VERSION_PILL_TONES = {
+  dev: "border-border bg-muted text-muted-foreground",
+  update: "bg-logo/20 border-logo/20 text-logo hover:bg-logo hover:text-foreground",
+  nightly: "bg-blue-500/15 border-blue-500/25 text-blue-600 hover:bg-blue-500 hover:text-white hover:border-blue-500 dark:text-blue-400 dark:hover:text-white",
+} as const
+
+/** The DEV / UPDATE / NIGHTLY pill: one shape, the tone sets text and color. */
+function VersionPill({ tone, label, busy, ...props }: {
+  tone: keyof typeof VERSION_PILL_TONES
+  label: string
+  busy?: boolean
+} & Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children">) {
+  const className = cn(
+    "inline-flex h-5 shrink-0 items-center justify-center whitespace-nowrap rounded-full border px-2 text-[11px] font-bold uppercase tracking-wider transition-colors",
+    VERSION_PILL_TONES[tone]
+  )
+  const content = (
+    <>
+      {busy ? <Loader2 className="mr-1.5 h-3 w-3 animate-spin" /> : null}
+      <span className={PILL_WORD}>{label}</span>
+    </>
+  )
+  // Without an action it is a label, not a button.
+  if (!props.onClick) return <span className={className} title={props.title}>{content}</span>
+  return (
+    <button
+      type="button"
+      {...props}
+      className={cn(className, "cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background disabled:pointer-events-none")}
+    >
+      {content}
+    </button>
+  )
+}
 
 function KannaSidebarImpl({
   activeChatId,
@@ -549,6 +584,27 @@ function KannaSidebarImpl({
     ? updateSnapshot.latestVersion === `${updateSnapshot.currentVersion}-dev`
     : false
   const isUpdating = updateSnapshot?.status === "updating" || updateSnapshot?.status === "restart_pending"
+  const versionBadge = showDevBadge ? (
+    <VersionPill tone="dev" label="Dev" title="Development build" />
+  ) : showNightlyUpdate ? (
+    <VersionPill
+      tone="nightly"
+      label="Nightly"
+      busy={isUpdating}
+      disabled={isUpdating}
+      onClick={() => navigate("/settings/labs#nightlyBuilds")}
+      title="New nightly available. Open Labs to build latest main."
+    />
+  ) : showUpdateButton ? (
+    <VersionPill
+      tone="update"
+      label="Update"
+      busy={isUpdating}
+      disabled={isUpdating}
+      onClick={onOpenChangelog}
+      title={updateSnapshot?.latestVersion ? `Update to ${updateSnapshot.latestVersion}` : "Update Kanna"}
+    />
+  ) : null
 
   return (
     // Scanned by sweeping the pointer down the list; see StillTooltips.
@@ -574,6 +630,7 @@ function KannaSidebarImpl({
               size="icon"
               onClick={onExpand}
               title="Expand sidebar"
+              className="hover:!border-border/0 hover:!bg-transparent"
             >
               <PanelLeft className="h-5 w-5" />
             </Button>
@@ -605,18 +662,18 @@ function KannaSidebarImpl({
             window, has no divider under it (a title bar runs into the
             content), and its content centers on the traffic lights. The card
             starts 9px down (8px margin, 1px border), so a center C needs a
-            height of 2 × (C − 9). The traffic lights and the sidebar toggle
-            (below) take the left end. */}
+            height of 2 × (C − 9). The traffic lights, the sidebar toggle and
+            back/forward (below) take the left end. */}
         <div
           data-window-drag
-          className="px-2.5 h-[64px] md:h-auto md:py-1 border-b grid grid-cols-[84px_minmax(0,1fr)_84px] items-center md:pl-3 md:pr-1 md:flex md:justify-between mac-app:md:h-[calc(var(--mac-traffic-lights-center)*2-18px)] mac-app:md:border-b-0 mac-app:md:py-0 mac-app:md:pl-[calc(var(--mac-traffic-lights-inset)+27px)]"
+          className="px-2.5 h-[64px] md:h-auto md:py-1 border-b grid grid-cols-[84px_minmax(0,1fr)_84px] items-center md:pl-3 md:pr-1 md:flex md:justify-between mac-app:md:h-[calc(var(--mac-traffic-lights-center)*2-18px)] mac-app:md:border-b-0 mac-app:md:py-0 mac-app:md:pl-[calc(var(--mac-traffic-lights-inset)+83px)]"
         >
           <div className="md:hidden flex">
             <Button
               variant="ghost"
               size="icon"
               className={cn(
-                "w-[42px] rounded-lg hover:!border-border/0 !border-0",
+                "w-[42px] rounded-lg hover:!border-border/0 hover:!bg-transparent !border-0",
                 isSettingsActive ? "text-foreground" : "text-muted-foreground"
               )}
               onClick={() => navigate("/settings/general")}
@@ -655,7 +712,7 @@ function KannaSidebarImpl({
               <Button
                 variant="ghost"
                 size="icon"
-                className="size-10 rounded-lg hover:!border-border/0 md:hidden"
+                className="size-10 rounded-lg hover:!border-border/0 hover:!bg-transparent md:hidden"
                 onClick={() => window.dispatchEvent(new CustomEvent(OPEN_COMMAND_PALETTE_EVENT))}
                 title="Search"
               >
@@ -666,7 +723,7 @@ function KannaSidebarImpl({
               variant="ghost"
               size="icon"
               onClick={newSidebarEnabled ? () => openCommandPalette() : () => navigate("/home")}
-              className="size-10 rounded-lg hover:!border-border/0 md:hidden"
+              className="size-10 rounded-lg hover:!border-border/0 hover:!bg-transparent md:hidden"
               title={newSidebarEnabled ? "Search" : "New project"}
             >
               {newSidebarEnabled ? <Search className="h-5 w-5" /> : <Plus className="h-5 w-5" />}
@@ -677,7 +734,7 @@ function KannaSidebarImpl({
                 size="icon"
                 onClick={() => navigate("/home")}
                 className={cn(
-                  "size-10 rounded-lg hover:!border-border/0 md:hidden",
+                  "size-10 rounded-lg hover:!border-border/0 hover:!bg-transparent md:hidden",
                   isLocalProjectsActive ? "text-foreground" : "text-muted-foreground"
                 )}
                 title="Projects"
@@ -685,39 +742,14 @@ function KannaSidebarImpl({
                 <House className="h-5 w-5" />
               </Button>
             ) : null}
-            {showDevBadge ? (
-              <span
-                className="mr-1 hidden md:inline-flex h-5 items-center rounded-full border border-border bg-muted px-2 text-[11px] font-bold tracking-wider text-muted-foreground"
-                title="Development build"
-              >
-                <span className={PILL_WORD}>DEV</span>
-              </span>
-            ) : showUpdateButton ? (
-              <Button
-                variant="outline"
-                size="sm"
-                className={cn(
-                  "hidden md:inline-flex rounded-full !h-5 mr-1 py-0 px-2 text-[11px] font-bold tracking-wider",
-                  showNightlyUpdate
-                    ? "bg-blue-500/15 border-blue-500/25 text-blue-600 hover:bg-blue-500 hover:text-white hover:border-blue-500 dark:text-blue-400 dark:hover:text-white"
-                    : "bg-logo/20 hover:bg-logo text-logo border-logo/20 hover:text-foreground hover:border-logo/20"
-                )}
-                onClick={showNightlyUpdate ? () => navigate("/settings/labs#nightlyBuilds") : onOpenChangelog}
-                disabled={isUpdating}
-                title={showNightlyUpdate
-                  ? "New nightly available. Open Labs to build latest main."
-                  : updateSnapshot?.latestVersion ? `Update to ${updateSnapshot.latestVersion}` : "Update Kanna"}
-              >
-                {isUpdating ? <Loader2 className="mr-1.5 h-3 w-3 animate-spin" /> : null}
-                <span className={PILL_WORD}>{showNightlyUpdate ? "Nightly" : "UPDATE"}</span>
-              </Button>
-            ) : null}
+            {/* The app shows it beside the logo instead (below). */}
+            <div className="hidden md:flex mr-1 mac-app:md:hidden">{versionBadge}</div>
             {newSidebarEnabled ? (
               <Button
                 variant="ghost"
                 size="icon"
                 onClick={() => openCommandPalette("add-project")}
-                className="hidden md:inline-flex h-10 w-auto rounded-lg px-1.5 pl-2 hover:!border-border/0 mac-app:md:h-8"
+                className="hidden md:inline-flex h-10 w-auto rounded-lg px-1.5 pl-2 hover:!border-border/0 hover:!bg-transparent mac-app:md:h-8"
                 title="Add project"
               >
                 <Plus className="size-4" />
@@ -728,7 +760,7 @@ function KannaSidebarImpl({
               size="icon"
               onClick={newSidebarEnabled ? () => openCommandPalette() : () => navigate("/home")}
               className={cn(
-                "hidden md:inline-flex h-10 w-auto rounded-lg pl-1.5 pr-3 hover:!border-border/0 mac-app:md:h-8 mac-app:md:pr-1.5",
+                "hidden md:inline-flex h-10 w-auto rounded-lg pl-1.5 pr-3 hover:!border-border/0 hover:!bg-transparent mac-app:md:h-8 mac-app:md:pr-1.5",
                 !newSidebarEnabled && "pl-2 mac-app:md:pr-2"
               )}
               title={newSidebarEnabled ? "Search" : "New project"}
@@ -753,16 +785,21 @@ function KannaSidebarImpl({
                 traffic lights, so the pair leads the sidebar here instead. It
                 goes to Projects, as the header's wordmark does. 7px in centers
                 the 20px flower on the 16px icons below (theirs start 9px in:
-                1px border + px-2). */}
-            <button
-              type="button"
-              onClick={() => navigate("/home")}
-              title="Projects"
-              className="hidden mac-app:md:flex items-center gap-2 pl-[7px] pr-[9px] pt-1 pb-2"
-            >
-              <Flower className="size-5 text-logo" />
-              <span className="font-logo text-base uppercase text-slate-600 dark:text-slate-100">{APP_NAME}</span>
-            </button>
+                1px border + px-2). The version badge ends at the header's
+                search glyph: 1px border + pr-1 + the button's pr-1.5 + the
+                glyph's ~1px inset, against this block's 1px border + 7px. */}
+            <div className="hidden mac-app:md:flex items-center justify-between pt-1 pb-2">
+              <button
+                type="button"
+                onClick={() => navigate("/home")}
+                title="Projects"
+                className="flex items-center gap-2 pl-[7px] pr-[9px]"
+              >
+                <Flower className="size-5 text-logo" />
+                <span className="font-logo text-base uppercase text-slate-600 dark:text-slate-100">{APP_NAME}</span>
+              </button>
+              <div className="flex mr-1">{versionBadge}</div>
+            </div>
             {/* The focus row joins this block rather than sitting below it, so
                 it inherits the same width, padding and row rhythm as the
                 buttons — which is the whole of its treatment. It leads the
@@ -786,7 +823,9 @@ function KannaSidebarImpl({
                       <button
                         type="button"
                         onClick={onCompose}
-                        className="flex w-full items-center gap-2 rounded-lg border border-border/0 px-2 py-1.5 max-md:py-2 text-sm max-md:text-base text-muted-foreground transition-colors hover:border-border hover:bg-muted"
+                        // Hover only lifts the text, as the icon buttons' does.
+                        // No box, so it never frames the filter button.
+                        className="flex w-full items-center gap-2 rounded-lg border border-border/0 px-2 py-1.5 max-md:py-2 text-sm max-md:text-base text-muted-foreground transition-colors hover:text-accent-foreground"
                       >
                         <SquarePen className="h-4 w-4 shrink-0" />
                         <span>New Chat</span>
@@ -995,20 +1034,24 @@ function KannaSidebarImpl({
         />
       </div>
 
-      {/* The Mac app's sidebar toggle: one button pinned beside the traffic
-          lights, so it is the same size in the same spot whether the sidebar
-          is open (collapse) or closed (expand). The sidebar header and the
-          chat navbar leave room for it. After the card, so it stacks above
-          it; dialogs portal in later and stack above both. */}
-      <Button
-        variant="ghost"
-        size="icon"
-        onClick={collapsed ? onExpand : onCollapse}
-        title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-        className="hidden mac-app:md:inline-flex fixed z-50 size-7 rounded-lg text-muted-foreground hover:!border-border/0 left-[var(--mac-traffic-lights-inset)] top-[calc(var(--mac-traffic-lights-center)-14px)]"
-      >
-        <PanelLeft className="size-4" />
-      </Button>
+      {/* The Mac app's sidebar toggle and back/forward: pinned beside the
+          traffic lights, so they are the same size in the same spot whether
+          the sidebar is open (collapse) or closed (expand). The sidebar
+          header and the chat navbar leave room for them (84px). After the
+          card, so they stack above it; dialogs portal in later and stack
+          above both. */}
+      <div className="hidden mac-app:md:flex fixed z-50 items-center left-[var(--mac-traffic-lights-inset)] top-[calc(var(--mac-traffic-lights-center)-14px)]">
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={collapsed ? onExpand : onCollapse}
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          className="size-7 rounded-lg text-muted-foreground hover:!border-border/0 hover:!bg-transparent"
+        >
+          <PanelLeft className="size-4" />
+        </Button>
+        <MacHistoryButtons />
+      </div>
 
       <ArchivedChatsDialog
         open={Boolean(archivedProject)}
@@ -1022,6 +1065,49 @@ function KannaSidebarImpl({
         onRestoreChat={handleRestoreChat}
       />
     </StillTooltips>
+  )
+}
+
+/**
+ * The page can't ask the window whether it can go back or forward, so it
+ * reads React Router's history index and remembers the furthest one this
+ * load has seen: a push cuts off everything ahead of it, a pop keeps it.
+ * History from before a reload counts as no forward until visited again.
+ */
+function MacHistoryButtons() {
+  const location = useLocation()
+  const navigationType = useNavigationType()
+  const index = (window.history.state as { idx?: number } | null)?.idx ?? 0
+  const [lastIndex, setLastIndex] = useState(index)
+
+  useEffect(() => {
+    setLastIndex((last) => navigationType === "PUSH" ? index : Math.max(last, index))
+  }, [location.key, navigationType, index])
+
+  const className = "size-7 rounded-lg text-muted-foreground hover:!border-border/0 hover:!bg-transparent"
+  return (
+    <>
+      <Button
+        variant="ghost"
+        size="icon"
+        disabled={index <= 0}
+        onClick={() => window.history.back()}
+        title="Back"
+        className={className}
+      >
+        <ArrowLeft className="size-4" />
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        disabled={index >= lastIndex}
+        onClick={() => window.history.forward()}
+        title="Forward"
+        className={className}
+      >
+        <ArrowRight className="size-4" />
+      </Button>
+    </>
   )
 }
 

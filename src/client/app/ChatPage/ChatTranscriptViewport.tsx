@@ -1278,7 +1278,13 @@ const TranscriptScrollerBody = memo(function TranscriptScrollerBody({
                       chat opens; a phone's column is a closed sheet. */}
                   {showEmptyStateUsage ? <EmptyStateUsageCards socket={socket} activeChatId={activeChatId} /> : null}
                   {emptyStateProjectId ? (
-                    <EmptyStateProjectChats projectId={emptyStateProjectId} activeChatId={activeChatId} />
+                    <EmptyStateProjectChats
+                      projectId={emptyStateProjectId}
+                      activeChatId={activeChatId}
+                      // Only on the entrance that types the hero line out;
+                      // a page that opens already typed shows the list as is.
+                      cascadeIn={emptyStateAnimatesIn && isEmptyStateTypingComplete}
+                    />
                   ) : null}
                 </div>
               </div>

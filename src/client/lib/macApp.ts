@@ -27,7 +27,12 @@ export interface MacSetupState {
   lidClosingSleeps: boolean | null
   fileVault: boolean | null
   fullDiskAccess: boolean
+  /** What quitting the app does to its server (macos/src/quit.ts). Missing
+   *  from apps before 2.1. */
+  quitBehavior?: MacQuitBehavior
 }
+
+export type MacQuitBehavior = "ask" | "keepOnline" | "goOffline"
 
 declare global {
   interface Window {
@@ -88,4 +93,5 @@ export const macSetup = {
   setKeepAwake: (change: { onPower?: boolean; onBattery?: boolean }) =>
     postToMacApp({ type: "macSetup.setKeepAwake", ...change }),
   openFullDiskAccess: () => postToMacApp({ type: "macSetup.openFullDiskAccess" }),
+  setQuitBehavior: (value: MacQuitBehavior) => postToMacApp({ type: "macSetup.setQuitBehavior", value }),
 }

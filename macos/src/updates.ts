@@ -1,5 +1,6 @@
 import { app, dialog, type BrowserWindow } from "electron"
 import { autoUpdater } from "electron-updater"
+import { quitNow } from "./quit"
 
 /**
  * Updates to this app, the window. Kanna itself is the global npm install and
@@ -65,5 +66,6 @@ async function offerRestart(version: string) {
     cancelId: 1,
   }
   const { response } = window ? await dialog.showMessageBox(window, options) : await dialog.showMessageBox(options)
-  if (response === 0) autoUpdater.quitAndInstall()
+  // The server keeps running through it: only the window is updating.
+  if (response === 0) void quitNow("keepOnline", () => autoUpdater.quitAndInstall())
 }

@@ -88,6 +88,9 @@ if ! $KEEP_CLOUD; then
 fi
 
 step "Quitting Kanna"
+# A server kept running after the app quit, or a terminal's: stopped
+# cleanly first. pkill below catches a kanna from before `kanna stop`.
+command -v kanna >/dev/null 2>&1 && kanna stop >/dev/null 2>&1
 osascript -e 'tell application id "sh.kanna.mac" to quit' >/dev/null 2>&1
 osascript -e 'tell application id "sh.kanna.mac.dev" to quit' >/dev/null 2>&1
 sleep 1

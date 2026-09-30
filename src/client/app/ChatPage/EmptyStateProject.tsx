@@ -17,6 +17,8 @@ import { useSidebarStore } from "../../stores/sidebarStore"
 
 const RECENT_CHAT_LIMIT = 12
 const SEARCH_RESULT_LIMIT = 20
+/** The cascade's last start (280ms) plus its length (240ms), in index.css. */
+const CASCADE_MS = 520
 
 /**
  * The new chat page's project, in two parts that share one set of pieces
@@ -90,13 +92,28 @@ function useStuckUnderHeader(sentinelRef: RefObject<HTMLElement | null>, mounted
  * swaps the headings for one list ranked by match, over titles and prompts
  * and including archived chats, since a search is looking for something
  * specific. Enter opens the top match; Escape clears.
+ *
+ * `cascadeIn` plays the rows in one after another (the cascade in
+ * index.css), once. Typing a search ends it early, since results should
+ * land at once.
  */
-export function EmptyStateProjectChats({ projectId, activeChatId }: { projectId: string; activeChatId: string | null }) {
+export function EmptyStateProjectChats({ projectId, activeChatId, cascadeIn = false }: {
+  projectId: string
+  activeChatId: string | null
+  cascadeIn?: boolean
+}) {
   const navigate = useNavigate()
   const group = useProjectGroup(projectId)
   const [nowMs] = useState(() => Date.now())
   const [query, setQuery] = useState("")
   const trimmedQuery = query.trim()
+  const [cascadeDone, setCascadeDone] = useState(false)
+  useEffect(() => {
+    if (!cascadeIn) return
+    const timeout = window.setTimeout(() => setCascadeDone(true), CASCADE_MS)
+    return () => window.clearTimeout(timeout)
+  }, [cascadeIn])
+  const cascading = cascadeIn && !cascadeDone
 
   const threads = useMemo(
     () => (group ? flattenSidebarThreads({ projectGroups: [group] }).filter((thread) => thread.chatId !== activeChatId) : []),
@@ -139,7 +156,7 @@ export function EmptyStateProjectChats({ projectId, activeChatId }: { projectId:
   return (
     // ⌘K's width (CommandDialog's max-w-xl), so the same rows read the same
     // in both places rather than stretching to the composer here.
-    <div className="relative mx-auto flex w-full max-w-xl flex-col gap-px text-left">
+    <div className={cn("relative mx-auto flex w-full max-w-xl flex-col gap-px text-left", cascading && "kanna-empty-state-cascade")}>
       {/* Where the field sits unpinned. Once this passes under the header,
           the field is stuck. */}
       <div ref={stuckSentinelRef} aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-px" />
@@ -167,7 +184,10 @@ export function EmptyStateProjectChats({ projectId, activeChatId }: { projectId:
         <input
           type="search"
           value={query}
-          onChange={(event) => setQuery(event.target.value)}
+          onChange={(event) => {
+            setQuery(event.target.value)
+            setCascadeDone(true)
+          }}
           onKeyDown={handleKeyDown}
           placeholder="Search chats"
           aria-label="Search this project's chats"

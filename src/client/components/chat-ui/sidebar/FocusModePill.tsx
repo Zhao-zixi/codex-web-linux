@@ -36,7 +36,8 @@ export function FocusModePill({
       {/* Truncates like a chat row's title: the project name is the one part of
           this row that has no length limit. */}
       <span className="min-w-0 truncate">{projectTitle}</span>
-      <X className="ml-auto h-4 w-4 shrink-0" />
+      {/* 1px in from px-2: the X's diagonals read a hair right of its box. */}
+      <X className="ml-auto mr-px h-4 w-4 shrink-0" />
     </button>
   )
 }

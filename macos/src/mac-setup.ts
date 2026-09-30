@@ -1,5 +1,5 @@
 import { app, powerMonitor, powerSaveBlocker, shell } from "electron"
-import { execFile } from "node:child_process"
+import { execFile, spawn } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
 import { readPrefs, writePrefs } from "./prefs"
@@ -41,6 +41,36 @@ class KeepAwake {
     powerMonitor.on("on-ac", () => this.update())
     powerMonitor.on("on-battery", () => this.update())
     this.update()
+    this.takeBack()
+  }
+
+  /**
+   * Keep Online (quit.ts): the app's assertion ends when it quits, so hand
+   * it to `caffeinate`, which holds one for as long as the server runs.
+   * -s holds only on the power adapter, the default; -i on battery too.
+   */
+  handOff(serverPid: number) {
+    const flag = this.onPower && this.onBattery ? "-i" : this.onPower ? "-s" : null
+    if (!flag) return
+    try {
+      const child = spawn("/usr/bin/caffeinate", [flag, "-w", String(serverPid)], { detached: true, stdio: "ignore" })
+      child.unref()
+      if (child.pid) writePrefs({ caffeinatePid: child.pid })
+    } catch {}
+  }
+
+  /** Open again, the app holds the assertion itself, and follows the switches. */
+  private takeBack() {
+    const pid = readPrefs().caffeinatePid
+    if (!pid) return
+    writePrefs({ caffeinatePid: undefined })
+    // Only if that pid is still the caffeinate: pids get reused.
+    execFile("/bin/ps", ["-p", String(pid), "-o", "comm="], (error, stdout) => {
+      if (error || !stdout.trim().endsWith("caffeinate")) return
+      try {
+        process.kill(pid)
+      } catch {}
+    })
   }
 
   private update() {
@@ -156,6 +186,11 @@ export async function handleMacSetup(type: string, body: Record<string, unknown>
     case "macSetup.openFullDiskAccess":
       fullDiskAccess.openSettings()
       break
+    case "macSetup.setQuitBehavior":
+      writePrefs({
+        quitBehavior: body.value === "keepOnline" || body.value === "goOffline" ? body.value : undefined,
+      })
+      break
   }
   return macSetupState()
 }
@@ -169,5 +204,6 @@ export async function macSetupState() {
     lidClosingSleeps: await lidClosingSleeps(),
     fileVault,
     fullDiskAccess: fullDiskAccess.isGranted(),
+    quitBehavior: readPrefs().quitBehavior ?? "ask",
   }
 }

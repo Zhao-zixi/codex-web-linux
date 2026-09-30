@@ -65,7 +65,9 @@ const exitAction = await new Promise<"ui_restart" | "exit">((resolve) => {
 
   process.once("SIGINT", shutdown)
   process.once("SIGTERM", shutdown)
-  exitWithParent(shutdown)
+  exitWithParent(() => {
+    if (!result.releasedFromParent?.()) shutdown()
+  })
 })
 
 await result.stop()

@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { instanceStatus, releaseInstance, stopInstance } from "./instance"
 import { currentMode, devCheckout, fingerprint, pageURL, sameMode, saveMode, type ServerMode } from "./server-mode"
 import { reloadShellEnv, shellEnv, which, type Env } from "./shell-env"
 
@@ -12,14 +13,15 @@ import { reloadShellEnv, shellEnv, which, type Env } from "./shell-env"
  * The app is a window around the globally installed `kanna` (bun install -g
  * kanna-code), the same one a terminal runs, so the two are always one
  * version and npm's updater keeps working. The app and the command share one
- * server per data dir (the CLI's single-instance guard,
- * src/server/instance.ts): on launch the app first looks for a server a
- * terminal already started and adopts it, and only when there is none does it
- * run `kanna --no-open` itself. A server the app started dies with the app;
- * an adopted one belongs to its terminal and is left alone. Either way, if
- * the server goes away while the app is open, the app starts its own, so the
- * window never sits on a dead page. In Development mode (server-mode.ts) the
- * same holds for a checkout's `bun run dev`.
+ * server per data dir (the CLI's single-instance lock,
+ * src/server/instance-socket.ts): on launch the app asks the lock for a
+ * running server, on whatever port, and adopts it. Only when there is none
+ * does it run `kanna --no-open` itself. A terminal's server is left alone
+ * when the app quits. For one the app started, the app asks (main.ts): keep
+ * it running in the background, or stop it. Either way, if the server goes
+ * away while the app is open, the app starts its own, so the window never
+ * sits on a dead page. In Development mode (server-mode.ts) the same holds
+ * for a checkout's `bun run dev`, which stops with the app.
  */
 export type AgentState =
   | { kind: "starting" }
@@ -39,6 +41,16 @@ interface Runtime {
 
 type Located = { kind: "found"; runtime: Runtime } | { kind: "notInstalled" } | { kind: "unavailable"; message: string }
 
+/** What quitting the app does to the server. */
+export type QuitPlan =
+  /** Nothing: it's a terminal's, a custom server, or there is none. */
+  | { kind: "leave" }
+  /** It stops with the app: Development mode, or a `kanna` from before the
+   *  lock, which can't be kept running without the app. */
+  | { kind: "stop" }
+  /** The app started it (or kept it running last time): the user decides. */
+  | { kind: "ask"; pid: number; runningChats: number; cloud: boolean }
+
 const MAX_FAILURES = 5
 
 class ServerAgent {
@@ -52,9 +64,6 @@ class ServerAgent {
   private stopping = false
   private failures = 0
   private reachedRunning = false
-  private outputBuffer = ""
-  private recentOutput: string[] = []
-  private adoptAfterExit: string | null = null
   private monitor: NodeJS.Timeout | null = null
   private missedHealthChecks = 0
   private readinessToken = 0
@@ -93,6 +102,13 @@ class ServerAgent {
       return
     }
     if (this.state.kind !== "failed") this.setState({ kind: "starting" })
+    if (this.mode.kind === "installed") {
+      const running = await this.waitForInstance()
+      if (running) {
+        this.adopt(running)
+        return
+      }
+    }
     const candidates: string[] = []
     if (preferred && this.mode.kind === "installed") candidates.push(preferred)
     candidates.push(pageURL(this.mode))
@@ -107,6 +123,23 @@ class ServerAgent {
     if (located.kind === "found") this.launch(located.runtime)
     else if (located.kind === "notInstalled") this.setState({ kind: "notInstalled" })
     else this.setState({ kind: "failed", message: located.message })
+  }
+
+  /**
+   * The lock knows where a running Kanna listens, and it stays held while
+   * the server restarts after an update: wait that out rather than start a
+   * second one. Null when none is running.
+   */
+  private async waitForInstance() {
+    const deadline = Date.now() + 120_000
+    while (!this.stopping) {
+      const status = await instanceStatus(this.mode)
+      if (!status) return null
+      if (status.port !== null) return localURL(status.port)
+      if (Date.now() > deadline) return null
+      await sleep(500)
+    }
+    return null
   }
 
   /** Someone else runs a custom server: show it once it answers. */
@@ -181,18 +214,21 @@ class ServerAgent {
   // Launch
 
   private launch(runtime: Runtime) {
-    this.outputBuffer = ""
-    this.recentOutput = []
     this.reachedRunning = false
-    this.adoptAfterExit = null
-    this.log.begin([runtime.executable, ...runtime.args].join(" "))
+    const log = this.log.begin([runtime.executable, ...runtime.args].join(" "))
 
     let child: ChildProcess
     try {
       child = spawn(runtime.executable, runtime.args, {
         cwd: runtime.cwd,
         env: runtime.env,
-        stdio: ["ignore", "pipe", "pipe"],
+        // Into the log file rather than a pipe to the app: a server kept
+        // running after the app quits would fail its next write to a pipe
+        // nobody reads.
+        stdio: ["ignore", log ?? "ignore", log ?? "ignore"],
+        // Its own process group, so nothing aimed at the app's reaches a
+        // server the user keeps running.
+        detached: this.mode.kind === "installed",
       })
     } catch (error) {
       this.log.write(`failed to start: ${String(error)}\n`)
@@ -200,8 +236,6 @@ class ServerAgent {
       return
     }
     this.child = child
-    child.stdout?.on("data", (data: Buffer) => this.consume(data))
-    child.stderr?.on("data", (data: Buffer) => this.consume(data))
     child.on("error", (error) => {
       if (this.child !== child) return
       this.child = null
@@ -209,57 +243,24 @@ class ServerAgent {
       this.recordFailure(`Kanna didn't start: ${error.message}`)
     })
     child.on("exit", (code, signal) => this.didExit(child, code, signal))
-    // `bun run dev` prints the server's port before Vite serves a page, so
-    // wait for the page itself.
-    if (this.mode.kind === "development") void this.awaitPage(child)
+    void this.awaitReady(child)
   }
 
-  private async awaitPage(child: ChildProcess) {
+  /** Ready once the lock reports a port. Development mode waits for Vite's
+   *  page instead, and a `kanna` from before the lock answers /health on the
+   *  default port. */
+  private async awaitReady(child: ChildProcess) {
     const token = ++this.readinessToken
-    const url = pageURL(this.mode)
     const print = fingerprint(this.mode)
     while (token === this.readinessToken && this.child === child && child.exitCode === null) {
-      const ready = await probe(url, print)
+      const status = this.mode.kind === "installed" ? await instanceStatus(this.mode) : null
+      const ready = status?.port != null ? localURL(status.port) : await probe(pageURL(this.mode), print)
       if (ready && token === this.readinessToken && this.child === child) {
         this.failures = 0
         this.adopt(ready)
         return
       }
       await sleep(500)
-    }
-  }
-
-  private consume(data: Buffer) {
-    this.log.write(data)
-    this.outputBuffer += data.toString("utf8")
-    let newline: number
-    while ((newline = this.outputBuffer.indexOf("\n")) >= 0) {
-      const line = this.outputBuffer.slice(0, newline)
-      this.outputBuffer = this.outputBuffer.slice(newline + 1)
-      this.handleLine(line)
-    }
-  }
-
-  /** The CLI's own log lines are the contract (src/server/cli-runtime.ts):
-   *  "[kanna] listening on http://127.0.0.1:<port>" once the port is bound
-   *  (again after each update restart), and "kanna is already running at
-   *  <url>" when a terminal won a race. */
-  private handleLine(line: string) {
-    this.recentOutput.push(line)
-    if (this.recentOutput.length > 30) this.recentOutput.splice(0, this.recentOutput.length - 30)
-
-    const listening = this.mode.kind === "installed" && line.match(/\[kanna\] listening on http:\/\/\S*:(\d+)\s*$/)
-    if (listening) {
-      this.reachedRunning = true
-      this.failures = 0
-      this.adopt(localURL(Number(listening[1])))
-      return
-    }
-    const already = line.match(/is already running at (\S+)/)
-    if (already) {
-      try {
-        this.adoptAfterExit = new URL(already[1]).toString().replace(/\/$/, "")
-      } catch {}
     }
   }
 
@@ -270,19 +271,25 @@ class ServerAgent {
     const status = code ?? signal ?? "unknown"
     this.log.write(`\n[exited with status ${status}]\n`)
     if (this.stopping) return
-    this.stopMonitor()
+    void this.afterExit(status)
+  }
 
-    if (this.adoptAfterExit) {
-      const url = this.adoptAfterExit
-      this.setState({ kind: "starting" })
-      this.start(url)
-    } else if (this.reachedRunning) {
-      // It ran and then died: start a fresh one right away.
+  private async afterExit(status: number | string) {
+    // A `kanna` that found one already running exits right away. If that's
+    // the one on screen, keep showing it.
+    const shown = this.serverURL
+    if (shown && (await probe(shown, fingerprint(this.mode)))) return
+    this.stopMonitor()
+    const somethingRunning =
+      this.reachedRunning ||
+      (await instanceStatus(this.mode)) !== null ||
+      (await probe(pageURL(this.mode), fingerprint(this.mode))) !== null
+    if (somethingRunning) {
+      // It ran and then died, or another is starting: connect again.
       this.setState({ kind: "starting" })
       this.start()
     } else {
-      const tail = this.recentOutput.slice(-6).join("\n")
-      this.recordFailure(tail || `Kanna stopped (status ${status}).`)
+      this.recordFailure(this.log.tail(6) || `Kanna stopped (status ${status}).`)
     }
   }
 
@@ -319,6 +326,55 @@ class ServerAgent {
     })
     if (status === 0) this.retry()
     else this.setState({ kind: "failed", message: `Installing Kanna failed (status ${status}). Show Log has the installer's output.` })
+  }
+
+  // Quit
+
+  async quitPlan(): Promise<QuitPlan> {
+    if (this.mode.kind === "installed") {
+      const status = await instanceStatus(this.mode)
+      if (status) {
+        return status.owner === "terminal"
+          ? { kind: "leave" }
+          : { kind: "ask", pid: status.pid, runningChats: status.runningChats ?? 0, cloud: status.cloud ?? false }
+      }
+    }
+    return this.child ? { kind: "stop" } : { kind: "leave" }
+  }
+
+  /** Quit without the server: it keeps running in the background, and the
+   *  app finds it again the next time it opens. */
+  async keepRunning() {
+    if (!(await releaseInstance(this.mode))) return false
+    this.stopping = true
+    this.stopMonitor()
+    const child = this.child
+    if (child) {
+      child.removeAllListeners("exit")
+      child.unref()
+      this.child = null
+    }
+    return true
+  }
+
+  /** Stop the server, whoever's process it is now, and wait until it has. */
+  async goOffline(pid: number) {
+    this.stopping = true
+    this.stopMonitor()
+    if (!(await stopInstance(this.mode))) {
+      await new Promise<void>((resolve) => this.stop(resolve))
+      return
+    }
+    // The same time stop() gives it: running turns cancel (they resume on
+    // the next start), logs compact, and kanna.sh marks this Mac offline.
+    const deadline = Date.now() + 20_000
+    while (Date.now() < deadline) {
+      if (!(await instanceStatus(this.mode))) return
+      await sleep(250)
+    }
+    try {
+      process.kill(pid, "SIGKILL")
+    } catch {}
   }
 
   // Stop
@@ -395,6 +451,8 @@ async function locate(mode: ServerMode): Promise<Located> {
   // src/server/mac-app.ts: what the app starts exits if the app crashes
   // instead of outliving it.
   env.KANNA_EXIT_WITH_PARENT = "1"
+  // The lock records who started it, which decides what quitting asks.
+  env.KANNA_STARTED_BY = "app"
   // The server skips its own login-shell PATH lookup; this env already has it.
   env.KANNA_SHELL_ENV_IMPORTED = "1"
 
@@ -459,6 +517,9 @@ class ServerLog {
   readonly file = path.join(os.homedir(), "Library", "Logs", app.getName(), "server.log")
   private fd: number | null = null
 
+  /** The file descriptor the server writes to. A server kept running after
+   *  the app quits holds it open; it appends, so truncating the file here
+   *  later is safe. */
   begin(command: string) {
     try {
       fs.mkdirSync(path.dirname(this.file), { recursive: true })
@@ -469,9 +530,29 @@ class ServerLog {
       }
       this.fd ??= fs.openSync(this.file, size > 5_000_000 ? "w" : "a")
     } catch {
-      return
+      return null
     }
     this.write(`\n=== ${new Date().toString()} ${command}\n`)
+    return this.fd
+  }
+
+  /** The last lines, for the failure screen. */
+  tail(lines: number) {
+    try {
+      const size = fs.statSync(this.file).size
+      const length = Math.min(size, 8_192)
+      const buffer = Buffer.alloc(length)
+      const fd = fs.openSync(this.file, "r")
+      try {
+        fs.readSync(fd, buffer, 0, length, size - length)
+      } finally {
+        fs.closeSync(fd)
+      }
+      const text = buffer.toString("utf8").split("\n=== ").pop() ?? ""
+      return text.split("\n").slice(1).filter((line) => line.trim()).slice(-lines).join("\n")
+    } catch {
+      return ""
+    }
   }
 
   write(data: string | Buffer) {

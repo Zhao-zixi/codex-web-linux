@@ -19,13 +19,7 @@ import { deriveLatestContextWindowSnapshot } from "../../lib/contextWindow"
 import { cn } from "../../lib/utils"
 import { buildChatJumpLocationState } from "../../lib/chat-navigation"
 import { snapshotDroppedFiles } from "../../lib/snapshotDroppedFiles"
-import {
-  DEFAULT_RIGHT_SIDEBAR_SIZE,
-  RIGHT_SIDEBAR_MAX_WIDTH_PX,
-  RIGHT_SIDEBAR_MIN_WIDTH_PX,
-  useRightSidebarStore,
-  useWidgetsOpen,
-} from "../../stores/rightSidebarStore"
+import { useRightSidebarStore, useWidgetsOpen } from "../../stores/rightSidebarStore"
 import { ViewerLayer, usePresentedViewer, useViewerShown } from "../../components/viewer/ViewerLayer"
 import { opensInViewer, projectRelativePath } from "../../components/viewer/localLinks"
 import type { OpenLocalLinkTarget } from "../../components/messages/shared"
@@ -39,7 +33,6 @@ import { useTerminalPreferencesStore } from "../../stores/terminalPreferencesSto
 import { shouldCloseTerminalPane } from "../terminalLayoutResize"
 
 import { interpolateLayout, PANE_CLOSE_MS, PANE_EASING, PANE_OPEN_MS, paneDurationMs, prefersReducedMotion } from "../paneAnimation"
-import { useRightSidebarToggleAnimation } from "../useRightSidebarToggleAnimation"
 import { useStickyChatFocus } from "../useStickyChatFocus"
 import { useTerminalToggleAnimation } from "../useTerminalToggleAnimation"
 import type { AgentProvider, ChatSkillsSnapshot, SubagentActivity, TranscriptEntry } from "../../../shared/types"
@@ -52,6 +45,7 @@ import { TranscriptRenderOptionsProvider } from "../../components/messages/rende
 import { ToolPayloadProvider } from "../../components/messages/tool-payload-context"
 import { createToolPayloadStore } from "./toolPayloadStore"
 import { TerminalWorkspaceShell } from "./TerminalWorkspaceShell"
+import { CHAT_MIN_WORKSPACE_SIZE_PERCENT, WidgetsColumn } from "./WidgetsColumn"
 import { useChatPageSidebarActions, EMPTY_DIFF_SNAPSHOT } from "./useChatPageSidebarActions"
 import { useTranscriptJumpRequest } from "./useTranscriptJumpRequest"
 import {
@@ -217,8 +211,6 @@ function useTranscriptPaddingBottom() {
 }
 
 const MOBILE_BREAKPOINT_PX = 768
-/** The chat's narrowest, as a share of the page: beside the widget column, and beside the viewer's pane. */
-const RIGHT_SIDEBAR_MIN_WORKSPACE_SIZE_PERCENT = 20
 /** Dragging the viewer's pane narrower than this closes it, as the terminal's does. */
 const VIEWER_PANE_CLOSE_WIDTH_PX = 240
 /**
@@ -228,7 +220,6 @@ const VIEWER_PANE_CLOSE_WIDTH_PX = 240
  * keeps the rest of the room.
  */
 const VIEWER_PREVIEW_PANE_WIDTH_PX = 800
-const RIGHT_SIDEBAR_MAX_SIZE_PERCENT = 100 - RIGHT_SIDEBAR_MIN_WORKSPACE_SIZE_PERCENT
 
 /** The chat pane never shrinks past this, so it also fixes the terminal's ceiling. */
 export const CHAT_MIN_SIZE_PERCENT = 25
@@ -246,25 +237,6 @@ export function shouldUseMobileRightSidebarOverlay(viewportWidth: number) {
  */
 export function getEffectiveTerminalMainSizes(mainSizes: [number, number], clampToMax: boolean): [number, number] {
   return clampToMax ? MAX_TERMINAL_MAIN_SIZES : mainSizes
-}
-
-export function getRightSidebarSizePercent(sizePx: number, layoutWidth: number) {
-  if (!Number.isFinite(sizePx) || !Number.isFinite(layoutWidth) || layoutWidth <= 0) {
-    return 0
-  }
-
-  const minSizePercent = (RIGHT_SIDEBAR_MIN_WIDTH_PX / layoutWidth) * 100
-  const clampedPx = Math.min(RIGHT_SIDEBAR_MAX_WIDTH_PX, Math.max(RIGHT_SIDEBAR_MIN_WIDTH_PX, sizePx))
-  const requestedSizePercent = (clampedPx / layoutWidth) * 100
-  return Math.min(RIGHT_SIDEBAR_MAX_SIZE_PERCENT, Math.max(minSizePercent, requestedSizePercent))
-}
-
-export function getRightSidebarSizePx(sizePercent: number, layoutWidth: number) {
-  if (!Number.isFinite(sizePercent) || !Number.isFinite(layoutWidth) || layoutWidth <= 0) {
-    return DEFAULT_RIGHT_SIDEBAR_SIZE
-  }
-
-  return Math.min(RIGHT_SIDEBAR_MAX_WIDTH_PX, Math.max(RIGHT_SIDEBAR_MIN_WIDTH_PX, layoutWidth * (sizePercent / 100)))
 }
 
 function useIsMobileViewport() {
@@ -360,55 +332,9 @@ export function getTerminalPanelDefaultSizes(showTerminalPane: boolean, mainSize
   return showTerminalPane ? mainSizes : [100, 0]
 }
 
-interface DesktopSidebarPaneProps {
-  showRightSidebar: boolean
-  sizePercent: number
-  sidebarPanelRef: RefObject<HTMLDivElement | null>
-  sidebarVisualRef: RefObject<HTMLDivElement | null>
-  content: ReactNode
-}
-
-const DesktopSidebarPane = memo(function DesktopSidebarPane({
-  showRightSidebar,
-  sizePercent,
-  sidebarPanelRef,
-  sidebarVisualRef,
-  content,
-}: DesktopSidebarPaneProps) {
-  return (
-    <ResizablePanel
-      id="rightSidebar"
-      defaultSize={`${sizePercent}%`}
-      // Pixels: the same ceiling as the left sidebar, whatever the window.
-      maxSize={RIGHT_SIDEBAR_MAX_WIDTH_PX}
-      className="min-h-0 min-w-0"
-      elementRef={sidebarPanelRef}
-      groupResizeBehavior="preserve-pixel-size"
-    >
-      {/* The navbar spans the chat and this column: the column scrolls under
-          it into the same fade as the transcript (WidgetsSidebar pads its
-          top by the navbar's height). */}
-      <div
-        ref={sidebarVisualRef}
-        className="relative h-full min-h-0 overflow-hidden"
-        data-right-sidebar-open={showRightSidebar ? "true" : "false"}
-        data-right-sidebar-animated="false"
-        data-right-sidebar-visual
-        style={{
-          "--pane-duration": `${paneDurationMs(showRightSidebar)}ms`,
-        } as CSSProperties}
-      >
-        {content}
-        <ChatNavbarWash stopAtTranscriptScrollbar={false} />
-      </div>
-    </ResizablePanel>
-  )
-})
-
 interface MobileSidebarPaneProps {
   projectId: string | null
   showRightSidebar: boolean
-  sidebarVisualRef: RefObject<HTMLDivElement | null>
   onClose: () => void
   content: ReactNode
 }
@@ -416,7 +342,6 @@ interface MobileSidebarPaneProps {
 const MobileSidebarPane = memo(function MobileSidebarPane({
   projectId,
   showRightSidebar,
-  sidebarVisualRef,
   onClose,
   content,
 }: MobileSidebarPaneProps) {
@@ -442,7 +367,6 @@ const MobileSidebarPane = memo(function MobileSidebarPane({
         onClick={onClose}
       />
       <div
-        ref={sidebarVisualRef}
         className={cn(
           "absolute inset-y-0 right-0 flex w-[min(92vw,30rem)] max-w-full min-h-0 flex-col overflow-hidden bg-background shadow-2xl transition-transform ease-glide motion-reduce:transition-none",
           "pt-[max(env(safe-area-inset-top),0px)] pb-[max(env(safe-area-inset-bottom),0px)]",
@@ -672,13 +596,8 @@ export function ChatPage() {
   const showTerminalPane = Boolean(projectId && isTerminalVisible(terminalLayout, terminalChatKey) && hasTerminals)
   const shouldRenderTerminalLayout = Boolean(projectId && hasTerminals)
   const showRightSidebar = Boolean(projectId && widgetsOpen)
-  const shouldRenderRightSidebarLayout = Boolean(projectId)
-  const shouldRenderDesktopRightSidebarLayout = shouldRenderRightSidebarLayout && !isMobileViewport
+  const shouldRenderDesktopRightSidebarLayout = Boolean(projectId) && !isMobileViewport
   const layoutWidth = useLayoutWidth(layoutRootRef)
-  const effectiveRightSidebarSize = getRightSidebarSizePercent(
-    globalRightSidebarSize ?? DEFAULT_RIGHT_SIDEBAR_SIZE,
-    layoutWidth,
-  )
   const fixedTerminalHeight = useFixedTerminalHeight({
     layoutRootRef,
     shouldRenderTerminalLayout,
@@ -701,18 +620,6 @@ export function ChatPage() {
     terminalLayout,
     chatInputRef: chatInputElementRef,
   })
-  const {
-    isAnimating: isRightSidebarAnimating,
-    panelGroupRef: rightSidebarPanelGroupRef,
-    sidebarPanelRef,
-    sidebarVisualRef,
-  } = useRightSidebarToggleAnimation({
-    projectId: widgetsChatKey ?? projectId,
-    shouldRenderRightSidebarLayout: shouldRenderDesktopRightSidebarLayout,
-    showRightSidebar,
-    rightSidebarSizePercent: effectiveRightSidebarSize,
-  })
-
   const {
     diffRenderMode,
     wrapDiffLines,
@@ -1079,31 +986,6 @@ export function ChatPage() {
   // pass on open. They disagreed about what counted as "at the end", so the
   // losing ones fought the winner and the result read as jitter.
 
-  useLayoutEffect(() => {
-    if (!showRightSidebar || isMobileViewport || layoutWidth <= 0 || isRightSidebarAnimating.current) {
-      return
-    }
-
-    const clampedRightSidebarSize = getRightSidebarSizePercent(globalRightSidebarSize, layoutWidth)
-    const currentLayout = rightSidebarPanelGroupRef.current?.getLayout()
-    if (!currentLayout) return
-    if (Math.abs((currentLayout.rightSidebar ?? 0) - clampedRightSidebarSize) < 0.1) {
-      return
-    }
-
-    rightSidebarPanelGroupRef.current?.setLayout({
-      workspace: 100 - clampedRightSidebarSize,
-      rightSidebar: clampedRightSidebarSize,
-    })
-  }, [
-    globalRightSidebarSize,
-    isRightSidebarAnimating,
-    layoutWidth,
-    rightSidebarPanelGroupRef,
-    showRightSidebar,
-    isMobileViewport,
-  ])
-
   // Beside the chat on anything wider than a phone: the viewer opens in a
   // pane between the chat and the widget column. Reviewing changes, the chat
   // narrows to its least so the review is the main thing; a file, attachment
@@ -1113,7 +995,7 @@ export function ChatPage() {
   const viewerPaneAvailable = !isMobileViewport
   const viewerPaneOpen = viewerPaneAvailable && viewerOpen
   const viewerDocked = viewerPaneOpen && !viewerExpanded
-  const chatMinWidthPx = layoutWidth * (RIGHT_SIDEBAR_MIN_WORKSPACE_SIZE_PERCENT / 100)
+  const chatMinWidthPx = layoutWidth * (CHAT_MIN_WORKSPACE_SIZE_PERCENT / 100)
   const viewerSplitGroupRef = useRef<GroupImperativeHandle | null>(null)
   const viewerSplitElementRef = useRef<HTMLDivElement | null>(null)
   const viewerSplitAnimationRef = useRef<number | null>(null)
@@ -1203,7 +1085,7 @@ export function ChatPage() {
 
     const splitWidth = viewerSplitElementRef.current?.clientWidth ?? 0
     const pageWidth = layoutRootRef.current?.clientWidth ?? 0
-    const chatMinPx = pageWidth * (RIGHT_SIDEBAR_MIN_WORKSPACE_SIZE_PERCENT / 100)
+    const chatMinPx = pageWidth * (CHAT_MIN_WORKSPACE_SIZE_PERCENT / 100)
     const draggedWidthPx = getChatViewer()?.widthPx
     const paneWidthPx = Math.min(
       splitWidth - chatMinPx,
@@ -1509,64 +1391,24 @@ export function ChatPage() {
   ) : null
 
   // The chat and the viewer, then the widget column, side by side: all that
-  // sits above the terminal.
-  const panes = shouldRenderDesktopRightSidebarLayout && projectId ? (
-    <ResizablePanelGroup
-      key={`${projectId}-right-sidebar`}
-      groupRef={rightSidebarPanelGroupRef}
-      orientation="horizontal"
-      className="flex-1 min-h-0"
-      onLayoutChange={(layout) => {
-        if (!showRightSidebar || isRightSidebarAnimating.current) {
-          return
-        }
-
-        const clampedRightSidebarSize = getRightSidebarSizePercent(
-          getRightSidebarSizePx(layout.rightSidebar, layoutWidth),
-          layoutWidth,
-        )
-        if (Math.abs(clampedRightSidebarSize - layout.rightSidebar) < 0.1) {
-          return
-        }
-
-        rightSidebarPanelGroupRef.current?.setLayout({
-          workspace: 100 - clampedRightSidebarSize,
-          rightSidebar: clampedRightSidebarSize,
-        })
-      }}
-      onLayoutChanged={(layout) => {
-        if (!showRightSidebar || isRightSidebarAnimating.current) {
-          return
-        }
-
-        setRightSidebarSize(getRightSidebarSizePx(layout.rightSidebar, layoutWidth))
-      }}
-    >
-      <ResizablePanel
-        id="workspace"
-        defaultSize={`${100 - effectiveRightSidebarSize}%`}
-        minSize={`${RIGHT_SIDEBAR_MIN_WORKSPACE_SIZE_PERCENT}%`}
-        className="min-h-0 min-w-0"
-        groupResizeBehavior="preserve-relative-size"
-      >
+  // sits above the terminal. The row is there on a phone too, without the
+  // column, so the workspace keeps its parent either way.
+  const panes = (
+    <div className="flex min-h-0 flex-1 overflow-hidden">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {workspace}
-      </ResizablePanel>
-      <ResizableHandle
-        withHandle={false}
-        orientation="horizontal"
-        disabled={!showRightSidebar}
-        className={cn(!showRightSidebar && "pointer-events-none opacity-0")}
-      />
-      <DesktopSidebarPane
-        showRightSidebar={showRightSidebar}
-        sizePercent={effectiveRightSidebarSize}
-        sidebarPanelRef={sidebarPanelRef}
-        sidebarVisualRef={sidebarVisualRef}
-        content={rightPanelContent}
-      />
-    </ResizablePanelGroup>
-  ) : (
-    workspace
+      </div>
+      {shouldRenderDesktopRightSidebarLayout ? (
+        <WidgetsColumn
+          open={showRightSidebar}
+          switchKey={widgetsChatKey ?? projectId}
+          storedWidthPx={globalRightSidebarSize}
+          layoutWidth={layoutWidth}
+          onResize={setRightSidebarSize}
+          content={rightPanelContent}
+        />
+      ) : null}
+    </div>
   )
 
   // The navbar spans the chat, the viewer's pane and the widget column, over
@@ -1650,7 +1492,6 @@ export function ChatPage() {
         <MobileSidebarPane
           projectId={projectId}
           showRightSidebar={showRightSidebar}
-          sidebarVisualRef={sidebarVisualRef}
           onClose={handleCloseRightSidebar}
           content={rightPanelContent}
         />

@@ -16,6 +16,11 @@ export interface Prefs {
   /** AppAuth's P-256 private key, hex. Kept across a relaunch. */
   appAuthKey?: string
   windowBounds?: { x: number; y: number; width: number; height: number }
+  /** What quitting does to a server the app started, when the user ticked
+   *  "Don't ask again" (quit.ts). Unset: ask. */
+  quitBehavior?: "keepOnline" | "goOffline"
+  /** The `caffeinate` a kept-running server was handed (mac-setup.ts). */
+  caffeinatePid?: number
 }
 
 let cached: Prefs | null = null

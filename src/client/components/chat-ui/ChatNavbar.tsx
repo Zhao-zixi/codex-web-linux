@@ -267,8 +267,9 @@ function ChatNavbarImpl({
           "md:h-[30px] flex items-center gap-0 flex-shrink-0 border border-border/0 rounded-[9px] md:px-[2px]",
           // Unbordered: the flower and expand button stand on their own. The
           // app pins its sidebar toggle beside the traffic lights
-          // (KannaSidebar); clear both: 28px toggle + 8px gap, less pl-1.
-          sidebarCollapsed && "px-1.5 mac-app:md:ml-[calc(var(--mac-traffic-lights-inset)+32px)]"
+          // and back/forward (KannaSidebar); clear them: 3 × 28px + 8px gap,
+          // less pl-1.
+          sidebarCollapsed && "px-1.5 mac-app:md:ml-[calc(var(--mac-traffic-lights-inset)+88px)]"
         )}>
           <Button
             variant="ghost"

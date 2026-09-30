@@ -142,14 +142,18 @@ export class MainWindow {
       if (details.isMainFrame && !this.allowNavigation(details.url)) details.preventDefault()
     })
     contents.setWindowOpenHandler(({ url }) => {
-      if (/^https?:/i.test(url)) {
-        void shell.openExternal(url)
+      // Only `window.open()` with no URL yet gets a window of its own. The
+      // OpenRouter sign-in (src/client/components/auth/AuthCard.tsx) opens
+      // about:blank inside the click, navigates it once the server answers,
+      // and expects it to close itself on the callback page. Anything else
+      // that reached the popup showed up as a stray Kanna browser window.
+      if (url && url !== "about:blank") {
+        // The mail/chat schemes are the ones chat markdown lets through.
+        // Other schemes (file:, custom app handlers) stay closed: links in a
+        // transcript are written by agents, not by the user.
+        if (/^(https?|mailto|tel|irc|ircs|xmpp):/i.test(url)) void shell.openExternal(url)
         return { action: "deny" }
       }
-      // `window.open()` with no URL yet. The OpenRouter sign-in
-      // (src/client/components/auth/AuthCard.tsx) opens about:blank inside
-      // the click, navigates it once the server answers, and expects it to
-      // close itself on the callback page, so it needs a real window.
       const frame = this.win.getBounds()
       return {
         action: "allow",

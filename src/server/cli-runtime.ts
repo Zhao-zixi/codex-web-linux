@@ -10,6 +10,14 @@ import { PROD_SERVER_PORT } from "../shared/ports"
 import { CLI_SUPPRESS_OPEN_ONCE_ENV_VAR } from "./restart"
 import { logShareDetails, renderTerminalQr, startShareTunnel, type StartedShareTunnel } from "./share"
 import { probeExistingInstance, type ExistingInstance } from "./instance"
+import {
+  claimInstance,
+  instanceStatus,
+  requestInstanceStop,
+  type AttachedServer,
+  type InstanceClaim,
+  type InstanceStatus,
+} from "./instance-socket"
 import type { AnalyticsReporter } from "./analytics"
 import { createCloudRuntime, type CloudRuntime } from "./cloud"
 import { readCloudIdentity, type CloudIdentity } from "./cloud/identity"
@@ -46,6 +54,8 @@ export interface CliUpdateOptions {
 export interface StartedCli {
   kind: "started"
   stop: () => Promise<void>
+  /** Kept running when the Mac app that started it quit (instance-socket.ts). */
+  releasedFromParent?: () => boolean
 }
 
 export interface RestartingCli {
@@ -69,7 +79,7 @@ export interface CliRuntimeDeps {
     trustProxy?: boolean
     cloud?: CloudRuntime | null
     allowCloudPairing?: boolean
-  }) => Promise<{ port: number; stop: () => Promise<void>; analytics?: AnalyticsReporter }>
+  }) => Promise<{ port: number; stop: () => Promise<void>; analytics?: AnalyticsReporter; state?: AttachedServer["state"] }>
   fetchLatestVersion: (packageName: string, options?: { timeoutMs?: number }) => Promise<string>
   installVersion: (packageName: string, version: string) => UpdateInstallAttemptResult
   installNightly?: () => Promise<NightlyInstallResult>
@@ -84,6 +94,10 @@ export interface CliRuntimeDeps {
   readCloudIdentityImpl?: (warn: (message: string) => void) => Promise<CloudIdentity | null>
   createCloudRuntimeImpl?: (identity: CloudIdentity) => CloudRuntime
   probeExistingInstanceImpl?: (port: number) => Promise<ExistingInstance | null>
+  /** The single-instance lock (instance-socket.ts). */
+  claimInstanceImpl?: () => Promise<InstanceClaim>
+  instanceStatusImpl?: () => Promise<InstanceStatus | null>
+  requestInstanceStopImpl?: () => Promise<boolean>
   slimTranscriptsImpl?: (log: (message: string) => void) => Promise<SlimTranscriptsStats>
 }
 
@@ -98,6 +112,7 @@ type ParsedArgs =
   | { kind: "run"; options: CliOptions }
   | { kind: "pair"; args: PairCommandArgs }
   | { kind: "slim-transcripts" }
+  | { kind: "stop" }
   | { kind: "help" }
   | { kind: "version" }
 
@@ -137,6 +152,7 @@ Usage:
   ${CLI_COMMAND} pair          Claim this machine on kanna.sh (prints a link + QR) and start
   ${CLI_COMMAND} pair <code>   Same, using a code from https://kanna.sh/fleet
   ${CLI_COMMAND} pair --status|--disable|--enable|--remove
+  ${CLI_COMMAND} stop          Stop the ${CLI_COMMAND} running on this machine (a terminal's, or the Mac app's)
   ${CLI_COMMAND} slim-transcripts
                        Rewrite stored transcripts without raw tool payloads (stop ${CLI_COMMAND} first)
 
@@ -189,6 +205,10 @@ function parsePairArgs(argv: string[]): ParsedArgs {
 export function parseArgs(argv: string[]): ParsedArgs {
   if (argv[0] === "pair") {
     return parsePairArgs(argv.slice(1))
+  }
+  if (argv[0] === "stop") {
+    if (argv.length > 1) throw new Error(`Unexpected argument for ${CLI_COMMAND} stop: ${argv[1]}`)
+    return { kind: "stop" }
   }
   if (argv[0] === "slim-transcripts") {
     if (argv.length > 1) throw new Error(`Unexpected argument for ${CLI_COMMAND} slim-transcripts: ${argv[1]}`)
@@ -395,7 +415,10 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
     // Its own boot sweep already covered this data dir, so refusing costs
     // nothing; the check only sees the default port, so a dev instance on
     // another port is on the user.
-    const running = await (deps.probeExistingInstanceImpl ?? probeExistingInstance)(PROD_SERVER_PORT)
+    const status = await (deps.instanceStatusImpl ?? instanceStatus)()
+    const running = status
+      ? { localUrl: status.port ? `http://localhost:${status.port}` : `pid ${status.pid}` }
+      : await (deps.probeExistingInstanceImpl ?? probeExistingInstance)(PROD_SERVER_PORT)
     if (running) {
       deps.warn(`${LOG_PREFIX} ${CLI_COMMAND} is running at ${running.localUrl}; stop it before slimming transcripts`)
       return { kind: "exited", code: 1 }
@@ -408,6 +431,10 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
         : `${LOG_PREFIX} ${stats.chats} transcripts checked, nothing to slim`
     )
     return { kind: "exited", code: 0 }
+  }
+
+  if (parsedArgs.kind === "stop") {
+    return { kind: "exited", code: await stopRunningInstance(deps) }
   }
 
   if (parsedArgs.kind !== "run") {
@@ -442,10 +469,20 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
 
   // Single-instance guard: two servers on one data dir mean two JSONL
   // writers — and, when paired, two tunnel connectors load-balancing between
-  // divergent processes. If this data dir is already being served on the
-  // configured port, just point the user (and browser) at it. A different
-  // fingerprint (e.g. dev profile) keeps the try-next-port behavior.
-  const existing = await (deps.probeExistingInstanceImpl ?? probeExistingInstance)(runOptions.port)
+  // divergent processes. The lock (instance-socket.ts) finds a running Kanna
+  // on any port, mid-update-restart included; the port probe still finds one
+  // from before the lock existed, serving this data dir on the configured
+  // port. Either way, point the user (and browser) at it. A different
+  // fingerprint (e.g. dev profile) has its own lock and keeps the
+  // try-next-port behavior.
+  const claim = await (deps.claimInstanceImpl ?? claimInstance)()
+  if (claim.kind === "running" && !claim.status?.port) {
+    deps.warn(`${LOG_PREFIX} ${CLI_COMMAND} is already starting${claim.status ? ` (pid ${claim.status.pid})` : ""}; try again in a moment`)
+    return { kind: "exited", code: 1 }
+  }
+  const existing = claim.kind === "running"
+    ? { localUrl: `http://localhost:${claim.status!.port}`, port: claim.status!.port! }
+    : await (deps.probeExistingInstanceImpl ?? probeExistingInstance)(runOptions.port)
   if (existing) {
     const hostedUrl = identity?.enabled ? identity.appOrigin : null
     deps.log(`${LOG_PREFIX} kanna is already running at ${existing.localUrl}${hostedUrl ? ` (and ${hostedUrl})` : ""}`)
@@ -488,6 +525,8 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
     },
   })
   const { port, stop } = started
+  // Always "ours" by now: a running Kanna returned above.
+  if (claim.kind === "ours") claim.attach({ port, version: deps.version, state: started.state })
   const bindHost = runOptions.host
   const displayHost = isShareEnabled(runOptions.share) || bindHost === "127.0.0.1" || bindHost === "0.0.0.0" ? "localhost" : bindHost
   const launchUrl = `http://${displayHost}:${port}`
@@ -558,12 +597,43 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
 
   return {
     kind: "started",
+    releasedFromParent: claim.kind === "ours" ? claim.releasedFromParent : undefined,
     stop: async () => {
       await cloudRuntime?.stop()
       shareTunnelStop?.()
       await stop()
     },
   }
+}
+
+/** `kanna stop`: ask the running Kanna to stop, and wait until it has. */
+async function stopRunningInstance(deps: CliRuntimeDeps) {
+  const status = deps.instanceStatusImpl ?? instanceStatus
+  const running = await status()
+  if (!running) {
+    const old = await (deps.probeExistingInstanceImpl ?? probeExistingInstance)(PROD_SERVER_PORT)
+    deps.log(old
+      ? `${LOG_PREFIX} the ${CLI_COMMAND} at ${old.localUrl} is from before \`${CLI_COMMAND} stop\`; stop it where it runs (Ctrl-C)`
+      : `${LOG_PREFIX} ${CLI_COMMAND} isn't running`)
+    return old ? 1 : 0
+  }
+  if (!(await (deps.requestInstanceStopImpl ?? requestInstanceStop)())) {
+    deps.warn(`${LOG_PREFIX} ${CLI_COMMAND} (pid ${running.pid}) didn't take the request to stop`)
+    return 1
+  }
+  deps.log(`${LOG_PREFIX} stopping ${CLI_COMMAND} (pid ${running.pid})…`)
+  // Shutting down cancels running turns and compacts the logs, which can
+  // take a few seconds.
+  const deadline = Date.now() + 30_000
+  while (Date.now() < deadline) {
+    if (!(await status())) {
+      deps.log(`${LOG_PREFIX} stopped`)
+      return 0
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+  deps.warn(`${LOG_PREFIX} ${CLI_COMMAND} (pid ${running.pid}) is still stopping`)
+  return 1
 }
 
 export function openUrl(url: string) {

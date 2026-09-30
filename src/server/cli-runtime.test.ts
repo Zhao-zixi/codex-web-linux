@@ -111,6 +111,8 @@ function createDeps(overrides: Partial<Parameters<typeof runCli>[1]> = {}) {
     // real local ports in tests.
     readCloudIdentityImpl: async () => null,
     probeExistingInstanceImpl: async () => null,
+    claimInstanceImpl: async () => ({ kind: "ours", attach: () => {}, releasedFromParent: () => false }),
+    instanceStatusImpl: async () => null,
     ...overrides,
   }
 

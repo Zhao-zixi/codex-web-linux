@@ -1,4 +1,4 @@
-import { app, dialog, type BrowserWindow } from "electron"
+import { app, dialog, shell, type BrowserWindow } from "electron"
 import { autoUpdater } from "electron-updater"
 import { quitNow } from "./quit"
 
@@ -46,11 +46,29 @@ export async function checkForUpdatesNow() {
     if (!result?.isUpdateAvailable || !version) {
       await show("Kanna is up to date", `Kanna for Mac ${app.getVersion()} is the newest version.`)
     } else if (offered !== version) {
+      // The download goes on after this dialog closes. When it failed (every
+      // time on 2.0.x, which lacked app-update.yml), nothing said so, and
+      // this dialog claimed a download that never came.
+      result.downloadPromise?.catch((error) => void offerManualDownload(version, error))
       await show(`Kanna for Mac ${version} is downloading`, "Kanna offers to restart once it's ready, or installs it the next time you quit.")
     }
   } catch (error) {
     await show("Couldn't check for updates", String(error))
   }
+}
+
+/** The update didn't download: the DMG from kanna.sh installs it by hand. */
+async function offerManualDownload(version: string, error: unknown) {
+  const window = getWindow()
+  const options = {
+    message: `Couldn't download Kanna for Mac ${version}`,
+    detail: `Download it from kanna.sh and drag it into Applications.\n\n${String(error)}`,
+    buttons: ["Download", "Cancel"],
+    defaultId: 0,
+    cancelId: 1,
+  }
+  const { response } = window ? await dialog.showMessageBox(window, options) : await dialog.showMessageBox(options)
+  if (response === 0) void shell.openExternal(`${FEED}/Kanna.dmg`)
 }
 
 /** Once per version: restart now, or let it install on the next quit. */

@@ -1050,7 +1050,7 @@ function KannaSidebarImpl({
         >
           <PanelLeft className="size-4" />
         </Button>
-        <MacHistoryButtons />
+        <MacHistoryButtons overSidebar={!collapsed} />
       </div>
 
       <ArchivedChatsDialog
@@ -1074,7 +1074,7 @@ function KannaSidebarImpl({
  * load has seen: a push cuts off everything ahead of it, a pop keeps it.
  * History from before a reload counts as no forward until visited again.
  */
-function MacHistoryButtons() {
+function MacHistoryButtons({ overSidebar }: { overSidebar: boolean }) {
   const location = useLocation()
   const navigationType = useNavigationType()
   const index = (window.history.state as { idx?: number } | null)?.idx ?? 0
@@ -1084,7 +1084,17 @@ function MacHistoryButtons() {
     setLastIndex((last) => navigationType === "PUSH" ? index : Math.max(last, index))
   }, [location.key, navigationType, index])
 
-  const className = "size-7 rounded-lg text-muted-foreground hover:!border-border/0 hover:!bg-transparent"
+  // Disabled, the ghost button's text is muted-foreground/50: translucent, so
+  // wherever an arrow's shaft and head overlap, the stroke doubles up. The
+  // same color made opaque instead, mixed over whatever the buttons sit on:
+  // the sidebar card while it is open (bg-background, dark:bg-card), the
+  // chat's bg-background once it slides away.
+  const className = cn(
+    "size-7 rounded-lg text-muted-foreground hover:!border-border/0 hover:!bg-transparent",
+    "disabled:!text-[color-mix(in_srgb,hsl(var(--muted-foreground))_50%,var(--history-surface))]",
+    "[--history-surface:hsl(var(--background))]",
+    overSidebar && "dark:[--history-surface:hsl(var(--card))]"
+  )
   return (
     <>
       <Button

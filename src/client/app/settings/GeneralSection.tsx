@@ -425,7 +425,7 @@ export function GeneralSection({
             </SettingsSelect>
           </SettingsRow>
 
-          <SettingsRow def={SETTINGS_ROWS.transcriptWindow}>
+          <SettingsRow def={SETTINGS_ROWS.transcriptWindow} wideControl>
             <SettingsField
               hint={`${MIN_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES}–${MAX_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES} messages${transcriptWindow === DEFAULT_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES ? " (default)" : ""}`}
             >
@@ -498,7 +498,7 @@ export function GeneralSection({
               title="Command Template"
               description={<>Include {"{path}"} and optionally {"{line}"} and {"{column}"} in your command.</>}
             >
-              <SettingsField wide hint={<>Preview: <span className="font-mono">{customEditorPreview}</span></>}>
+              <SettingsField hint={<>Preview: <span className="font-mono">{customEditorPreview}</span></>}>
                 <Input
                   type="text"
                   value={editorCommandDraft}
@@ -515,7 +515,6 @@ export function GeneralSection({
 
           <SettingsRow def={SETTINGS_ROWS.newProjectsDirectory} wideControl>
             <SettingsField
-              wide
               hint={`Created on first use${newProjectsDirectory === DEFAULT_NEW_PROJECTS_DIRECTORY ? " (default)" : ""}`}
             >
               <Input
@@ -533,7 +532,7 @@ export function GeneralSection({
         </SettingsGroup>
 
         <SettingsGroup title="Terminal">
-          <SettingsRow def={SETTINGS_ROWS.terminalScrollback}>
+          <SettingsRow def={SETTINGS_ROWS.terminalScrollback} wideControl>
             <SettingsField
               hint={`${MIN_TERMINAL_SCROLLBACK}–${MAX_TERMINAL_SCROLLBACK} lines${scrollbackLines === DEFAULT_TERMINAL_SCROLLBACK ? " (default)" : ""}`}
             >
@@ -551,7 +550,7 @@ export function GeneralSection({
             </SettingsField>
           </SettingsRow>
 
-          <SettingsRow def={SETTINGS_ROWS.terminalMinColumnWidth}>
+          <SettingsRow def={SETTINGS_ROWS.terminalMinColumnWidth} wideControl>
             <SettingsField
               hint={`${MIN_TERMINAL_MIN_COLUMN_WIDTH}–${MAX_TERMINAL_MIN_COLUMN_WIDTH} px${minColumnWidth === DEFAULT_TERMINAL_MIN_COLUMN_WIDTH ? " (default)" : ""}`}
             >

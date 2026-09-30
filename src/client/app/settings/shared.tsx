@@ -46,10 +46,9 @@ const SETTINGS_INPUT_BASE_CLASS = cn(
   "hover:text-foreground focus:text-foreground",
 )
 export const SETTINGS_CONTROL_CLASS = cn(SETTINGS_INPUT_BASE_CLASS, "w-full @2xl:w-60 @2xl:text-right")
-/** Numbers are short, so they stay beside the row text at every width. */
 export const SETTINGS_NUMBER_INPUT_CLASS = cn(
   SETTINGS_INPUT_BASE_CLASS,
-  "hide-number-steppers w-24 text-right font-mono tabular-nums",
+  "hide-number-steppers w-24 text-left font-mono tabular-nums @2xl:text-right",
 )
 
 /**
@@ -272,22 +271,17 @@ export function SettingsGroups({ children }: { children: ReactNode }) {
 }
 
 /**
- * An input with the hint line under it ("1000–100000 lines (default)").
- * `wide` matches a `wideControl` row: left-aligned under the text while the
- * column is narrow. No gap: the h-9 field already leaves air under its text.
+ * An input with the hint line under it ("1000–100000 lines (default)"). Its
+ * row takes `wideControl`: with the hint the field is two lines tall, too tall
+ * to sit on the title's line, so while the column is narrow it goes under the
+ * description, left-aligned. No gap: the h-9 field already leaves air under
+ * its text.
  */
-export function SettingsField({ children, hint, wide = false }: { children: ReactNode; hint?: ReactNode; wide?: boolean }) {
+export function SettingsField({ children, hint }: { children: ReactNode; hint?: ReactNode }) {
   return (
-    <div
-      className={cn(
-        "flex min-w-0 flex-col",
-        wide ? "w-full items-stretch @2xl:w-auto @2xl:items-end" : "items-end",
-      )}
-    >
+    <div className="flex w-full min-w-0 flex-col items-stretch @2xl:w-auto @2xl:items-end">
       {children}
-      {hint ? (
-        <div className={cn("text-xs text-muted-foreground/80", wide ? "text-left @2xl:text-right" : "text-right")}>{hint}</div>
-      ) : null}
+      {hint ? <div className="text-left text-xs text-muted-foreground/80 @2xl:text-right">{hint}</div> : null}
     </div>
   )
 }

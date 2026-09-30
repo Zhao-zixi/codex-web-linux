@@ -17,7 +17,7 @@ import { postToMacApp } from "../lib/macApp"
 import { cn } from "../lib/utils"
 import type { CloudMachineSummary } from "../../shared/cloud-api"
 
-const FLEET_URL = "https://kanna.sh/fleet"
+export const FLEET_URL = "https://kanna.sh/fleet"
 const THIS_MAC_NAME = "This Mac"
 
 /**

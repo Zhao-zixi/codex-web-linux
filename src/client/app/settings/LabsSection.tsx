@@ -1,10 +1,9 @@
 import { useEffect, useState } from "react"
 import { isNightlyVersion } from "../../../shared/types"
-import { SettingsHeaderButton } from "../../components/ui/settings-header-button"
 import { Switch } from "../../components/ui/switch"
 import type { KannaState } from "../useKannaState"
 import { SETTINGS_ROWS } from "./registry"
-import { SettingsErrorBanner, SettingsGroup, SettingsRow } from "./shared"
+import { SettingsActionButton, SettingsErrorBanner, SettingsGroup, SettingsRow } from "./shared"
 
 export function LabsSection({
   state,
@@ -72,6 +71,7 @@ export function LabsSection({
       <SettingsGroup>
         <SettingsRow
           def={SETTINGS_ROWS.nightlyBuilds}
+          wideControl
           title={onNightly ? `Nightly Build ${currentVersionLabel}` : undefined}
           description={
             onNightly
@@ -90,40 +90,38 @@ export function LabsSection({
               : undefined
           }
         >
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-x-4 @2xl:justify-end">
             {onNightly && nightly?.status !== "available" ? (
-              <SettingsHeaderButton
+              <SettingsActionButton
                 onClick={() => { void checkForUpdates({ force: true }) }}
                 disabled={isUpdating || nightly?.status === "checking"}
               >
                 Check again
-              </SettingsHeaderButton>
+              </SettingsActionButton>
             ) : null}
             {onNightly ? (
-              <SettingsHeaderButton
-                variant="outline"
+              <SettingsActionButton
                 onClick={() => {
                   void state.handleInstallStable()
                 }}
                 disabled={isUpdating}
               >
                 Back to stable
-              </SettingsHeaderButton>
+              </SettingsActionButton>
             ) : null}
             {!onNightly || nightly?.status !== "up_to_date" ? (
-              <SettingsHeaderButton
-                variant="outline"
+              <SettingsActionButton
                 onClick={() => {
                   void state.handleInstallNightly()
                 }}
                 disabled={isUpdating}
               >
                 {isUpdating ? "Updating…" : "Build latest"}
-              </SettingsHeaderButton>
+              </SettingsActionButton>
             ) : null}
           </div>
         </SettingsRow>
-        <SettingsRow def={SETTINGS_ROWS.recentChatsInSidebar} inlineControl>
+        <SettingsRow def={SETTINGS_ROWS.recentChatsInSidebar}>
           <Switch
             checked={newSidebarEnabled}
             onCheckedChange={(checked) => {
@@ -132,7 +130,7 @@ export function LabsSection({
             aria-label={SETTINGS_ROWS.recentChatsInSidebar.title}
           />
         </SettingsRow>
-        <SettingsRow def={SETTINGS_ROWS.terminalWebglRenderer} inlineControl>
+        <SettingsRow def={SETTINGS_ROWS.terminalWebglRenderer}>
           <Switch
             checked={webglRendererEnabled}
             onCheckedChange={(checked) => {

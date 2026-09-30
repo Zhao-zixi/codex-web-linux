@@ -4,9 +4,8 @@ import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import type { UpdateSnapshot } from "../../../shared/types"
 import { markdownComponents } from "../../components/messages/shared"
-import { SettingsHeaderButton } from "../../components/ui/settings-header-button"
 import { cn } from "../../lib/utils"
-import { SettingsBadge, SettingsNotice, SettingsPlaceholder } from "./shared"
+import { SettingsActionButton, SettingsBadge, SettingsNotice, SettingsPlaceholder } from "./shared"
 
 const GITHUB_RELEASES_URL = "https://api.github.com/repos/jakemor/kanna/releases"
 const CHANGELOG_CACHE_TTL_MS = 5 * 60 * 1000
@@ -195,7 +194,7 @@ export function ChangelogSection({
                 {error ?? "Unable to load changelog."}
               </div>
             </div>
-            <SettingsHeaderButton onClick={onRetry}>Retry</SettingsHeaderButton>
+            <SettingsActionButton onClick={onRetry}>Retry</SettingsActionButton>
           </div>
         </SettingsNotice>
       ) : null}
@@ -208,12 +207,12 @@ export function ChangelogSection({
 
       {!canInstallUpdate && status === "success" ? (
         <div className="flex justify-end">
-          <SettingsHeaderButton
+          <SettingsActionButton
             onClick={onCheckForUpdates}
             disabled={isChecking || isUpdating}
           >
             {isChecking ? "Checking…" : "Check for updates"}
-          </SettingsHeaderButton>
+          </SettingsActionButton>
         </div>
       ) : null}
 
@@ -247,20 +246,20 @@ export function ChangelogSection({
                     target="_blank"
                     rel="noopener noreferrer"
                     aria-label="View release on GitHub"
-                    className="inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-background/60 hover:text-foreground"
+                    className="inline-flex h-8 w-8 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
                   >
                     <GitHubIcon className="h-4 w-4" />
                   </a>
 
                   {isLatestRelease && canInstallUpdate ? (
-                    <SettingsHeaderButton
-                      variant="default"
+                    <SettingsActionButton
+                      prominent
                       onClick={onInstallUpdate}
                       disabled={isUpdating}
-                      icon={<DownloadCloud className="size-4" />}
+                      icon={<DownloadCloud />}
                     >
                       {isUpdating ? "Updating…" : "Update"}
-                    </SettingsHeaderButton>
+                    </SettingsActionButton>
                   ) : null}
                 </div>
               </div>

@@ -94,6 +94,7 @@ export function KeybindingsSection({
           return (
             <SettingsRow
               key={action}
+              wideControl
               title={KEYBINDING_ACTION_LABELS[action]}
               description={(
                 <>

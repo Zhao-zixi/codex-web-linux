@@ -1,22 +1,121 @@
-import type { KeyboardEvent, ReactNode } from "react"
+import type { ButtonHTMLAttributes, KeyboardEvent, ReactNode } from "react"
 import { Loader2 } from "lucide-react"
 import type { ChatBrowserNotificationPreference } from "../../../shared/types"
+import { Select, SelectContent, SelectGroup, SelectTrigger, SelectValue } from "../../components/ui/select"
 import { cn } from "../../lib/utils"
 import type { SettingsRowDef } from "./registry"
 
 /** Shared row layout + tiny helpers for the settings sections. */
 
+/*
+ * Every control in a row is an accessory, the way iOS Settings draws them:
+ * plain text on the row, with no border, fill or corner of its own. Boxed
+ * controls brought their own radii and heights (pill buttons, rounded-lg
+ * selects, a framed segmented control) that never agreed with each other or
+ * with the card around them. Text has nothing to disagree about, and it fits
+ * a phone-width column as well as a wide one.
+ *
+ * Values sit in muted text and brighten on hover, focus and while open;
+ * actions are foreground text. With no box to ring, keyboard focus underlines.
+ * The fixed h-9 is invisible: it keeps a finger-sized target and matches the
+ * height of the two-line text beside it, so rows don't change height with
+ * their control.
+ */
+const SETTINGS_ACCESSORY_FOCUS_CLASS =
+  "outline-none focus-visible:underline focus-visible:decoration-muted-foreground/50 focus-visible:underline-offset-4"
+
+/** A picker's trigger: "Value ⌄", right-aligned against the row's edge. */
+const SETTINGS_SELECT_TRIGGER_CLASS = cn(
+  "h-9 w-auto max-w-full justify-end gap-1 rounded-none border-0 bg-transparent p-0 text-muted-foreground",
+  "hover:text-foreground focus-visible:text-foreground data-[state=open]:text-foreground",
+  "focus:ring-0 focus:ring-offset-0 [&>svg]:h-3.5 [&>svg]:w-3.5",
+  SETTINGS_ACCESSORY_FOCUS_CLASS,
+)
+
 /**
- * Control widths, so every row's control lines up in one right-hand column
- * instead of each select and input sizing itself to its content.
+ * Text fields. They sit right-aligned beside the row text once the column is
+ * wide and drop under it, left-aligned, when it isn't. The caret and the
+ * brighter text are what say "editing" now that there is no frame.
  *
  * Breakpoints here are container queries (`@2xl:`) against the settings
  * column, not the viewport: with the app sidebar open the column can be
- * phone-narrow on a wide window, and a viewport breakpoint squeezed the row
- * text into a sliver beside a 240px input.
+ * phone-narrow on a wide window.
  */
-export const SETTINGS_CONTROL_CLASS = "h-9 w-full @2xl:w-60"
-export const SETTINGS_NUMBER_INPUT_CLASS = "hide-number-steppers h-9 w-full text-left font-mono @2xl:w-28 @2xl:text-right"
+const SETTINGS_INPUT_BASE_CLASS = cn(
+  "h-9 rounded-none border-0 bg-transparent px-0 py-0 text-muted-foreground placeholder:text-muted-foreground/50",
+  "hover:text-foreground focus:text-foreground",
+)
+export const SETTINGS_CONTROL_CLASS = cn(SETTINGS_INPUT_BASE_CLASS, "w-full @2xl:w-60 @2xl:text-right")
+/** Numbers are short, so they stay beside the row text at every width. */
+export const SETTINGS_NUMBER_INPUT_CLASS = cn(
+  SETTINGS_INPUT_BASE_CLASS,
+  "hide-number-steppers w-24 text-right font-mono tabular-nums",
+)
+
+/**
+ * A select whose trigger is a row accessory. The panel lines up with the
+ * trigger's right edge, where the trigger sits, instead of hanging off its
+ * left into the row text.
+ */
+export function SettingsSelect({
+  value,
+  onValueChange,
+  disabled,
+  children,
+  "aria-label": ariaLabel,
+}: {
+  value: string
+  onValueChange: (value: string) => void
+  disabled?: boolean
+  /** The SelectItems. */
+  children: ReactNode
+  "aria-label"?: string
+}) {
+  return (
+    <Select value={value} onValueChange={onValueChange} disabled={disabled}>
+      <SelectTrigger aria-label={ariaLabel} className={SETTINGS_SELECT_TRIGGER_CLASS}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent align="end">
+        <SelectGroup>{children}</SelectGroup>
+      </SelectContent>
+    </Select>
+  )
+}
+
+/**
+ * A row's action ("Check for updates", "Edit models"). `prominent` is for the
+ * one action a row is asking you to take, like installing an available
+ * update: it takes the brand colour, as a tinted text button does on iOS.
+ */
+export function SettingsActionButton({
+  children,
+  className,
+  icon,
+  prominent = false,
+  type = "button",
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & { icon?: ReactNode; prominent?: boolean }) {
+  return (
+    <button
+      type={type}
+      className={cn(
+        "inline-flex h-9 min-w-0 max-w-full cursor-pointer items-center gap-1.5 whitespace-nowrap text-sm font-medium",
+        "touch-manipulation transition-[color,opacity,scale] duration-150 ease-out active:scale-[0.97]",
+        "disabled:cursor-default disabled:opacity-50 disabled:active:scale-100 [&_svg]:size-4 [&_svg]:shrink-0",
+        prominent ? "text-logo hover:text-logo/80" : "text-foreground hover:text-foreground/70",
+        SETTINGS_ACCESSORY_FOCUS_CLASS,
+        className,
+      )}
+      {...props}
+    >
+      {icon}
+      {/* A narrow row gives the action half the width; a long label ("Update
+          to 0.77.1-dev") ellipsizes instead of spilling over the title. */}
+      <span className="truncate">{children}</span>
+    </button>
+  )
+}
 
 /**
  * Left/right inset for text that sits on the page above a card (group
@@ -135,7 +234,7 @@ export function SettingsBadge({ children, className }: { children: ReactNode; cl
  */
 export function SettingsGroupHeading({ children, trailing }: { children: ReactNode; trailing?: ReactNode }) {
   return (
-    <div className={cn("flex min-h-5 items-center justify-between gap-3 pb-2", SETTINGS_INSET_X_CLASS)}>
+    <div className={cn("flex min-h-5 items-center justify-between gap-3 pb-1.5", SETTINGS_INSET_X_CLASS)}>
       <h3 className="text-sm text-slate-500 dark:text-slate-400">{children}</h3>
       {trailing}
     </div>
@@ -169,15 +268,26 @@ export function SettingsGroup({
 
 /** Stacks groups with one rhythm across every section. */
 export function SettingsGroups({ children }: { children: ReactNode }) {
-  return <div className="space-y-10">{children}</div>
+  return <div className="space-y-8">{children}</div>
 }
 
-/** An input with the hint line under it ("1000–100000 lines (default)"). */
-export function SettingsField({ children, hint }: { children: ReactNode; hint?: ReactNode }) {
+/**
+ * An input with the hint line under it ("1000–100000 lines (default)").
+ * `wide` matches a `wideControl` row: left-aligned under the text while the
+ * column is narrow. No gap: the h-9 field already leaves air under its text.
+ */
+export function SettingsField({ children, hint, wide = false }: { children: ReactNode; hint?: ReactNode; wide?: boolean }) {
   return (
-    <div className="flex w-full min-w-0 flex-col items-stretch gap-1.5 @2xl:w-auto @2xl:items-end">
+    <div
+      className={cn(
+        "flex min-w-0 flex-col",
+        wide ? "w-full items-stretch @2xl:w-auto @2xl:items-end" : "items-end",
+      )}
+    >
       {children}
-      {hint ? <div className="text-left text-xs text-muted-foreground @2xl:text-right">{hint}</div> : null}
+      {hint ? (
+        <div className={cn("text-xs text-muted-foreground/80", wide ? "text-left @2xl:text-right" : "text-right")}>{hint}</div>
+      ) : null}
     </div>
   )
 }
@@ -188,11 +298,17 @@ type SettingsRowProps = {
   /** Indents a row that only exists because of the row above it. */
   nested?: boolean
   /**
-   * Keeps a small control (a switch) beside the text at every width. Wide
-   * controls instead drop under the text once the column gets narrow.
+   * For controls too wide to share a line with the title (text fields, the
+   * provider pickers): below the breakpoint they get their own full-width
+   * line under the description. See SettingsRow for both layouts.
    */
-  inlineControl?: boolean
-  /** Overrides `def.description` when the rendered description is dynamic JSX. */
+  wideControl?: boolean
+  /** A logo before the title (the provider rows). Spaced like the Accounts rows so their names line up. */
+  icon?: ReactNode
+  /**
+   * Overrides `def.description` when the rendered description is dynamic JSX.
+   * `null` shows no subtitle; the def's description still feeds palette search.
+   */
   description?: ReactNode
 } & (
   | {
@@ -203,7 +319,6 @@ type SettingsRowProps = {
   | {
     def?: undefined
     title: string
-    description: ReactNode
   }
 )
 
@@ -211,11 +326,33 @@ export function SettingsRow({
   def,
   title,
   description,
+  icon,
   children,
   alignStart = false,
   nested = false,
-  inlineControl = false,
+  wideControl = false,
 }: SettingsRowProps) {
+  const resolvedDescription = description === undefined ? def?.description : description
+  const hasDescription = Boolean(resolvedDescription)
+  /*
+   * Two layouts on one grid, switched at the column's @2xl breakpoint.
+   *
+   * Wide: text on the left, control on the right, centred on the text.
+   *
+   *   Title        [control]
+   *   Description  [control]
+   *
+   * Narrow: beside the text, the control squeezed the description into a
+   * thin column of two-word lines. Instead a small control shares the title's
+   * line and the description takes the full width under both. A wide control
+   * has no room on that line, so it gets its own full-width line last.
+   *
+   *   Title   [control]        Title
+   *   Description.........     Description.........
+   *                            [wide control.......]
+   *
+   * Spacing is margins, not gap, so an empty description row adds nothing.
+   */
   return (
     <div
       id={def?.id}
@@ -224,24 +361,30 @@ export function SettingsRow({
     >
       <div
         className={cn(
-          "flex py-3.5",
-          inlineControl
-            ? "items-center justify-between gap-4"
-            : cn(
-              "flex-col gap-3 @2xl:flex-row @2xl:justify-between @2xl:gap-8",
-              alignStart ? "@2xl:items-start" : "@2xl:items-center",
-            ),
+          "grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 py-2.5 @2xl:gap-x-8",
           nested && "pl-6",
         )}
       >
-        <div className="min-w-0 max-w-xl flex-1">
-          <div className="text-sm font-medium text-foreground">{title ?? def?.title}</div>
-          <div className="mt-0.5 text-[13px] leading-5 text-muted-foreground">{description ?? def?.description}</div>
+        <div className="col-[1] row-[1] flex min-w-0 items-center gap-3 self-center text-sm font-medium text-foreground @2xl:max-w-xl">
+          {icon}
+          <span className="min-w-0">{title ?? def?.title}</span>
         </div>
+        {hasDescription ? (
+          <div className="col-[1/-1] row-[2] mt-0.5 text-[13px] leading-5 text-muted-foreground @2xl:col-[1] @2xl:max-w-xl">
+            {resolvedDescription}
+          </div>
+        ) : null}
         <div
           className={cn(
-            "flex items-center",
-            inlineControl ? "shrink-0" : "w-full justify-start @2xl:w-auto @2xl:shrink-0 @2xl:justify-end",
+            "flex min-w-0 items-center self-center",
+            wideControl
+              ? "col-[1/-1] row-[3] mt-2 justify-start @2xl:col-[2] @2xl:mt-0 @2xl:justify-end"
+              // The control is h-9 but the title line is h-5: the negative
+              // margin lets it centre on the title without pushing the
+              // description down.
+              : "col-[2] row-[1] -my-2 max-w-[50cqw] justify-end @2xl:my-0",
+            hasDescription ? "@2xl:row-[1/3]" : "@2xl:row-[1]",
+            alignStart && "@2xl:self-start",
           )}
         >
           {children}

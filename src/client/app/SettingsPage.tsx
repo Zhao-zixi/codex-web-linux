@@ -7,7 +7,6 @@ import {
 } from "lucide-react"
 import { useLocation, useNavigate, useOutletContext, useParams } from "react-router-dom"
 import { getKeybindingsFilePathDisplay, SDK_CLIENT_APP } from "../../shared/branding"
-import { SettingsHeaderButton } from "../components/ui/settings-header-button"
 import { getResolvedKeybindings } from "../lib/keybindings"
 import { cn } from "../lib/utils"
 import { ChangelogSection, useChangelog } from "./settings/ChangelogSection"
@@ -19,7 +18,7 @@ import { ProvidersSection } from "./settings/ProvidersSection"
 import { SETTINGS_SECTIONS, visibleSettingsSections } from "./settings/registry"
 import { SkillsSection } from "./settings/SkillsSection"
 import { UsageSection } from "./settings/UsageSection"
-import { getKeybindingsSubtitle, SETTINGS_INSET_X_CLASS, SettingsNotice, SettingsPlaceholder } from "./settings/shared"
+import { getKeybindingsSubtitle, SETTINGS_INSET_X_CLASS, SettingsActionButton, SettingsNotice, SettingsPlaceholder } from "./settings/shared"
 import type { KannaState } from "./useKannaState"
 
 // Sections live under ./settings/; these re-exports keep the historical
@@ -288,20 +287,20 @@ export function SettingsPage() {
                   sectionSwitched && "transition-opacity duration-150 ease-snappy starting:opacity-0",
                 )}
               >
-                <div className={cn("pb-8", SETTINGS_INSET_X_CLASS)}>
+                <div className={cn("pb-6", SETTINGS_INSET_X_CLASS)}>
                   <div className="flex items-center justify-between gap-4 min-h-[34px]">
                     <div className="text-lg font-semibold tracking-[-0.2px] text-foreground">
                       {selectedSection.label}
                     </div>
                     {selectedPage === "keybindings" ? (
-                      <SettingsHeaderButton
+                      <SettingsActionButton
                         onClick={() => {
                           void state.handleOpenExternalPath("open_editor", keybindingsFilePathDisplay)
                         }}
-                        icon={<Code className="h-4 w-4" />}
+                        icon={<Code />}
                       >
                         Open in {state.editorLabel}
-                      </SettingsHeaderButton>
+                      </SettingsActionButton>
                     ) : null}
                   </div>
                   <div className="mt-1 text-sm text-muted-foreground">

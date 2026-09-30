@@ -9,13 +9,12 @@ import type {
   SkillSearchSnapshot,
   SkillUninstallResult,
 } from "../../../shared/types"
-import { Button } from "../../components/ui/button"
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger } from "../../components/ui/context-menu"
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../components/ui/tooltip"
 import { PROVIDER_ICONS } from "../../components/chat-ui/ChatPreferenceControls"
 import type { KannaState } from "../useKannaState"
 import { cn } from "../../lib/utils"
-import { SETTINGS_LIST_CARD_CLASS, SettingsNotice } from "./shared"
+import { SETTINGS_LIST_CARD_CLASS, SettingsActionButton, SettingsNotice } from "./shared"
 
 const PROVIDER_LABELS: Record<AgentProvider, string> = {
   claude: "Claude",
@@ -96,7 +95,7 @@ function GlobalSkillCard({
   }
 
   const card = (
-    <div ref={cardRef} className="flex min-w-0 items-center justify-between gap-4 px-4 py-3">
+    <div ref={cardRef} className="flex min-w-0 items-center justify-between gap-4 px-4 py-2.5">
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-medium text-foreground">{skill.name}</div>
         {description ? (
@@ -111,7 +110,7 @@ function GlobalSkillCard({
           type="button"
           aria-label={`Open actions for ${skill.name}`}
           onClick={openContextMenuFromButton}
-          className="touch-manipulation flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className="touch-manipulation flex h-7 w-7 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
         >
           {uninstalling ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Ellipsis className="h-4 w-4 shrink-0" />}
         </button>
@@ -177,7 +176,7 @@ function SkillResultCard({
   onInstall: () => void
 }) {
   return (
-    <div className="flex min-w-0 items-center justify-between gap-4 px-4 py-3">
+    <div className="flex min-w-0 items-center justify-between gap-4 px-4 py-2.5">
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-medium text-foreground">{skill.name}</div>
         <div className="mt-0.5 truncate text-[13px] leading-5 text-muted-foreground">{skill.source} · {formatInstallCount(skill.installs)}</div>
@@ -189,21 +188,17 @@ function SkillResultCard({
           target="_blank"
           rel="noreferrer"
           aria-label={`View ${skill.name} on skills.sh`}
-          className="touch-manipulation inline-flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className="touch-manipulation inline-flex h-7 w-7 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
         >
           <ExternalLink className="h-4 w-4" />
         </a>
-        <Button
-          type="button"
-          size="sm"
-          variant={installed ? "secondary" : "default"}
+        <SettingsActionButton
           disabled={installing || installed}
           onClick={onInstall}
-          className="h-7 rounded-full px-3 text-xs font-semibold"
+          icon={installing ? <Loader2 className="animate-spin" /> : null}
         >
-          {installing ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
           {installed ? "Installed" : installing ? "Installing" : "Get"}
-        </Button>
+        </SettingsActionButton>
       </div>
     </div>
   )
@@ -416,7 +411,7 @@ export function SkillsSection({
       <div className={SETTINGS_LIST_CARD_CLASS}>
         {/* The search field is the card's header row, on the card's own
             surface rather than a separate input box above it. */}
-        <div className="flex h-12 items-center gap-2.5 px-4">
+        <div className="flex h-11 items-center gap-2.5 px-4">
           <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
           <input
             type="text"
@@ -440,7 +435,7 @@ export function SkillsSection({
               type="button"
               aria-label="Clear skills search"
               onClick={() => setQuery("")}
-              className="touch-manipulation inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              className="touch-manipulation inline-flex h-6 w-6 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:text-foreground"
             >
               <X className="h-3.5 w-3.5" />
             </button>

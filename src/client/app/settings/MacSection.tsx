@@ -1,11 +1,10 @@
 import { Check } from "lucide-react"
 import { FULL_DISK_ACCESS_STEPS, useMacSetupState } from "../../components/auth/MacSetupStep"
-import { Button } from "../../components/ui/button"
-import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select"
+import { SelectItem } from "../../components/ui/select"
 import { Switch } from "../../components/ui/switch"
 import { macSetup, type MacQuitBehavior } from "../../lib/macApp"
 import { SETTINGS_ROWS } from "./registry"
-import { SETTINGS_CONTROL_CLASS, SettingsGroup, SettingsGroups, SettingsPlaceholder, SettingsRow } from "./shared"
+import { SettingsActionButton, SettingsGroup, SettingsGroups, SettingsPlaceholder, SettingsRow, SettingsSelect } from "./shared"
 
 const QUIT_BEHAVIOR_OPTIONS: { value: MacQuitBehavior; label: string }[] = [
   { value: "ask", label: "Ask" },
@@ -31,15 +30,14 @@ export function MacSection() {
       <SettingsGroup title="Staying Online">
         <SettingsRow
           def={SETTINGS_ROWS.openAtLogin}
-          inlineControl
           description={state.loginItem === "requiresApproval"
             ? "macOS wants this approved: turn Kanna on under Login Items to finish."
             : undefined}
         >
           {state.loginItem === "requiresApproval" ? (
-            <Button variant="outline" size="sm" onClick={macSetup.openLoginItems}>
+            <SettingsActionButton onClick={macSetup.openLoginItems}>
               Open Login Items
-            </Button>
+            </SettingsActionButton>
           ) : (
             <Switch
               checked={state.loginItem === "enabled"}
@@ -50,7 +48,6 @@ export function MacSection() {
         </SettingsRow>
         <SettingsRow
           def={SETTINGS_ROWS.keepAwake}
-          inlineControl
           description={
             <>
               {SETTINGS_ROWS.keepAwake.description}
@@ -70,7 +67,6 @@ export function MacSection() {
         </SettingsRow>
         <SettingsRow
           def={SETTINGS_ROWS.keepAwakeOnBattery}
-          inlineControl
           nested
           description={!state.pluggedIn && !state.keepAwakeOnBattery
             ? "On battery now: this Mac sleeps when idle until it's plugged in."
@@ -88,23 +84,16 @@ export function MacSection() {
         </SettingsRow>
         {state.quitBehavior ? (
           <SettingsRow def={SETTINGS_ROWS.quitBehavior}>
-            <Select
+            <SettingsSelect
               value={state.quitBehavior}
               onValueChange={(value) => macSetup.setQuitBehavior(value as MacQuitBehavior)}
             >
-              <SelectTrigger className={SETTINGS_CONTROL_CLASS}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {QUIT_BEHAVIOR_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
+              {QUIT_BEHAVIOR_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SettingsSelect>
           </SettingsRow>
         ) : null}
       </SettingsGroup>
@@ -126,9 +115,9 @@ export function MacSection() {
               Granted
             </span>
           ) : (
-            <Button variant="outline" size="sm" onClick={macSetup.openFullDiskAccess}>
+            <SettingsActionButton onClick={macSetup.openFullDiskAccess}>
               Open Privacy Settings
-            </Button>
+            </SettingsActionButton>
           )}
         </SettingsRow>
       </SettingsGroup>

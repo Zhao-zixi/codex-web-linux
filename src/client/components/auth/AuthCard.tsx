@@ -57,11 +57,32 @@ function ActionButton({
   children,
   onClick,
   busy = false,
+  text = false,
 }: {
   children: React.ReactNode
   onClick: () => void
   busy?: boolean
+  /** Plain text, no pill: Settings draws every row control this way. */
+  text?: boolean
 }) {
+  if (text) {
+    return (
+      <button
+        type="button"
+        disabled={busy}
+        onClick={onClick}
+        className={cn(
+          "inline-flex h-7 shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap text-sm font-medium text-foreground",
+          "touch-manipulation transition-[color,opacity,scale] duration-150 ease-out hover:text-foreground/70 active:scale-[0.97]",
+          "outline-none focus-visible:underline focus-visible:underline-offset-4",
+          "disabled:cursor-default disabled:opacity-50 disabled:active:scale-100",
+        )}
+      >
+        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+        {children}
+      </button>
+    )
+  }
   return (
     <Button
       variant="outline"
@@ -79,9 +100,11 @@ function ActionButton({
 export function LoginFlowPanel({
   service,
   socket,
+  textActions = false,
 }: {
   service: AuthServiceSnapshot
   socket: KannaSocket
+  textActions?: boolean
 }) {
   const login = service.login
   const [code, setCode] = useState("")
@@ -192,9 +215,12 @@ export function LoginFlowPanel({
             spellCheck={false}
             autoCapitalize="off"
             autoCorrect="off"
-            className="h-8 flex-1 font-mono text-sm"
+            className={cn(
+              "h-8 flex-1 font-mono text-sm",
+              textActions && "rounded-none border-0 bg-transparent px-0 placeholder:text-muted-foreground/50",
+            )}
           />
-          <ActionButton onClick={() => void submitCode()} busy={submitting}>
+          <ActionButton text={textActions} onClick={() => void submitCode()} busy={submitting}>
             Submit
           </ActionButton>
         </div>
@@ -208,7 +234,7 @@ export function LoginFlowPanel({
       <div className="text-sm text-destructive">{login.message}</div>
       {login.hint ? <div className="text-xs text-muted-foreground">{login.hint}</div> : null}
       <div className="flex items-center gap-3">
-        <ActionButton onClick={retry}>Try Again</ActionButton>
+        <ActionButton text={textActions} onClick={retry}>Try Again</ActionButton>
       </div>
     </div>
   )
@@ -220,18 +246,22 @@ export function LoginFlowPanel({
  * with the live sign-in flow rendered inline below the header.
  *
  * `row` drops the card's own box so several can share one card with
- * hairlines between them (the setup wizard's SetupList).
+ * hairlines between them (the setup wizard's SetupList, Settings' Accounts).
+ * `textActions` draws the actions as plain text instead of pills, for
+ * Settings, where no row control has a box.
  */
 export function AuthCard({
   service,
   socket,
   className,
   row = false,
+  textActions = false,
 }: {
   service: AuthServiceSnapshot
   socket: KannaSocket
   className?: string
   row?: boolean
+  textActions?: boolean
 }) {
   const Icon = AUTH_SERVICE_ICONS[service.service]
   const version = displayVersion(service.version)
@@ -266,17 +296,17 @@ export function AuthCard({
       </button>
     )
   } else if (installing) {
-    action = <ActionButton onClick={() => {}} busy>Installing…</ActionButton>
+    action = <ActionButton text={textActions} onClick={() => {}} busy>Installing…</ActionButton>
   } else if (!service.installed || service.authStatus === "not_installed") {
-    action = <ActionButton onClick={install}>Install</ActionButton>
+    action = <ActionButton text={textActions} onClick={install}>Install</ActionButton>
   } else if (service.authStatus === "signed_out" && !loginActive) {
     action = (
-      <ActionButton onClick={startLogin}>
+      <ActionButton text={textActions} onClick={startLogin}>
         {service.service === "openrouter" ? "Authenticate" : "Log In"}
       </ActionButton>
     )
   } else if (service.authStatus === "signed_in" && service.updateAvailable && service.latestVersion) {
-    action = <ActionButton onClick={install}>Update to {displayVersion(service.latestVersion)}</ActionButton>
+    action = <ActionButton text={textActions} onClick={install}>Update to {displayVersion(service.latestVersion)}</ActionButton>
   } else if (service.authStatus === "signed_in") {
     action = (
       <span className="flex shrink-0 items-center pr-2" title={service.account ?? "Connected"}>
@@ -287,14 +317,14 @@ export function AuthCard({
     // The installed CLI can't run the commands Kanna drives — updating is
     // the only way forward, so it's the card's sole action (no Log In).
     action = (
-      <ActionButton onClick={install}>
+      <ActionButton text={textActions} onClick={install}>
         {service.latestVersion ? `Update to ${displayVersion(service.latestVersion)}` : "Update"}
       </ActionButton>
     )
   } else if (service.authStatus === "error" && service.installed) {
     // A probe error usually means the CLI is too old or broken — offer the
     // installer as the escape hatch instead of dead-ending on the message.
-    action = <ActionButton onClick={install}>Update</ActionButton>
+    action = <ActionButton text={textActions} onClick={install}>Update</ActionButton>
   } else if (service.authStatus === "unknown") {
     action = <span className="shrink-0 text-xs text-muted-foreground">Checking…</span>
   }
@@ -317,7 +347,7 @@ export function AuthCard({
       {(service.authStatus === "error" || service.authStatus === "outdated") && service.statusDetail ? (
         <div className="mt-2 text-xs text-muted-foreground">{service.statusDetail}</div>
       ) : null}
-      <LoginFlowPanel service={service} socket={socket} />
+      <LoginFlowPanel service={service} socket={socket} textActions={textActions} />
     </div>
   )
 }

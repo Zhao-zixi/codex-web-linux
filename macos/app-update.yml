@@ -1,0 +1,9 @@
+# electron-updater reads this from Contents/Resources before it downloads an
+# update: updaterCacheDirName names the folder the zip lands in. Without the
+# file the download fails as soon as it starts, and 2.0.x never updated.
+# electron-builder writes one only for its own dmg or zip targets, and this
+# app packages as `dir` (build.sh makes the zip and DMG), so it ships from
+# here instead. src/updates.ts sets the same feed URL.
+provider: generic
+url: https://kanna.sh/downloads/mac
+updaterCacheDirName: kanna-mac-updater

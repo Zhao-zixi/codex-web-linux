@@ -13,6 +13,9 @@ files:
 extraResources:
   - from: uninstall.sh
     to: uninstall.sh
+  # electron-updater needs it to download an update (see the file).
+  - from: app-update.yml
+    to: app-update.yml
 # kanna-app://open from a terminal's `kanna` (src/server/mac-app.ts in the
 # repo root) and kanna-app://auth from kanna.sh's sign-in (src/app-auth.ts).
 # kanna.sh hands a session only to the schemes it knows (APP_AUTH_SCHEMES in

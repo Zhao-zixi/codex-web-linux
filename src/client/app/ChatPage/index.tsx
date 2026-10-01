@@ -29,6 +29,7 @@ import type { DiffViewerContext } from "../../components/chat-ui/git/DiffViewer"
 import { useProjectRepoUrl, useSidebarChatHasMessages } from "../../stores/sidebarStore"
 import { DEFAULT_PROJECT_TERMINAL_LAYOUT, isTerminalVisible, useTerminalLayoutStore } from "../../stores/terminalLayoutStore"
 import { usePaneChatKey } from "../../lib/paneVisibility"
+import { useChannelsLayout } from "../../stores/sidebarViewStore"
 import { useTerminalPreferencesStore } from "../../stores/terminalPreferencesStore"
 import { shouldCloseTerminalPane } from "../terminalLayoutResize"
 
@@ -592,6 +593,12 @@ export function ChatPage() {
 
   const isMobileViewport = useIsMobileViewport()
   const navigate = useNavigate()
+  // In the Channels layout this chat is a thread of its project's channel,
+  // and leaving it goes back to the channel rather than to the sidebar.
+  const channelsLayout = useChannelsLayout()
+  const handleCloseThread = useCallback(() => {
+    if (projectId) navigate(`/project/${encodeURIComponent(projectId)}`)
+  }, [navigate, projectId])
   const terminalLayout = useMemo(() => {
     const mainSizes = getEffectiveTerminalMainSizes(storedTerminalLayout.mainSizes, isMobileViewport)
     return mainSizes === storedTerminalLayout.mainSizes ? storedTerminalLayout : { ...storedTerminalLayout, mainSizes }
@@ -1426,9 +1433,12 @@ export function ChatPage() {
       headerRef={navbarRef}
       className={isMobileViewport ? undefined : "z-40"}
       inert={isMobileViewport && viewerOpen}
-      sidebarCollapsed={state.sidebarCollapsed}
-      onOpenSidebar={state.openSidebar}
+      // Beside a channel the chat is not the leftmost pane: the channel's
+      // header takes the expand button and the room for the traffic lights.
+      sidebarCollapsed={state.sidebarCollapsed && !channelsLayout}
+      onOpenSidebar={channelsLayout && projectId ? handleCloseThread : state.openSidebar}
       onExpandSidebar={state.expandSidebar}
+      onCloseThread={channelsLayout && projectId ? handleCloseThread : undefined}
       localPath={state.navbarLocalPath}
       embeddedTerminalVisible={showTerminalPane}
       onToggleEmbeddedTerminal={projectId ? handleToggleEmbeddedTerminal : undefined}

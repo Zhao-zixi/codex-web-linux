@@ -1,10 +1,10 @@
-import { Archive, Folder, ListFilter, MessageCircle } from "lucide-react"
+import { Archive, Folder, Hash, ListFilter, MessageCircle } from "lucide-react"
 import { cn } from "../../../lib/utils"
 import { buttonVariants } from "../../ui/button"
 import { InputPopover, PopoverMenuItem } from "../ChatPreferenceControls"
 
 /** Which view the sidebar shows when the recent-chats Labs mode is enabled. */
-export type SidebarView = "recents" | "projects" | "archived"
+export type SidebarView = "recents" | "projects" | "channels" | "archived"
 
 /**
  * One row's text: the name with its qualifier trailing it inline — rows in a
@@ -24,7 +24,8 @@ function ViewLabel({ name, detail }: { name: string; detail: string }) {
 }
 
 /**
- * Swaps the sidebar between its Chats, Projects and Archived views.
+ * Swaps the sidebar between its Chats, Projects, Channels and Archived views.
+ * Channels changes more than the sidebar: see `useChannelsLayout`.
  *
  * Sits at the right end of the New Chat row — one fixed spot that doesn't move
  * with the view or with which section happens to render first. It is the
@@ -70,6 +71,15 @@ export function SidebarViewSwitcher({
             selected={view === "projects"}
             icon={<Folder className="h-4 w-4" />}
             label={<ViewLabel name="Projects" detail="grouped by recency" />}
+          />
+          <PopoverMenuItem
+            onClick={() => {
+              close()
+              onChange("channels")
+            }}
+            selected={view === "channels"}
+            icon={<Hash className="h-4 w-4" />}
+            label={<ViewLabel name="Channels" detail="threads by project" />}
           />
           <PopoverMenuItem
             onClick={() => {

@@ -24,8 +24,14 @@ export const DIFF_REVIEW_STORAGE_KEY_PREFIX = "kanna:diff-review:"
 /** localStorage: last app chosen to open a single file from the viewer. */
 export const OPEN_FILE_DESTINATION_STORAGE_KEY = "kanna:last-open-file"
 
-/** localStorage: active sidebar view ("recents" | "projects") when the recent-chats Labs mode is on. */
+/** localStorage: active sidebar view ("recents" | "projects" | "channels") when the recent-chats Labs mode is on. */
 export const SIDEBAR_VIEW_STORAGE_KEY = "kanna:sidebar-view"
+
+/** localStorage: width in pixels of the Channels layout's thread list while a thread is open beside it. */
+export const CHANNEL_PANEL_WIDTH_STORAGE_KEY = "kanna:channel-panel-width"
+
+/** localStorage: JSON map of project id to when its channel was pinned in the Channels sidebar. */
+export const CHANNEL_PINS_STORAGE_KEY = "kanna:channel-pins"
 
 /** localStorage: focus mode is on, so the sidebar shows only the open chat's project. */
 export const SIDEBAR_FOCUS_MODE_STORAGE_KEY = "kanna:sidebar-focus-mode"

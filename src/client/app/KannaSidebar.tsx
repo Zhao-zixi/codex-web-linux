@@ -16,6 +16,8 @@ import { ThreadRow } from "../components/chat-ui/sidebar/ThreadRow"
 import { ThreadSections } from "../components/chat-ui/sidebar/ThreadSections"
 import { Kbd } from "../components/ui/kbd"
 import { SidebarViewSwitcher, type SidebarView } from "../components/chat-ui/sidebar/SidebarViewSwitcher"
+import { ChannelList } from "../components/channels/ChannelList"
+import { useSidebarViewStore } from "../stores/sidebarViewStore"
 import { MachineSwitcher } from "./MachineSwitcher"
 import { getResolvedKeybindings } from "../lib/keybindings"
 import { useIsStandalone } from "../hooks/useIsStandalone"
@@ -29,7 +31,7 @@ import {
   isSidebarModifierShortcut,
   shouldShowSidebarNumberJumpHints,
 } from "./sidebarNumberJump"
-import { SIDEBAR_VIEW_STORAGE_KEY, SIDEBAR_WIDTH_STORAGE_KEY } from "../lib/storageKeys"
+import { SIDEBAR_WIDTH_STORAGE_KEY } from "../lib/storageKeys"
 import { useAppSettingsStore } from "../stores/appSettingsStore"
 import { usePendingSendStore } from "../stores/pendingSendStore"
 import { useSidebarData } from "../stores/sidebarStore"
@@ -64,17 +66,6 @@ function readStoredSidebarWidth() {
 function persistSidebarWidth(width: number) {
   if (typeof window === "undefined") return
   window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(clampSidebarWidth(width)))
-}
-
-/**
- * The list view to start in. Only ever Chats or Projects: Archived is somewhere
- * you visit and get returned from (see `leaveArchivedView`), so it is never
- * persisted — and what's stored is exactly the view Archived hands you back to,
- * across reloads as well as within a session.
- */
-function readStoredSidebarView(): Exclude<SidebarView, "archived"> {
-  if (typeof window === "undefined") return "recents"
-  return window.localStorage.getItem(SIDEBAR_VIEW_STORAGE_KEY) === "projects" ? "projects" : "recents"
 }
 
 interface KannaSidebarProps {
@@ -223,19 +214,8 @@ function KannaSidebarImpl({
   // Which project's archived chats the dialog is showing, if any. The
   // workspace-wide list is the sidebar's own Archived view, not this.
   const [archivedProjectId, setArchivedProjectId] = useState<string | null>(null)
-  const [sidebarView, setSidebarView] = useState<SidebarView>(readStoredSidebarView)
-  // Where Archived hands you back to. Held in a ref because nothing renders it
-  // — it is read at the moment you leave, which can be from a store
-  // subscription rather than a render.
-  const returnViewRef = useRef<Exclude<SidebarView, "archived">>(readStoredSidebarView())
-
-  const changeSidebarView = useCallback((view: SidebarView) => {
-    setSidebarView(view)
-    if (view === "archived") return
-    returnViewRef.current = view
-    if (typeof window !== "undefined") window.localStorage.setItem(SIDEBAR_VIEW_STORAGE_KEY, view)
-  }, [])
-
+  const sidebarView = useSidebarViewStore((state) => state.view)
+  const setSidebarView = useSidebarViewStore((state) => state.setView)
   /**
    * Leave the Archived view for the one you were in before it — a no-op from
    * anywhere else, so callers don't have to check where they are.
@@ -246,9 +226,26 @@ function KannaSidebarImpl({
    * restoring one. Staying put would leave you looking at a list the chat you
    * just acted on has dropped out of.
    */
-  const leaveArchivedView = useCallback(() => {
-    setSidebarView((current) => (current === "archived" ? returnViewRef.current : current))
-  }, [])
+  const leaveArchivedView = useSidebarViewStore((state) => state.leaveArchived)
+
+  const selectProject = useCallback((projectId: string) => {
+    navigate(`/project/${encodeURIComponent(projectId)}`)
+  }, [navigate])
+
+  // Channels is a layout as much as a view, so switching to or from it also
+  // moves the page: into the current project's channel, unless a chat is open
+  // (its channel appears beside it), and off a channel page when leaving,
+  // since that page belongs to the layout being left.
+  const changeSidebarView = useCallback((view: SidebarView) => {
+    const onProjectPage = location.pathname.startsWith("/project/")
+    const onChatPage = location.pathname.startsWith("/chat/")
+    if (view === "channels" && !onChatPage && !onProjectPage && currentProjectId) {
+      selectProject(currentProjectId)
+    } else if (view !== "channels" && onProjectPage) {
+      navigate("/")
+    }
+    setSidebarView(view)
+  }, [currentProjectId, location.pathname, navigate, selectProject, setSidebarView])
 
   const handleRestoreChat = useCallback((chatId: string) => {
     leaveArchivedView()
@@ -874,8 +871,9 @@ function KannaSidebarImpl({
 
             {/* Not in the Archived view: there, "no conversations yet" would sit
                 above a list of the conversations you archived, and the view
-                states its own emptiness anyway. */}
-            {!isConnecting && sidebarView !== "archived" && (
+                states its own emptiness anyway. Nor in Channels, which lists
+                projects whether or not they have conversations. */}
+            {!isConnecting && sidebarView !== "archived" && sidebarView !== "channels" && (
               (!hasVisibleChats && data.projectGroups.length === 0)
               // A focused project with no chats: say so, rather than leave the
               // list blank under a pill naming the project.
@@ -921,6 +919,17 @@ function KannaSidebarImpl({
                 onDeleteChat={onDeleteChat}
                 onCopyPath={onCopyPath}
                 onOpenExternalPath={onOpenExternalPath}
+              />
+            ) : null}
+
+            {/* Every project, even in focus mode: a channel list narrowed to
+                one channel would leave no way to another. */}
+            {newSidebarEnabled && sidebarView === "channels" ? (
+              <ChannelList
+                projectGroups={allProjectsData.projectGroups}
+                activeProjectId={currentProjectId}
+                nowMs={nowMs}
+                onSelect={selectProject}
               />
             ) : null}
 

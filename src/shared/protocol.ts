@@ -242,6 +242,12 @@ export type ClientCommand =
   /** The hover card's prompt and reply text; see `ChatPreview`. */
   | { type: "chat.getPreview"; chatId: string }
   /**
+   * The first prompt of each chat, for the Channels layout's thread list.
+   * Result: Record<chatId, ThreadStarter>, with no key for a chat that has no
+   * prompt yet.
+   */
+  | { type: "project.threadStarters"; chatIds: string[] }
+  /**
    * Fetch one entry's raw provider payload. Snapshots omit `debugRaw` because
    * it duplicates `content` and dominates the transcript payload, so the raw
    * JSON debug view pulls it on demand when opened.

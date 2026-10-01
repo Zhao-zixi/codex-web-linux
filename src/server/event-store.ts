@@ -7,7 +7,7 @@ import { getDataDir, LOG_PREFIX } from "../shared/branding"
 import { toMessagePreview } from "../shared/message-preview"
 import { buildTranscriptOutline, findTranscriptWindowStart } from "../shared/transcript-window"
 import type { TranscriptOutlineEntry } from "../shared/types"
-import type { AgentProvider, QueuedChatMessage, ResolvedChatReadAnchor, TranscriptEntry } from "../shared/types"
+import type { AgentProvider, QueuedChatMessage, ResolvedChatReadAnchor, ThreadStarter, TranscriptEntry } from "../shared/types"
 import { STORE_VERSION } from "../shared/types"
 import {
   type ChatEvent,
@@ -130,6 +130,30 @@ const TRANSCRIPT_METADATA_TAIL_BYTES = 256 * 1024
  * Stripping before the truncation also means the 160 characters are spent on
  * words rather than syntax.
  */
+/** Enough for a long prompt; the channel clamps what it shows anyway. */
+const THREAD_STARTER_MAX_LENGTH = 4_000
+/**
+ * How much of a transcript's head to read looking for the first prompt. It is
+ * nearly always in the first step: only `system_init` and the like come before
+ * it. The larger steps are for a prompt with a great deal pasted into it.
+ */
+const THREAD_STARTER_HEAD_BYTES = [64 * 1024, 1024 * 1024, Number.POSITIVE_INFINITY]
+
+function toThreadStarter(entry: TranscriptEntry | undefined): ThreadStarter | null {
+  if (entry?.kind !== "user_prompt") return null
+  const truncated = entry.content.length > THREAD_STARTER_MAX_LENGTH
+  return {
+    content: truncated ? entry.content.slice(0, THREAD_STARTER_MAX_LENGTH) : entry.content,
+    ...(truncated ? { truncated } : {}),
+    createdAt: entry.createdAt,
+    ...(entry.attachments?.length ? { attachmentCount: entry.attachments.length } : {}),
+  }
+}
+
+function isVisibleUserPrompt(entry: TranscriptEntry) {
+  return entry.kind === "user_prompt" && !entry.hidden
+}
+
 function buildChatMessagePreview(text: string) {
   const preview = toMessagePreview(text)
   if (!preview) return undefined
@@ -325,6 +349,8 @@ export class EventStore {
   private static readonly TRANSCRIPT_CACHE_BYTES = 128 * 1024 * 1024
   private readonly transcriptBytes = new Map<string, number>()
   private readonly transcriptLoads = new Map<string, Promise<void>>()
+  /** Never evicted: one short string per chat, and a first prompt never changes. */
+  private readonly threadStarters = new Map<string, ThreadStarter>()
   private queuedWrites = 0
   /**
    * Offsets into each chat's payload sidecar (`transcript-payloads.ts`).
@@ -1168,7 +1194,52 @@ export class EventStore {
     await rm(this.transcriptPath(chatId), { force: true })
     await rm(this.payloadSidecarPath(chatId), { force: true })
     await removeTranscriptMedia(this.dataDir, chatId)
+    this.threadStarters.delete(chatId)
     this.dropTranscriptCaches(chatId)
+  }
+
+  /**
+   * The prompt that opened a chat, or null for a chat with none yet.
+   *
+   * Read from the head of the transcript file, not through the transcript
+   * cache: a channel asks for dozens of chats at once and wants one entry
+   * from each, and loading each whole transcript for it would evict the chats
+   * that are actually open.
+   */
+  async getThreadStarter(chatId: string): Promise<ThreadStarter | null> {
+    const known = this.threadStarters.get(chatId)
+    if (known) return known
+    if (!this.state.chatsById.has(chatId)) return null
+    const loaded = this.transcriptCache.get(chatId) ?? this.legacyMessagesByChatId.get(chatId)
+    const starter = toThreadStarter(
+      loaded ? loaded.find(isVisibleUserPrompt) : await this.readFirstUserPrompt(chatId)
+    )
+    if (starter) this.threadStarters.set(chatId, starter)
+    return starter
+  }
+
+  private async readFirstUserPrompt(chatId: string): Promise<TranscriptEntry | undefined> {
+    const file = Bun.file(this.transcriptPath(chatId))
+    if (!(await file.exists())) return undefined
+    for (const headBytes of THREAD_STARTER_HEAD_BYTES) {
+      const whole = headBytes >= file.size
+      const lines = (await (whole ? file : file.slice(0, headBytes)).text()).split("\n")
+      // A head that stops short of the file ends mid-line.
+      if (!whole) lines.pop()
+      for (const line of lines) {
+        if (!line.includes('"user_prompt"')) continue
+        let entry: TranscriptEntry
+        try {
+          entry = JSON.parse(line) as TranscriptEntry
+        } catch {
+          // A line still being appended. The next ask reads it whole.
+          continue
+        }
+        if (isVisibleUserPrompt(entry)) return entry
+      }
+      if (whole) return undefined
+    }
+    return undefined
   }
 
   /** Absolute path of a chat's JSONL transcript (may not exist yet for a fresh chat). */

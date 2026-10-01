@@ -249,6 +249,8 @@ export interface KannaState {
   handleOpenExternalPath: (action: "open_finder" | "open_editor", localPath: string) => Promise<void>
   handleOpenLocalLink: (target: OpenLocalLinkTarget, action?: OpenExternalAction, editor?: EditorOpenSettings) => Promise<void>
   handleCompose: () => void
+  /** Starts a chat in a project with this message, and opens it. Resolves to the chat's id. */
+  handleSendToProject: ReturnType<typeof useSendMessage>["handleSendToProject"]
   handleAskUserQuestion: (
     toolUseId: string,
     questions: AskUserQuestionItem[],
@@ -266,7 +268,7 @@ export interface KannaState {
   handleCopyStandaloneShareLink: () => Promise<boolean>
 }
 
-export function useKannaState(activeChatId: string | null): KannaState {
+export function useKannaState(activeChatId: string | null, routeProjectId: string | null = null): KannaState {
   const navigate = useNavigate()
   const socket = useKannaSocket()
   const dialog = useAppDialog()
@@ -561,6 +563,12 @@ export function useKannaState(activeChatId: string | null): KannaState {
       setSelectedProjectId(seed)
     }
   }, [selectedProjectId, sidebarReady])
+
+  // A project open with no chat (`/project/:id`, the Channels layout) is the
+  // selected project: New Chat and the window title follow it.
+  useEffect(() => {
+    if (routeProjectId) setSelectedProjectId(routeProjectId)
+  }, [routeProjectId])
 
   // Archived chats are viewable in place (viewing doesn't unarchive), so they
   // count as existing — only truly unknown/deleted chats bounce home.
@@ -912,7 +920,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
     }
   }, [])
 
-  const handleSend = useSendMessage({
+  const { handleSend, handleSendToProject } = useSendMessage({
     socket,
     navigate,
     activeChatId,
@@ -1186,6 +1194,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
     handleOpenExternalPath,
     handleOpenLocalLink,
     handleCompose,
+    handleSendToProject,
     handleAskUserQuestion,
     handleExitPlanMode,
     handleExportStandalone,

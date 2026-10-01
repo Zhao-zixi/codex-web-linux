@@ -34,6 +34,7 @@ import type {
   LlmProviderValidationResult,
   UsageLimitsSnapshot,
   ChatPreview,
+  ThreadStarter,
 } from "../shared/types"
 
 
@@ -42,6 +43,12 @@ import type {
  * group's members; beyond that something is walking the transcript.
  */
 const MAX_TOOL_ENTRY_REQUEST = 256
+
+/**
+ * Cap on chats per `project.threadStarters`. The client asks for one page of
+ * a channel at a time; each id can cost a file read.
+ */
+const MAX_THREAD_STARTER_REQUEST = 200
 
 /** Coalescing window for transcript pushes — roughly one animation frame. */
 const CHAT_BROADCAST_INTERVAL_MS = 16
@@ -1701,6 +1708,18 @@ export function createWsRouter({
               ? { lastAgentMessagePreviewAt: chat.lastAgentMessagePreviewAt }
               : {}),
           }
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
+          return
+        }
+        case "project.threadStarters": {
+          if (command.chatIds.length > MAX_THREAD_STARTER_REQUEST) {
+            throw new Error(`Too many chat ids (max ${MAX_THREAD_STARTER_REQUEST})`)
+          }
+          const result: Record<string, ThreadStarter> = {}
+          await Promise.all(command.chatIds.map(async (chatId) => {
+            const starter = await store.getThreadStarter(chatId)
+            if (starter) result[chatId] = starter
+          }))
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }

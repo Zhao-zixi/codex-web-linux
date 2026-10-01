@@ -12,7 +12,7 @@ import { LocalProjectsSection } from "../components/chat-ui/sidebar/LocalProject
 import { FocusModePill } from "../components/chat-ui/sidebar/FocusModePill"
 import { CHAT_INPUT_ATTRIBUTE } from "./chatFocusPolicy"
 import { projectActivity } from "./kannaStateHelpers"
-import { PANE_CLOSE_MS, PANE_EASING, PANE_OPEN_MS, prefersReducedMotion } from "./paneAnimation"
+import { PANE_EASING, prefersReducedMotion } from "./paneAnimation"
 import { SidebarChatHoverCard } from "../components/chat-ui/sidebar/ChatHoverCard"
 import { ThreadRow } from "../components/chat-ui/sidebar/ThreadRow"
 import { ThreadSections } from "../components/chat-ui/sidebar/ThreadSections"
@@ -23,6 +23,7 @@ import { useSidebarViewStore } from "../stores/sidebarViewStore"
 import { MachineSwitcher } from "./MachineSwitcher"
 import { getResolvedKeybindings } from "../lib/keybindings"
 import { useIsStandalone } from "../hooks/useIsStandalone"
+import { isMacApp } from "../lib/macApp"
 import type { ChatPreview, ChatTouchedFilesResult, KeybindingsSnapshot, SidebarChatRow, UpdateSnapshot } from "../../shared/types"
 import { isNightlyVersion } from "../../shared/types"
 import type { SocketStatus } from "./socket"
@@ -44,6 +45,7 @@ import {
   setFocusMode,
   toggleFocusMode,
   useFocusModeEnabled,
+  useFocusModeStore,
 } from "../stores/focusModeStore"
 import { formatActionShortcut } from "../lib/keybindings"
 import { SIDEBAR_MAX_WIDTH_PX } from "../lib/sidebarWidth"
@@ -151,58 +153,154 @@ function VersionPill({ tone, label, busy, ...props }: {
   )
 }
 
-/** How far the list travels going into or out of focus mode: a nudge, not a page turn. */
-const FOCUS_SLIDE_PX = 16
+/** iOS's push runs a little longer than a pane opening: a whole page travels its own width. */
+const FOCUS_PUSH_MS = 350
+/** How far the page underneath drifts while the one on top crosses it, as a share of its width. */
+const FOCUS_PARALLAX = "-30%"
+/** The sidebar card's own background, for the page on top, so it covers the one under it. */
+const FOCUS_PAGE_SURFACE = ["bg-background", "dark:bg-card"]
+const SIDEBAR_SCROLLER_SELECTOR = "[data-sidebar-scroller]"
+
+/** The scroller itself, or the one inside. */
+function findSidebarScroller(element: HTMLElement) {
+  return element.matches(SIDEBAR_SCROLLER_SELECTOR) ? element : element.querySelector<HTMLElement>(SIDEBAR_SCROLLER_SELECTOR)
+}
 
 /**
- * Entering focus mode is a step in, and leaving it a step back out, so the
- * list arrives from the side it would on a navigation stack: from the right
- * going in, from the left coming out. The pill settles in at the same time.
+ * What travels when focus mode pushes: the bar and the list under it.
  *
- * What was there before is not animated out. One list replaces another, and
- * the arriving one fading up from nothing is what bridges the cut.
+ * Except in the Mac app's desktop layout, where the bar holds nothing that
+ * differs between the two pages: the logo it would swap for the back button
+ * leads the list there instead (the traffic lights have its place), which
+ * leaves the bar with add and search on both pages. Sliding those out and
+ * identical ones in is motion for nothing, so the bar holds still and only
+ * the list under it is the page.
+ */
+function getMovingPage(page: HTMLElement | null) {
+  if (!page) return null
+  const barIsShared = isMacApp() && window.matchMedia("(min-width: 768px)").matches
+  return barIsShared ? findSidebarScroller(page) : page
+}
+
+/**
+ * Focus mode is a page pushed onto the sidebar, the way an iOS navigation
+ * controller pushes one: the whole page, bar and list, slides in from the
+ * right, opaque, over the page that was there, which drifts a third of the
+ * way left and fades beneath it. Leaving pops: the page slides back off to
+ * the right and the one before it drifts back in from the left.
  *
- * On the panes' clock and curve (paneAnimation.ts), so the sidebar's contents
- * move the way the sidebar itself does: no overshoot, since a click threw
- * nothing. Only transform and opacity, on two elements.
+ * React turns one page into the other in a single commit, so there is no
+ * outgoing page left to animate. A copy of it is taken the moment the store
+ * changes, before that commit, and stands in for it: inert, laid over the
+ * frame the page sits in, scrolled to where the original was, and removed
+ * when the motion ends.
+ *
+ * On the panes' curve (paneAnimation.ts), which is iOS's own for this, with
+ * no overshoot: a click threw nothing. Only transform and opacity move.
  *
  * Not for the toggle shortcut (set `skipFocusMotionRef` before toggling):
  * that is pressed to get somewhere, over and over, and motion would only be
- * in the way. Escape does animate: it is the same step back out as clicking
- * the pill. Not for focus moving from one project to another either, which
- * follows the chat you opened. Under reduced motion the slide is dropped and
- * a short fade is kept.
+ * in the way. Escape does animate: it is the same step back as the back
+ * button. Not for focus moving from one project to another either, which
+ * follows the chat you opened. Under reduced motion the pages don't travel;
+ * one fades out as the other fades in.
  */
 function useFocusMotion(focused: boolean) {
-  const pillMotionRef = useRef<HTMLDivElement>(null)
-  const listMotionRef = useRef<HTMLDivElement>(null)
+  const pageMotionRef = useRef<HTMLDivElement>(null)
   const skipFocusMotionRef = useRef(false)
   const wasFocusedRef = useRef(focused)
+  const outgoingRef = useRef<{ page: HTMLElement; scrollTop: number } | null>(null)
+  const finishRef = useRef<(() => void) | null>(null)
+
+  // The store changes before React renders the result, which is the one
+  // moment the outgoing page is still in the document to be copied.
+  const captureOutgoing = useCallback(() => {
+    const page = getMovingPage(pageMotionRef.current)
+    if (!page) return
+    // A motion still running ends here, so its copy is not copied in turn.
+    finishRef.current?.()
+    const copy = {
+      page: page.cloneNode(true) as HTMLElement,
+      // A copy starts scrolled to the top; this puts it back.
+      scrollTop: findSidebarScroller(page)?.scrollTop ?? 0,
+    }
+    outgoingRef.current = copy
+    // Dropped if the change moved nothing on screen (no current project).
+    window.requestAnimationFrame(() => {
+      if (outgoingRef.current === copy) outgoingRef.current = null
+    })
+  }, [])
+  useEffect(() => useFocusModeStore.subscribe((state, previous) => {
+    if (state.enabled !== previous.enabled) captureOutgoing()
+  }), [captureOutgoing])
 
   useLayoutEffect(() => {
     const wasFocused = wasFocusedRef.current
     wasFocusedRef.current = focused
     const skip = skipFocusMotionRef.current
     skipFocusMotionRef.current = false
-    if (wasFocused === focused || skip) return
+    const outgoing = outgoingRef.current
+    outgoingRef.current = null
+    const page = getMovingPage(pageMotionRef.current)
+    const frame = page?.parentElement
+    if (wasFocused === focused || skip || !outgoing || !page || !frame) return
+
+    // Over exactly where the page is: the whole frame, or under the bar.
+    const copy = outgoing.page
+    copy.inert = true
+    copy.setAttribute("aria-hidden", "true")
+    Object.assign(copy.style, {
+      position: "absolute",
+      top: `${page.offsetTop}px`,
+      left: `${page.offsetLeft}px`,
+      width: `${page.offsetWidth}px`,
+      height: `${page.offsetHeight}px`,
+      pointerEvents: "none",
+    })
+    frame.append(copy)
+    const copyScroller = findSidebarScroller(copy)
+    if (copyScroller) copyScroller.scrollTop = outgoing.scrollTop
+
+    // Pushing, the new page is the one on top; popping, the copy is. The one
+    // on top is opaque, so the page under it never shows through.
+    const top = focused ? page : copy
+    const under = focused ? copy : page
+    top.classList.add(...FOCUS_PAGE_SURFACE)
+    top.style.zIndex = "2"
+    under.style.zIndex = "1"
+    const previousPosition = page.style.position
+    page.style.position = "relative"
 
     const reduced = prefersReducedMotion()
     const timing = reduced
       ? { duration: 150, easing: "ease" }
-      : { duration: focused ? PANE_OPEN_MS : PANE_CLOSE_MS, easing: PANE_EASING }
-    const slideFrom = reduced ? "none" : `translateX(${focused ? FOCUS_SLIDE_PX : -FOCUS_SLIDE_PX}px)`
+      : { duration: FOCUS_PUSH_MS, easing: PANE_EASING }
+    const offRight = reduced ? { opacity: 0 } : { transform: "translateX(100%)" }
+    const underneath = reduced ? { opacity: 0 } : { transform: `translateX(${FOCUS_PARALLAX})`, opacity: 0 }
+    const atRest = { transform: "none", opacity: 1 }
 
-    listMotionRef.current?.animate(
-      [{ opacity: 0, transform: slideFrom }, { opacity: 1, transform: "none" }],
-      timing,
-    )
-    pillMotionRef.current?.animate(
-      [{ opacity: 0, transform: reduced ? "none" : "scale(0.96)" }, { opacity: 1, transform: "none" }],
-      timing,
-    )
+    const animations = focused
+      ? [page.animate([offRight, atRest], timing), copy.animate([atRest, underneath], { ...timing, fill: "forwards" })]
+      : [copy.animate([atRest, offRight], { ...timing, fill: "forwards" }), page.animate([underneath, atRest], timing)]
+
+    let finished = false
+    const finish = () => {
+      if (finished) return
+      finished = true
+      if (finishRef.current === finish) finishRef.current = null
+      for (const animation of animations) animation.cancel()
+      copy.remove()
+      page.classList.remove(...FOCUS_PAGE_SURFACE)
+      page.style.zIndex = ""
+      page.style.position = previousPosition
+    }
+    finishRef.current = finish
+    animations[0]!.onfinish = finish
   }, [focused])
 
-  return { pillMotionRef, listMotionRef, skipFocusMotionRef }
+  useEffect(() => () => finishRef.current?.(), [])
+
+  return { pageMotionRef, skipFocusMotionRef, captureOutgoing }
 }
 
 /** When a chat last moved: the timestamp the sidebar's sections sort by (`thread-sections`). */
@@ -272,7 +370,7 @@ function KannaSidebarImpl({
   const location = useLocation()
   const navigate = useNavigate()
   const isStandalone = useIsStandalone()
-  const { pillMotionRef, listMotionRef, skipFocusMotionRef } = useFocusMotion(focusedProjectGroup !== null)
+  const { pageMotionRef, skipFocusMotionRef, captureOutgoing } = useFocusMotion(focusedProjectGroup !== null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const resizeStartRef = useRef<{ pointerX: number; width: number } | null>(null)
   const initializedCollapsedGroupKeysRef = useRef<Set<string>>(new Set())
@@ -306,6 +404,9 @@ function KannaSidebarImpl({
   // chat's project, so the channel's most recent chat is opened too, or a new
   // one where it has none; a channel already current keeps the chat it is on.
   const selectProject = useCallback((projectId: string) => {
+    // Focus mode can already be on with nothing focused (no chat open), and
+    // then the store has no change to announce the push with.
+    captureOutgoing()
     setFocusMode(true)
     if (projectId === currentProjectId && activeChatId) return
     setOpeningProjectId(projectId)
@@ -317,7 +418,7 @@ function KannaSidebarImpl({
       ), null)
     if (newestChat) navigate(`/chat/${newestChat.chatId}`)
     else onCreateChat(projectId)
-  }, [activeChatId, allProjectsData.projectGroups, currentProjectId, navigate, onCreateChat])
+  }, [activeChatId, allProjectsData.projectGroups, captureOutgoing, currentProjectId, navigate, onCreateChat])
 
   const handleRestoreChat = useCallback((chatId: string) => {
     leaveArchivedView()
@@ -337,6 +438,8 @@ function KannaSidebarImpl({
     })
   }, [leaveArchivedView, sidebarView])
   const resolvedKeybindings = useMemo(() => getResolvedKeybindings(keybindings), [keybindings])
+  const focusShortcutHint = formatActionShortcut(resolvedKeybindings, "toggleFocusMode") ?? undefined
+  const exitFocusMode = useCallback(() => setFocusMode(false), [])
   const visibleChats = useMemo(
     () => getVisibleSidebarChats(data.projectGroups, collapsedSections, expandedGroups),
     [collapsedSections, data.projectGroups, expandedGroups]
@@ -771,6 +874,18 @@ function KannaSidebarImpl({
             starts 9px down (8px margin, 1px border), so a center C needs a
             height of 2 × (C − 9). The traffic lights, the sidebar toggle and
             back/forward (below) take the left end. */}
+        {/* The sidebar's page: the bar and everything that scrolls under it.
+            Focus mode pushes a new one over it (`useFocusMotion`); the frame
+            around it clips the page in transit and holds the outgoing copy.
+            Settings and the machine switcher stay put below, as a tab bar
+            does under a navigation stack.
+
+            The frame takes the card's top corners, one pixel tighter for the
+            card's border, which it sits inside. Without them the page in
+            transit, opaque and square, paints over the card's rounded
+            corners. */}
+        <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden md:rounded-t-[15px] mac-app:md:rounded-t-[calc(var(--mac-window-radius)-9px)]">
+        <div ref={pageMotionRef} className="relative flex min-h-0 flex-1 flex-col">
         <div
           data-window-drag
           className="px-2.5 h-[64px] md:h-auto md:py-1 border-b grid grid-cols-[84px_minmax(0,1fr)_84px] items-center md:pl-3 md:pr-1 md:flex md:justify-between mac-app:md:h-[calc(var(--mac-traffic-lights-center)*2-18px)] mac-app:md:border-b-0 mac-app:md:py-0 mac-app:md:pl-[calc(var(--mac-traffic-lights-inset)+83px)]"
@@ -789,6 +904,19 @@ function KannaSidebarImpl({
               <Settings className="h-5 w-5" />
             </Button>
           </div>
+          {/* Focus mode's page is titled by its project, not by the app: the
+              back button takes the logo and wordmark's place. */}
+          {focusedProjectGroup ? (
+            <FocusModePill
+              // 2px in from the bar's 12px padding: the 20px chevron then
+              // centers 24px from the card's edge, on the column the flower
+              // and every row icon below share.
+              className="justify-self-center md:ml-[2px] md:justify-self-auto mac-app:md:hidden"
+              projectTitle={focusedProjectGroup.title}
+              shortcutHint={focusShortcutHint}
+              onExit={exitFocusMode}
+            />
+          ) : (
           <div className="flex items-center justify-self-center gap-2 md:justify-self-auto mac-app:md:hidden">
             <button
               type="button"
@@ -812,6 +940,7 @@ function KannaSidebarImpl({
               {APP_NAME}
             </button>
           </div>
+          )}
           {/* In the app the flower group is hidden, which leaves this the
               row's only item; justify-between would put it at the start. */}
           <div className="flex items-center justify-self-end md:justify-self-auto mac-app:md:ml-auto">
@@ -879,6 +1008,7 @@ function KannaSidebarImpl({
 
         <div
           ref={scrollContainerRef}
+          data-sidebar-scroller
           className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden scrollbar-hide"
           style={{
             WebkitOverflowScrolling: "touch",
@@ -895,7 +1025,17 @@ function KannaSidebarImpl({
                 1px border + px-2). The version badge ends at the header's
                 search glyph: 1px border + pr-1 + the button's pr-1.5 + the
                 glyph's ~1px inset, against this block's 1px border + 7px. */}
-            <div className="hidden mac-app:md:flex items-center justify-between pt-1 pb-2">
+            <div className="hidden mac-app:md:flex items-center justify-between gap-2 pt-1 pb-2">
+              {focusedProjectGroup ? (
+                <FocusModePill
+                  // 7px in, as the flower is: the same 20px box, so the same
+                  // center as the 16px icons below.
+                  className="pl-[7px] pr-[9px]"
+                  projectTitle={focusedProjectGroup.title}
+                  shortcutHint={focusShortcutHint}
+                  onExit={exitFocusMode}
+                />
+              ) : (
               <button
                 type="button"
                 onClick={() => navigate("/home")}
@@ -905,14 +1045,10 @@ function KannaSidebarImpl({
                 <Flower className="size-5 text-logo" />
                 <span className="font-logo text-base uppercase text-slate-600 dark:text-slate-100">{APP_NAME}</span>
               </button>
+              )}
               <div className="flex mr-1">{versionBadge}</div>
             </div>
-            {/* The focus row joins this block rather than sitting below it, so
-                it inherits the same width, padding and row rhythm as the
-                buttons — which is the whole of its treatment. It ends the
-                block, directly over the list it narrows, and New Chat stays
-                put when it comes and goes. */}
-            {newSidebarEnabled || focusedProjectGroup ? (
+            {newSidebarEnabled ? (
               <div className="flex flex-col gap-[1px] pb-2 mac-app:md:pb-0">
                 {newSidebarEnabled ? (
                   <>
@@ -946,21 +1082,10 @@ function KannaSidebarImpl({
                     <span>Terminal</span>
                   </button>
                 ) : null}
-                {focusedProjectGroup ? (
-                  <div ref={pillMotionRef}>
-                    <FocusModePill
-                      projectTitle={focusedProjectGroup.title}
-                      shortcutHint={formatActionShortcut(resolvedKeybindings, "toggleFocusMode") ?? undefined}
-                      onExit={() => setFocusMode(false)}
-                    />
-                  </div>
-                ) : null}
               </div>
             ) : null}
 
-            {/* Everything under the New Chat block: what focus mode swaps, and
-                so what moves when it does (`useFocusMotion`). */}
-            <div ref={listMotionRef}>
+            <div>
             {!hasVisibleChats && isConnecting ? (
               <div className="space-y-5 px-1 pt-3">
                 {[0, 1, 2].map((section) => (
@@ -1074,6 +1199,9 @@ function KannaSidebarImpl({
             ) : null}
             </div>
           </div>
+        </div>
+
+        </div>
         </div>
 
         {/* One card for every row above, anchored to whichever is under the

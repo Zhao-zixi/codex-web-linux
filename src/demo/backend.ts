@@ -26,7 +26,6 @@ import {
   type ChatDiffFile,
   type ChatDiffSnapshot,
   type ChatPreview,
-  type ThreadStarter,
   type ChatSnapshot,
   type ChatTouchedFilesResult,
   type KannaStatus,
@@ -521,14 +520,6 @@ export class DemoBackend {
         return this.chatPreview(this.requireChat(command.chatId))
       case "chat.touchedFiles":
         return this.touchedFiles(this.requireChat(command.chatId))
-      case "project.threadStarters": {
-        const starters: Record<string, ThreadStarter> = {}
-        for (const chatId of command.chatIds) {
-          const first = this.chats.get(chatId)?.entries.find((entry) => entry.kind === "user_prompt" && !entry.hidden)
-          if (first?.kind === "user_prompt") starters[chatId] = { content: first.content, createdAt: first.createdAt }
-        }
-        return starters
-      }
       case "chat.getToolEntries": {
         const chat = this.requireChat(command.chatId)
         const wanted = new Set(command.entryIds)

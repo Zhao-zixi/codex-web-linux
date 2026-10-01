@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState, type Ref } from "react"
-import { ArrowLeft, Check, Flower, Loader2, MoreHorizontal, PanelLeft, PanelRight, Search, Terminal, UserRoundPlus, X } from "lucide-react"
+import { ArrowLeft, Check, Flower, Loader2, MoreHorizontal, PanelLeft, PanelRight, Search, Terminal, UserRoundPlus } from "lucide-react"
 import type { EditorOpenSettings, EditorPreset, OpenExternalAction, TerminalPreset } from "../../../shared/protocol"
 import { Button } from "../ui/button"
 import { CardHeader } from "../ui/card"
@@ -112,12 +112,6 @@ interface Props {
   sidebarCollapsed: boolean
   onOpenSidebar: () => void
   onExpandSidebar: () => void
-  /**
-   * Channels layout: the chat is a thread open beside its channel, and this
-   * closes it. Desktop only; on a phone the thread is the page and Back
-   * (`onOpenSidebar`) is the way out.
-   */
-  onCloseThread?: () => void
   localPath?: string
   embeddedTerminalVisible?: boolean
   onToggleEmbeddedTerminal?: () => void
@@ -216,7 +210,6 @@ function ChatNavbarImpl({
   sidebarCollapsed,
   onOpenSidebar,
   onExpandSidebar,
-  onCloseThread,
   localPath,
   embeddedTerminalVisible = false,
   onToggleEmbeddedTerminal,
@@ -304,17 +297,6 @@ function ChatNavbarImpl({
               </Button>
             </>
           )}
-          {onCloseThread ? (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="hidden md:flex hover:!border-border/0 hover:!bg-transparent"
-              onClick={onCloseThread}
-              title="Close thread"
-            >
-              <X className="size-4" />
-            </Button>
-          ) : null}
           <Button
             variant="ghost"
             size="icon"

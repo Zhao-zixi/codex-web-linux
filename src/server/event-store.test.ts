@@ -161,30 +161,6 @@ describe("EventStore", () => {
     expect(existsSync(store.getTranscriptPath(chat.id))).toBe(true)
   })
 
-  test("getThreadStarter returns a chat's first visible prompt, from memory or from disk", async () => {
-    const dataDir = await createTempDataDir()
-    const store = new EventStore(dataDir)
-    await store.initialize()
-
-    const project = await store.openProject("/tmp/project")
-    const empty = await store.createChat(project.id)
-    const chat = await store.createChat(project.id)
-    await store.appendMessage(chat.id, { ...entry("user_prompt", 199, { content: "carry on" }), hidden: true })
-    await store.appendMessage(chat.id, entry("user_prompt", 200, { content: "first" }))
-    await store.appendMessage(chat.id, entry("assistant_text", 201, { content: "reply" }))
-    await store.appendMessage(chat.id, entry("user_prompt", 202, { content: "second" }))
-
-    expect(await store.getThreadStarter(empty.id)).toBeNull()
-    expect(await store.getThreadStarter("no-such-chat")).toBeNull()
-    expect(await store.getThreadStarter(chat.id)).toEqual({ content: "first", createdAt: 200 })
-
-    // A store that has not loaded the transcript reads the head of its file.
-    await store.compact()
-    const reloaded = new EventStore(dataDir)
-    await reloaded.initialize()
-    expect(await reloaded.getThreadStarter(chat.id)).toEqual({ content: "first", createdAt: 200 })
-  })
-
   test("persists queued messages across restart and removes promoted entries", async () => {
     const dataDir = await createTempDataDir()
     const store = new EventStore(dataDir)

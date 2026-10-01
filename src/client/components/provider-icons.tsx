@@ -117,29 +117,6 @@ export const PROVIDER_ICONS: Record<AgentProvider, IconComponent> = {
   pi: PiIcon,
 }
 
-/**
- * Each harness's brand colors as a filled chip, the way its app icon reads:
- * its mark in the foreground color on the background color, for light and
- * dark mode. Written out as whole class names so Tailwind finds them.
- *
- *   - claude: Anthropic's orange (#D97757) under its light (#FAF9F5).
- *   - codex:  OpenAI's green (#10A37F) under white.
- *   - cursor: its warm ink (#26251E) and cream (#F7F7F4). Not Cursor Orange,
- *             which sits too near Claude's to tell the two apart at 20px.
- *   - grok:   xAI's identity is black and white and nothing else.
- *   - pi:     the accent of pi's own themes: #5A8080 light, #8ABEB7 dark.
- *
- * The two monochrome brands swap foreground and background in dark mode,
- * where a near-black chip would vanish into the page.
- */
-export const PROVIDER_BRAND_CLASSES: Record<AgentProvider, string> = {
-  claude: "bg-[#D97757] text-[#FAF9F5]",
-  codex: "bg-[#10A37F] text-white",
-  cursor: "bg-[#26251E] text-[#F7F7F4] dark:bg-[#F7F7F4] dark:text-[#26251E]",
-  grok: "bg-black text-white dark:bg-white dark:text-black",
-  pi: "bg-[#5A8080] text-white dark:bg-[#8ABEB7] dark:text-[#1D1F21]",
-}
-
 export const AUTH_SERVICE_ICONS: Record<AuthServiceId, IconComponent> = {
   claude: AnthropicIcon,
   codex: OpenAIIcon,

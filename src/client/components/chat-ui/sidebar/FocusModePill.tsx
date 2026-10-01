@@ -28,9 +28,9 @@ export function FocusModePill({
       onClick={onExit}
       title={shortcutHint ? `Exit focus mode (${shortcutHint})` : "Exit focus mode"}
       aria-label={`Exit focus mode: ${projectTitle}`}
-      // mb-1 on top of the block's 1px row gap: the focus row is a different
-      // kind of thing from the buttons under it, so it gets a little air.
-      className="mb-1 flex w-full items-center gap-2 rounded-lg border border-border bg-muted px-2 py-1.5 max-md:py-2 text-sm max-md:text-base text-muted-foreground transition-colors hover:text-foreground"
+      // mt-1 on top of the block's 1px row gap: the focus row is a different
+      // kind of thing from the buttons above it, so it gets a little air.
+      className="mt-1 flex w-full items-center gap-2 rounded-lg border border-border bg-muted px-2 py-1.5 max-md:py-2 text-sm max-md:text-base text-muted-foreground transition-colors hover:text-foreground"
     >
       <ListFilter className="h-4 w-4 shrink-0" />
       {/* Truncates like a chat row's title: the project name is the one part of

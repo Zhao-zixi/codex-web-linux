@@ -1109,19 +1109,6 @@ export interface ChatPreview {
   lastAgentMessagePreviewAt?: number
 }
 
-/**
- * The prompt that opened a chat. The Channels layout shows it as the thread's
- * message, with the rest of the chat as its replies. Fetched by
- * `project.threadStarters`; it never changes once a chat has one.
- */
-export interface ThreadStarter {
-  /** Capped by the server; `truncated` says the prompt ran longer. */
-  content: string
-  truncated?: boolean
-  createdAt: number
-  attachmentCount?: number
-}
-
 export interface ChatTouchedFilesResult {
   /** Ranked and capped by the server; `totalCount` says what was left out. */
   files: ChatTouchedFile[]

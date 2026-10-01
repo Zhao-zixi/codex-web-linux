@@ -24,16 +24,6 @@ export interface SendContext {
   fallbackLocalProjectPath: string | null
 }
 
-export interface SendOptions {
-  provider?: AgentProvider
-  model?: string
-  modelOptions?: ModelOptions
-  planMode?: boolean
-  autoPlan?: boolean
-  attachments?: ChatAttachment[]
-  steer?: boolean
-}
-
 // The send pipeline: enqueue while processing, otherwise optimistically append
 // the prompt, create/resolve the chat, and reconcile on failure.
 export function useSendMessage(params: {
@@ -71,7 +61,7 @@ export function useSendMessage(params: {
 
   const handleSend = useCallback(async (
     content: string,
-    options?: SendOptions
+    options?: { provider?: AgentProvider; model?: string; modelOptions?: ModelOptions; planMode?: boolean; autoPlan?: boolean; attachments?: ChatAttachment[]; steer?: boolean }
   ) => {
     const { isProcessing, optimisticUserPrompts, serverTranscriptEntries, selectedProjectId, fallbackLocalProjectPath } = sendContextRef.current
     const attachments = options?.attachments ?? []
@@ -194,62 +184,5 @@ export function useSendMessage(params: {
     }
   }, [activeChatId, navigate, setCommandError, setOptimisticProcessing, setOptimisticUserPrompts, setPendingChatId, setSelectedProjectId, socket])
 
-  // The Channels layout's composer: a message to a project is a new chat
-  // there, whatever chat is open beside it. The same steps as a new-chat send
-  // above, but the prompt is only shown in the chat once the chat has an id:
-  // before that the channel shows it, as the thread's message.
-  const handleSendToProject = useCallback(async (
-    projectId: string,
-    content: string,
-    options?: SendOptions
-  ) => {
-    const attachments = options?.attachments ?? []
-    const sentAt = Date.now()
-    try {
-      const result = await socket.command<{ chatId?: string }>({
-        type: "chat.send",
-        projectId,
-        provider: options?.provider,
-        content,
-        attachments,
-        model: options?.model,
-        modelOptions: options?.modelOptions,
-        planMode: options?.planMode,
-        autoPlan: options?.autoPlan,
-      })
-      const chatId = result.chatId
-      if (!chatId) throw new Error("The chat was not created")
-
-      markSending(chatId, sentAt)
-      setOptimisticProcessing({ scopeId: chatId, ackedAt: performance.now() })
-      setOptimisticUserPrompts((current) => [...current, {
-        id: generateUUID(),
-        scopeId: chatId,
-        signature: getUserPromptSignature(content, attachments),
-        requiredMatchCount: 1,
-        entry: {
-          _id: `optimistic:${chatId}`,
-          kind: "user_prompt",
-          content,
-          attachments,
-          createdAt: sentAt,
-        },
-      }])
-      const chatPreferences = useChatPreferencesStore.getState()
-      chatPreferences.setComposerState(
-        chatId,
-        composerStateFromSendOptions(options) ?? chatPreferences.getComposerState(NEW_CHAT_COMPOSER_ID)
-      )
-      setSelectedProjectId(projectId)
-      setPendingChatId(chatId)
-      navigate(`/chat/${chatId}`)
-      setCommandError(null)
-      return chatId
-    } catch (error) {
-      setCommandError(error instanceof Error ? error.message : String(error))
-      throw error
-    }
-  }, [navigate, setCommandError, setOptimisticProcessing, setOptimisticUserPrompts, setPendingChatId, setSelectedProjectId, socket])
-
-  return { handleSend, handleSendToProject }
+  return handleSend
 }

@@ -25,7 +25,6 @@ function ViewLabel({ name, detail }: { name: string; detail: string }) {
 
 /**
  * Swaps the sidebar between its Chats, Projects, Channels and Archived views.
- * Channels changes more than the sidebar: see `useChannelsLayout`.
  *
  * Sits at the right end of the New Chat row — one fixed spot that doesn't move
  * with the view or with which section happens to render first. It is the
@@ -79,7 +78,7 @@ export function SidebarViewSwitcher({
             }}
             selected={view === "channels"}
             icon={<Hash className="h-4 w-4" />}
-            label={<ViewLabel name="Channels" detail="threads by project" />}
+            label={<ViewLabel name="Channels" detail="projects, then their chats" />}
           />
           <PopoverMenuItem
             onClick={() => {

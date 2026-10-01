@@ -1,12 +1,10 @@
 import { create } from "zustand"
 import type { SidebarView } from "../components/chat-ui/sidebar/SidebarViewSwitcher"
 import { SIDEBAR_VIEW_STORAGE_KEY } from "../lib/storageKeys"
-import { useAppSettingsStore } from "./appSettingsStore"
 
 /**
- * Which view the sidebar is in. A store rather than the sidebar's own state
- * because Channels is more than a sidebar view: the layout puts a thread list
- * beside the chat, and the chat page gains a way to close the thread.
+ * Which view the sidebar is in. A store rather than the sidebar's own state so
+ * the view outlives the sidebar component and can be read outside it.
  */
 
 type ReturnView = Exclude<SidebarView, "archived">
@@ -45,13 +43,3 @@ export const useSidebarViewStore = create<SidebarViewState>()((set) => ({
 
   leaveArchived: () => set((state) => (state.view === "archived" ? { view: state.returnView } : state)),
 }))
-
-/**
- * Whether the app is laid out as channels: projects in the sidebar, a
- * project's threads beside the open chat. The view switcher only exists in the
- * new sidebar, so without it the stored view is not in effect.
- */
-export function useChannelsLayout(): boolean {
-  const newSidebarEnabled = useAppSettingsStore((store) => store.settings?.newSidebarEnabled !== false)
-  return useSidebarViewStore((state) => state.view === "channels") && newSidebarEnabled
-}

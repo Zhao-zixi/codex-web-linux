@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type CSSProperties } from "react"
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type CSSProperties } from "react"
 import { ArrowLeft, ArrowRight, Flower, House, Loader2, PanelLeft, Search, Plus, Settings, Settings2, SquarePen, Terminal } from "lucide-react"
 import { useLocation, useNavigate, useNavigationType } from "react-router-dom"
 import { APP_NAME } from "../../shared/branding"
@@ -10,12 +10,14 @@ import { ArchivedChatsDialog } from "../components/chat-ui/sidebar/ArchivedChats
 import { ArchivedSection } from "../components/chat-ui/sidebar/ArchivedSection"
 import { LocalProjectsSection } from "../components/chat-ui/sidebar/LocalProjectsSection"
 import { FocusModePill } from "../components/chat-ui/sidebar/FocusModePill"
+import { CHAT_INPUT_ATTRIBUTE } from "./chatFocusPolicy"
 import { projectActivity } from "./kannaStateHelpers"
+import { PANE_CLOSE_MS, PANE_EASING, PANE_OPEN_MS, prefersReducedMotion } from "./paneAnimation"
 import { SidebarChatHoverCard } from "../components/chat-ui/sidebar/ChatHoverCard"
 import { ThreadRow } from "../components/chat-ui/sidebar/ThreadRow"
 import { ThreadSections } from "../components/chat-ui/sidebar/ThreadSections"
 import { Kbd } from "../components/ui/kbd"
-import { SidebarViewSwitcher, type SidebarView } from "../components/chat-ui/sidebar/SidebarViewSwitcher"
+import { SidebarViewSwitcher } from "../components/chat-ui/sidebar/SidebarViewSwitcher"
 import { ChannelList } from "../components/channels/ChannelList"
 import { useSidebarViewStore } from "../stores/sidebarViewStore"
 import { MachineSwitcher } from "./MachineSwitcher"
@@ -149,6 +151,65 @@ function VersionPill({ tone, label, busy, ...props }: {
   )
 }
 
+/** How far the list travels going into or out of focus mode: a nudge, not a page turn. */
+const FOCUS_SLIDE_PX = 16
+
+/**
+ * Entering focus mode is a step in, and leaving it a step back out, so the
+ * list arrives from the side it would on a navigation stack: from the right
+ * going in, from the left coming out. The pill settles in at the same time.
+ *
+ * What was there before is not animated out. One list replaces another, and
+ * the arriving one fading up from nothing is what bridges the cut.
+ *
+ * On the panes' clock and curve (paneAnimation.ts), so the sidebar's contents
+ * move the way the sidebar itself does: no overshoot, since a click threw
+ * nothing. Only transform and opacity, on two elements.
+ *
+ * Not for the toggle shortcut (set `skipFocusMotionRef` before toggling):
+ * that is pressed to get somewhere, over and over, and motion would only be
+ * in the way. Escape does animate: it is the same step back out as clicking
+ * the pill. Not for focus moving from one project to another either, which
+ * follows the chat you opened. Under reduced motion the slide is dropped and
+ * a short fade is kept.
+ */
+function useFocusMotion(focused: boolean) {
+  const pillMotionRef = useRef<HTMLDivElement>(null)
+  const listMotionRef = useRef<HTMLDivElement>(null)
+  const skipFocusMotionRef = useRef(false)
+  const wasFocusedRef = useRef(focused)
+
+  useLayoutEffect(() => {
+    const wasFocused = wasFocusedRef.current
+    wasFocusedRef.current = focused
+    const skip = skipFocusMotionRef.current
+    skipFocusMotionRef.current = false
+    if (wasFocused === focused || skip) return
+
+    const reduced = prefersReducedMotion()
+    const timing = reduced
+      ? { duration: 150, easing: "ease" }
+      : { duration: focused ? PANE_OPEN_MS : PANE_CLOSE_MS, easing: PANE_EASING }
+    const slideFrom = reduced ? "none" : `translateX(${focused ? FOCUS_SLIDE_PX : -FOCUS_SLIDE_PX}px)`
+
+    listMotionRef.current?.animate(
+      [{ opacity: 0, transform: slideFrom }, { opacity: 1, transform: "none" }],
+      timing,
+    )
+    pillMotionRef.current?.animate(
+      [{ opacity: 0, transform: reduced ? "none" : "scale(0.96)" }, { opacity: 1, transform: "none" }],
+      timing,
+    )
+  }, [focused])
+
+  return { pillMotionRef, listMotionRef, skipFocusMotionRef }
+}
+
+/** When a chat last moved: the timestamp the sidebar's sections sort by (`thread-sections`). */
+function chatActivityAt(chat: SidebarChatRow) {
+  return Math.max(chat.lastMessageAt ?? 0, chat.lastAgentMessageAt ?? 0, chat.lastTurnEndedAt ?? 0)
+}
+
 function KannaSidebarImpl({
   activeChatId,
   connectionStatus,
@@ -190,9 +251,19 @@ function KannaSidebarImpl({
   // here, so the Chats view, the Projects view and the number-jump indices all
   // agree on what is on screen. The focused project is whichever one is current,
   // so opening a chat elsewhere re-points focus rather than leaving it.
+  //
+  // Except for the moment after a channel is opened: the chat that makes its
+  // project current is still on its way, and until it lands "current" is the
+  // project you were last in, whose chats would flash by. The channel's own
+  // project is held as the focus until the current one catches up.
+  const [openingProjectId, setOpeningProjectId] = useState<string | null>(null)
+  if (openingProjectId && (!focusModeEnabled || openingProjectId === currentProjectId)) {
+    setOpeningProjectId(null)
+  }
+  const focusProjectId = openingProjectId ?? currentProjectId
   const focusedProjectGroup = useMemo(
-    () => resolveFocusedProjectGroup(allProjectsData.projectGroups, focusModeEnabled, currentProjectId),
-    [allProjectsData.projectGroups, currentProjectId, focusModeEnabled]
+    () => resolveFocusedProjectGroup(allProjectsData.projectGroups, focusModeEnabled, focusProjectId),
+    [allProjectsData.projectGroups, focusProjectId, focusModeEnabled]
   )
   const data = useMemo(
     () => focusSidebarData(allProjectsData, focusedProjectGroup),
@@ -201,6 +272,7 @@ function KannaSidebarImpl({
   const location = useLocation()
   const navigate = useNavigate()
   const isStandalone = useIsStandalone()
+  const { pillMotionRef, listMotionRef, skipFocusMotionRef } = useFocusMotion(focusedProjectGroup !== null)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const resizeStartRef = useRef<{ pointerX: number; width: number } | null>(null)
   const initializedCollapsedGroupKeysRef = useRef<Set<string>>(new Set())
@@ -228,24 +300,24 @@ function KannaSidebarImpl({
    */
   const leaveArchivedView = useSidebarViewStore((state) => state.leaveArchived)
 
+  // Channels is two levels: the project list, then one project's chats. The
+  // second level is focus mode, so opening a channel turns it on, and leaving
+  // focus mode (the pill) is the way back to the list. Focus follows the open
+  // chat's project, so the channel's most recent chat is opened too, or a new
+  // one where it has none; a channel already current keeps the chat it is on.
   const selectProject = useCallback((projectId: string) => {
-    navigate(`/project/${encodeURIComponent(projectId)}`)
-  }, [navigate])
-
-  // Channels is a layout as much as a view, so switching to or from it also
-  // moves the page: into the current project's channel, unless a chat is open
-  // (its channel appears beside it), and off a channel page when leaving,
-  // since that page belongs to the layout being left.
-  const changeSidebarView = useCallback((view: SidebarView) => {
-    const onProjectPage = location.pathname.startsWith("/project/")
-    const onChatPage = location.pathname.startsWith("/chat/")
-    if (view === "channels" && !onChatPage && !onProjectPage && currentProjectId) {
-      selectProject(currentProjectId)
-    } else if (view !== "channels" && onProjectPage) {
-      navigate("/")
-    }
-    setSidebarView(view)
-  }, [currentProjectId, location.pathname, navigate, selectProject, setSidebarView])
+    setFocusMode(true)
+    if (projectId === currentProjectId && activeChatId) return
+    setOpeningProjectId(projectId)
+    const group = allProjectsData.projectGroups.find((item) => item.groupKey === projectId)
+    const newestChat = group?.chats
+      .filter((chat) => chat.lastMessageAt != null)
+      .reduce<SidebarChatRow | null>((newest, chat) => (
+        !newest || chatActivityAt(chat) > chatActivityAt(newest) ? chat : newest
+      ), null)
+    if (newestChat) navigate(`/chat/${newestChat.chatId}`)
+    else onCreateChat(projectId)
+  }, [activeChatId, allProjectsData.projectGroups, currentProjectId, navigate, onCreateChat])
 
   const handleRestoreChat = useCallback((chatId: string) => {
     leaveArchivedView()
@@ -439,7 +511,12 @@ function KannaSidebarImpl({
         }
 
         event.preventDefault()
+        // A shortcut's result lands at once; see `useFocusMotion`.
+        skipFocusMotionRef.current = true
         toggleFocusMode()
+        // Cleared a frame on in case the toggle changed nothing on screen, so
+        // it can't swallow the motion of a later click.
+        window.requestAnimationFrame(() => { skipFocusMotionRef.current = false })
         return
       }
 
@@ -475,6 +552,39 @@ function KannaSidebarImpl({
       window.removeEventListener("blur", clearHints)
     }
   }, [currentProjectId, navigate, onCreateChat, resolvedKeybindings])
+
+  // Escape leaves focus mode, but only when nothing nearer has a use for it.
+  // It is last in line, heard as the event finishes bubbling, and it stands
+  // down for:
+  //   - anything that already answered it (`defaultPrevented`): stopping a
+  //     running turn, closing the composer's skill or project menu, the first
+  //     Escape that returns focus to the composer, the phone's widget sheet;
+  //   - anything that kept it for itself: the viewer and the branch picker
+  //     stop it before it gets here;
+  //   - an open menu, select or dialog (the command palette), which closes;
+  //   - a text field other than the composer (a search box clearing its
+  //     query, the plan's edit box, a terminal).
+  // So in the composer of an idle chat, where Escape did nothing, it now does
+  // this.
+  const hasFocusedProject = focusedProjectGroup !== null
+  useEffect(() => {
+    if (!hasFocusedProject) return
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key !== "Escape" || event.defaultPrevented) return
+      if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return
+      if (document.querySelector("[role='menu'][data-state='open'], [role='listbox'][data-state='open'], [role='dialog'][data-state='open'], [role='alertdialog'][data-state='open']")) return
+      const target = event.target
+      if (target instanceof HTMLElement && !target.hasAttribute(CHAT_INPUT_ATTRIBUTE)
+        && (target.isContentEditable || target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT")) return
+
+      event.preventDefault()
+      // Animated, unlike the toggle shortcut (`useFocusMotion`): Escape is
+      // the step back out that the pill's click is, pressed once to leave.
+      setFocusMode(false)
+    }
+    window.addEventListener("keydown", handleEscape)
+    return () => window.removeEventListener("keydown", handleEscape)
+  }, [hasFocusedProject])
 
   useEffect(() => {
     if (!activeChatId || !scrollContainerRef.current) return
@@ -799,18 +909,11 @@ function KannaSidebarImpl({
             </div>
             {/* The focus row joins this block rather than sitting below it, so
                 it inherits the same width, padding and row rhythm as the
-                buttons — which is the whole of its treatment. It leads the
-                block, and the block leads both views, so focus mode is the
-                first thing the sidebar says either way. */}
+                buttons — which is the whole of its treatment. It ends the
+                block, directly over the list it narrows, and New Chat stays
+                put when it comes and goes. */}
             {newSidebarEnabled || focusedProjectGroup ? (
               <div className="flex flex-col gap-[1px] pb-2 mac-app:md:pb-0">
-                {focusedProjectGroup ? (
-                  <FocusModePill
-                    projectTitle={focusedProjectGroup.title}
-                    shortcutHint={formatActionShortcut(resolvedKeybindings, "toggleFocusMode") ?? undefined}
-                    onExit={() => setFocusMode(false)}
-                  />
-                ) : null}
                 {newSidebarEnabled ? (
                   <>
                     {/* The switcher overlays the New Chat row's right end rather
@@ -828,7 +931,7 @@ function KannaSidebarImpl({
                         <span>New Chat</span>
                       </button>
                       <div className="absolute inset-y-0 right-0 flex items-center">
-                        <SidebarViewSwitcher view={sidebarView} onChange={changeSidebarView} />
+                        <SidebarViewSwitcher view={sidebarView} onChange={setSidebarView} />
                       </div>
                     </div>
                   </>
@@ -843,9 +946,21 @@ function KannaSidebarImpl({
                     <span>Terminal</span>
                   </button>
                 ) : null}
+                {focusedProjectGroup ? (
+                  <div ref={pillMotionRef}>
+                    <FocusModePill
+                      projectTitle={focusedProjectGroup.title}
+                      shortcutHint={formatActionShortcut(resolvedKeybindings, "toggleFocusMode") ?? undefined}
+                      onExit={() => setFocusMode(false)}
+                    />
+                  </div>
+                ) : null}
               </div>
             ) : null}
 
+            {/* Everything under the New Chat block: what focus mode swaps, and
+                so what moves when it does (`useFocusMotion`). */}
+            <div ref={listMotionRef}>
             {!hasVisibleChats && isConnecting ? (
               <div className="space-y-5 px-1 pt-3">
                 {[0, 1, 2].map((section) => (
@@ -871,9 +986,9 @@ function KannaSidebarImpl({
 
             {/* Not in the Archived view: there, "no conversations yet" would sit
                 above a list of the conversations you archived, and the view
-                states its own emptiness anyway. Nor in Channels, which lists
-                projects whether or not they have conversations. */}
-            {!isConnecting && sidebarView !== "archived" && sidebarView !== "channels" && (
+                states its own emptiness anyway. Nor in the channel list, which
+                shows projects whether or not they have conversations. */}
+            {!isConnecting && sidebarView !== "archived" && !(sidebarView === "channels" && !focusedProjectGroup) && (
               (!hasVisibleChats && data.projectGroups.length === 0)
               // A focused project with no chats: say so, rather than leave the
               // list blank under a pill naming the project.
@@ -882,7 +997,8 @@ function KannaSidebarImpl({
               <p className="text-sm text-slate-400 p-2 mt-6 text-center">No conversations yet</p>
             ) : null}
 
-            {newSidebarEnabled && sidebarView === "recents" ? (
+            {/* A channel that is open is its chats, as the Chats view shows them. */}
+            {newSidebarEnabled && (sidebarView === "recents" || (sidebarView === "channels" && focusedProjectGroup)) ? (
               <ThreadSections
                 threads={threads}
                 activeChatId={activeChatId}
@@ -922,9 +1038,7 @@ function KannaSidebarImpl({
               />
             ) : null}
 
-            {/* Every project, even in focus mode: a channel list narrowed to
-                one channel would leave no way to another. */}
-            {newSidebarEnabled && sidebarView === "channels" ? (
+            {newSidebarEnabled && sidebarView === "channels" && !focusedProjectGroup ? (
               <ChannelList
                 projectGroups={allProjectsData.projectGroups}
                 activeProjectId={currentProjectId}
@@ -958,6 +1072,7 @@ function KannaSidebarImpl({
                 newSidebar={newSidebarProjectsView}
               />
             ) : null}
+            </div>
           </div>
         </div>
 

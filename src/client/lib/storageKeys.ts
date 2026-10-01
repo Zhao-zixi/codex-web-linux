@@ -27,9 +27,6 @@ export const OPEN_FILE_DESTINATION_STORAGE_KEY = "kanna:last-open-file"
 /** localStorage: active sidebar view ("recents" | "projects" | "channels") when the recent-chats Labs mode is on. */
 export const SIDEBAR_VIEW_STORAGE_KEY = "kanna:sidebar-view"
 
-/** localStorage: width in pixels of the Channels layout's thread list while a thread is open beside it. */
-export const CHANNEL_PANEL_WIDTH_STORAGE_KEY = "kanna:channel-panel-width"
-
 /** localStorage: JSON map of project id to when its channel was pinned in the Channels sidebar. */
 export const CHANNEL_PINS_STORAGE_KEY = "kanna:channel-pins"
 

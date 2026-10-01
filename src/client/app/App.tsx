@@ -28,8 +28,6 @@ const WorkflowsGalleryPage = lazy(() => import("./WorkflowsGalleryPage").then((m
 import { TerminalPage } from "./TerminalPage"
 import { useKannaState } from "./useKannaState"
 import { useSidebarStore } from "../stores/sidebarStore"
-import { useChannelsLayout } from "../stores/sidebarViewStore"
-import { ChannelPanel } from "../components/channels/ChannelPanel"
 import type { AppSettingsSnapshot } from "../../shared/types"
 
 const AUTH_STATUS_RETRY_DELAY_MS = 500
@@ -215,14 +213,7 @@ function KannaLayout() {
   const location = useLocation()
   const navigate = useNavigate()
   const params = useParams()
-  const state = useKannaState(params.chatId ?? null, params.projectId ?? null)
-  // A project's channel: the page at `/project/:id`, and in the Channels
-  // layout the column beside whatever chat is open, which is one of its
-  // threads. Rendered here rather than by either route so going from the
-  // channel to a thread, or between threads, keeps the list and its scroll.
-  const channelsLayout = useChannelsLayout()
-  const channelProjectId = params.projectId
-    ?? (channelsLayout && params.chatId ? state.activeProjectId : null)
+  const state = useKannaState(params.chatId ?? null)
 
   // Feed the provider-auth store for the app's lifetime: sign-in state powers
   // the settings/new-chat auth cards, the harness picker's "Sign In" pills,
@@ -462,19 +453,6 @@ function KannaLayout() {
   return (
     <div className="flex h-[100dvh] min-h-[100dvh] overflow-hidden">
       {sidebarElement}
-      {channelProjectId ? (
-        <ChannelPanel
-          // Per project: another channel starts at its own newest thread.
-          key={channelProjectId}
-          projectId={channelProjectId}
-          threadChatId={params.chatId ?? null}
-          socket={state.socket}
-          availableProviders={state.availableProviders}
-          sidebarCollapsed={state.sidebarCollapsed}
-          onExpandSidebar={state.expandSidebar}
-          onSend={state.handleSendToProject}
-        />
-      ) : null}
       <Outlet context={state} />
       <SetupWizard />
       <CommandPalette state={state} />
@@ -523,9 +501,6 @@ export function App() {
             <Route path="/settings" element={<Navigate to="/settings/general" replace />} />
             <Route path="/settings/:sectionId" element={<Suspense fallback={null}><SettingsPage /></Suspense>} />
             <Route path="/chat/:chatId" element={<ChatPage />} />
-            {/* A project open with no thread. The layout draws its channel
-                (see `channelProjectId`), so the route itself adds nothing. */}
-            <Route path="/project/:projectId" element={null} />
             <Route path="/terminal" element={<TerminalPage />} />
             {/* Every state of the Tasks and Workflow widgets, on made-up data. */}
             <Route path="/workflows" element={<Suspense fallback={null}><WorkflowsGalleryPage /></Suspense>} />

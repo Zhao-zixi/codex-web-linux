@@ -27,7 +27,8 @@ import type { HarnessEvent, HarnessTurn } from "./harness-types"
 import { AsyncQueue } from "./async-queue"
 import { KANNA_TOOL_NAMES, type KannaToolHost } from "./kanna-tools"
 import { createPiKannaTools } from "./kanna-tool-adapters"
-import { buildKannaAgentCorrection, buildKannaAgentId, buildKannaAttributionInstructions } from "./attribution"
+import { buildKannaAgentCorrection, buildKannaAgentId } from "./attribution"
+import { buildKannaSystemInstructions } from "./harness-instructions"
 import { appendSystemMessageBlock } from "./harness-skills"
 import { OPENROUTER_BASE_URL, readLlmProviderSnapshot } from "./llm-provider"
 import { timestamped } from "./transcript"
@@ -446,7 +447,7 @@ export class PiAgentManager {
       settingsManager,
       noExtensions: true,
       noThemes: true,
-      appendSystemPrompt: [buildKannaAttributionInstructions(buildKannaAgentId("pi", args.model))],
+      appendSystemPrompt: [buildKannaSystemInstructions(buildKannaAgentId("pi", args.model))],
     })
     await resourceLoader.reload()
 

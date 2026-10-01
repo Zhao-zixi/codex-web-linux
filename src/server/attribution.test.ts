@@ -8,7 +8,6 @@ import {
   buildKannaAgentId,
   buildKannaAgentTrailer,
   buildKannaAttributionInstructions,
-  buildKannaAttributionSystemMessage,
   buildKannaCommitAttribution,
   buildKannaPrFooter,
   hasKannaFooter,
@@ -135,15 +134,6 @@ describe("buildKannaAttributionInstructions", () => {
     expect(hasKannaFooter(commit)).toBe(true)
     expect(hasKannaTrailer(commit)).toBe(true)
     expect(buildKannaCommitAttribution(commit)).toBeNull()
-  })
-})
-
-describe("buildKannaAttributionSystemMessage", () => {
-  test("wraps the instructions for the no-append-hook providers", () => {
-    const message = buildKannaAttributionSystemMessage(AGENT_ID)
-    expect(message.startsWith("<system-message>")).toBe(true)
-    expect(message.endsWith("</system-message>")).toBe(true)
-    expect(message).toContain(buildKannaAgentTrailer(AGENT_ID))
   })
 })
 

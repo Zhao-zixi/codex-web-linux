@@ -2,12 +2,12 @@
  * Kanna's git attribution — one source of truth for two very different surfaces.
  *
  * Harness commits (advisory): buildKannaAttributionInstructions is appended to
- * each provider's system prompt — natively for claude (systemPrompt.append), pi
- * (DefaultResourceLoader.appendSystemPrompt) and codex
- * (collaborationMode.settings.developer_instructions). Cursor assembles its
- * prompt server-side and exposes no append hook, so it rides the same user-text
- * <system-message> path the skill failsafe uses. All four are instructions to a
- * model: compliance is high but not guaranteed.
+ * each provider's system prompt (via harness-instructions.ts) — natively for
+ * claude (systemPrompt.append), pi (DefaultResourceLoader.appendSystemPrompt)
+ * and codex (collaborationMode.settings.developer_instructions). Cursor and
+ * grok expose no append hook, so they ride the same user-text <system-message>
+ * path the skill failsafe uses. All of these are instructions to a model:
+ * compliance is high but not guaranteed.
  *
  * Kanna's own commits (deterministic): buildKannaCommitAttribution is applied in
  * diff-store.commitFiles just before git runs, so anything committed from the
@@ -80,11 +80,6 @@ End every pull request body you write with this line:
 ${buildKannaPrFooter(agentId)}
 
 This is the only attribution to use. Do not add a co-author trailer, a "Generated with" footer, or a session link for yourself, for your model, or for the CLI you are running as — Kanna's attribution replaces them.`
-}
-
-/** Wrapped for the providers that have no system-prompt append hook (cursor). */
-export function buildKannaAttributionSystemMessage(agentId: string): string {
-  return `<system-message>${buildKannaAttributionInstructions(agentId)}</system-message>`
 }
 
 /**

@@ -12,7 +12,8 @@ import type {
 } from "../shared/types"
 import type { HarnessEvent, HarnessToolRequest, HarnessTurn } from "./harness-types"
 import { appendSystemMessageBlock, buildSkillSystemMessage } from "./harness-skills"
-import { buildKannaAgentId, buildKannaAttributionInstructions } from "./attribution"
+import { buildKannaAgentId } from "./attribution"
+import { buildKannaSystemInstructions } from "./harness-instructions"
 import { AsyncQueue } from "./async-queue"
 import type { KannaToolHost } from "./kanna-tools"
 import { createKannaMcpServer } from "./kanna-mcp"
@@ -1037,7 +1038,7 @@ export class CodexAppServerManager {
             // Codex's instruction channel is per-turn, not per-session: this is
             // re-sent every turn by design. It appends to the built-in
             // developer message rather than replacing it.
-            developer_instructions: buildKannaAttributionInstructions(buildKannaAgentId("codex", args.model)),
+            developer_instructions: buildKannaSystemInstructions(buildKannaAgentId("codex", args.model)),
           },
         },
       } satisfies TurnStartParams)

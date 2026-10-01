@@ -58,9 +58,8 @@ import {
 import {
   buildKannaAgentCorrection,
   buildKannaAgentId,
-  buildKannaAttributionInstructions,
-  buildKannaAttributionSystemMessage,
 } from "./attribution"
+import { buildKannaSystemInstructions, buildKannaSystemMessage } from "./harness-instructions"
 import {
   applyClaudeSdkModels,
   applyCodexModels,
@@ -83,7 +82,6 @@ import { asNumber, asRecord } from "../shared/json"
 import { buildHandoffContext, buildHandoffMessageContent, type HandoffContext } from "./handoff"
 import { checkSessionArtifact, type SessionArtifactStatus } from "./session-artifacts"
 import { timestamped } from "./transcript"
-import { KANNA_CHAT_LINK_NOTICE } from "../shared/chat-links"
 import {
   findWorkflowOf,
   finishActivity,
@@ -956,12 +954,12 @@ async function startClaudeSession(args: {
       // like the rest.
       forwardSubagentText: true,
       settingSources: ["user", "project", "local"],
-      // Append-only: the claude_code preset stays intact, Kanna's git
-      // attribution rides on the end of it (see attribution.ts).
+      // Append-only: the claude_code preset stays intact, Kanna's session
+      // instructions ride on the end of it (see harness-instructions.ts).
       systemPrompt: {
         type: "preset",
         preset: "claude_code",
-        append: buildKannaAttributionInstructions(buildKannaAgentId("claude", args.model)),
+        append: buildKannaSystemInstructions(buildKannaAgentId("claude", args.model)),
       },
       // fastMode must go through the flag-settings layer: the CLI only allows
       // fast mode in Agent SDK sessions when flagSettings.fastMode is true,
@@ -1899,7 +1897,6 @@ export class AgentCoordinator {
     if (args.provider !== "codex" && skills.length > 0) {
       wireContent = appendSystemMessageBlock(wireContent, buildSkillSystemMessage(skills))
     }
-    wireContent = appendSystemMessageBlock(wireContent, KANNA_CHAT_LINK_NOTICE)
     const concurrentAgentsNotice = buildConcurrentAgentsNotice(
       this.collectConcurrentProjectChats(args.chatId, project.localPath)
     )
@@ -1936,10 +1933,10 @@ export class AgentCoordinator {
       void this.refreshCursorModelCatalog()
       let cursorContent = buildPromptText(wireContent, args.attachments)
       // Cursor builds its system prompt server-side and exposes no append hook,
-      // so its share of the git attribution rides the user-text path instead.
+      // so Kanna's session instructions ride the user-text path instead.
       cursorContent = appendSystemMessageBlock(
         cursorContent,
-        buildKannaAttributionSystemMessage(buildKannaAgentId("cursor", args.model))
+        buildKannaSystemMessage(buildKannaAgentId("cursor", args.model))
       )
       // Cursor cannot fork (see canForkChat), so a turn always resumes its own session.
       turn = await this.cursorManager.startTurn({
@@ -1954,7 +1951,7 @@ export class AgentCoordinator {
       let grokContent = buildPromptText(wireContent, args.attachments)
       grokContent = appendSystemMessageBlock(
         grokContent,
-        buildKannaAttributionSystemMessage(buildKannaAgentId("grok", args.model)),
+        buildKannaSystemMessage(buildKannaAgentId("grok", args.model)),
       )
       turn = await this.grokManager.startTurn({
         cwd: project.localPath,

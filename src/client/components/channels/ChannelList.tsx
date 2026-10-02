@@ -1,11 +1,12 @@
 import { memo, useMemo, useState } from "react"
-import { Hash, Loader2, Pin, PinOff } from "lucide-react"
+import { Hash, Pin, PinOff } from "lucide-react"
 import type { SidebarProjectGroup } from "../../../shared/types"
 import { computeChannelSections } from "../../lib/channel-sections"
 import { cn } from "../../lib/utils"
 import { useChannelPinStore } from "../../stores/channelPinStore"
 import { useDraftStartTimes } from "../../stores/chatInputStore"
 import { usePendingSendTimes } from "../../stores/pendingSendStore"
+import { renderChatStatusDot } from "../chat-ui/ThreadRowContent"
 import { SectionHeader } from "../chat-ui/sidebar/ThreadSections"
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../ui/context-menu"
 
@@ -18,15 +19,23 @@ interface ChannelRowProps {
 }
 
 /**
- * A project as a channel: its mark, its name, and a count of the threads
- * waiting on you. The mark is the hash, or a spinner while an agent is working
- * in any of its chats, so the name never shifts. Bold means something in it is
- * unread, as a Slack channel's is.
+ * A project as a channel: its mark, its name, and a count of the chats that
+ * want you (unread, or waiting on an answer). The mark is the hash while every chat in it is idle and
+ * read, and otherwise the status glyph of its most pressing chat, in the
+ * hash's slot so the name never shifts. Bold means something in it is unread,
+ * as a Slack channel's is.
  */
 const ChannelRow = memo(function ChannelRow({ group, active, pinned, onSelect, onTogglePin }: ChannelRowProps) {
   const unread = group.chats.some((chat) => chat.unread)
-  const waitingCount = group.chats.filter((chat) => chat.status === "waiting_for_user").length
-  const working = group.chats.some((chat) => chat.status === "running" || chat.status === "starting")
+  // Chats that want you: unread, or waiting on an answer. One chat counts
+  // once even when it is both.
+  const attentionCount = group.chats.filter((chat) => chat.unread || chat.status === "waiting_for_user").length
+  // The mark is the status of the channel's most pressing chat, drawn as that
+  // chat's own row draws it: running, then waiting on you, then unread.
+  const leadChat = group.chats.find((chat) => chat.status === "running" || chat.status === "starting")
+    ?? group.chats.find((chat) => chat.status === "waiting_for_user")
+    ?? group.chats.find((chat) => chat.unread)
+  const statusMark = leadChat ? renderChatStatusDot(leadChat) : null
 
   return (
     <ContextMenu>
@@ -44,17 +53,16 @@ const ChannelRow = memo(function ChannelRow({ group, active, pinned, onSelect, o
             unread && "font-semibold"
           )}
         >
-          {/* The chat rows' own spinner (`renderChatStatusDot`), in the hash's 16px slot. */}
           <span className="flex size-4 shrink-0 items-center justify-center">
-            {working
-              ? <Loader2 className="size-3.5 animate-spin text-logo" />
-              : <Hash className="size-4 opacity-70" />}
+            {statusMark ?? <Hash className="size-4 opacity-70" />}
           </span>
           <span className="min-w-0 flex-1 truncate">{group.title}</span>
-          {/* The blue a chat row's waiting dot uses. */}
-          {waitingCount > 0 ? (
-            <span className="flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-[5px] bg-blue-400 px-1 text-[11px] font-bold leading-none text-white">
-              {waitingCount}
+          {/* Neutral: the mark on the left carries the colour. A tint of the
+              text colour rather than `bg-muted`, which is the selected row's
+              own background and would hide the badge there. */}
+          {attentionCount > 0 ? (
+            <span className="flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-[5px] bg-foreground/10 px-1 text-[11px] font-bold leading-none text-foreground">
+              {attentionCount}
             </span>
           ) : null}
         </button>

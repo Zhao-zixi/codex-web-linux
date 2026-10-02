@@ -501,6 +501,11 @@ export function App() {
             <Route path="/settings" element={<Navigate to="/settings/general" replace />} />
             <Route path="/settings/:sectionId" element={<Suspense fallback={null}><SettingsPage /></Suspense>} />
             <Route path="/chat/:chatId" element={<ChatPage />} />
+            {/* A project's chats as a page: the sidebar, focused on it (see
+                `routeProjectId` in KannaSidebar). What opening a channel
+                shows on a phone. Like `/`, the sidebar is the whole page
+                there; beside it on desktop goes what `/` shows. */}
+            <Route path="/project/:projectId" element={<div className="hidden md:contents"><LocalProjectsPage /></div>} />
             <Route path="/terminal" element={<TerminalPage />} />
             {/* Every state of the Tasks and Workflow widgets, on made-up data. */}
             <Route path="/workflows" element={<Suspense fallback={null}><WorkflowsGalleryPage /></Suspense>} />

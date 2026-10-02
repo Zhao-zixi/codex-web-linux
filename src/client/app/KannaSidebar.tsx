@@ -1,5 +1,5 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type CSSProperties } from "react"
-import { ArrowLeft, ArrowRight, Flower, House, Loader2, PanelLeft, Search, Plus, Settings, Settings2, SquarePen, Terminal } from "lucide-react"
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ButtonHTMLAttributes, type CSSProperties } from "react"
+import { ArrowLeft, ArrowRight, ChevronLeft, Flower, House, Loader2, PanelLeft, Search, Plus, Settings, Settings2, SquarePen, Terminal } from "lucide-react"
 import { useLocation, useNavigate, useNavigationType } from "react-router-dom"
 import { APP_NAME } from "../../shared/branding"
 import { Button } from "../components/ui/button"
@@ -25,6 +25,7 @@ import { isBackgroundOpenClick } from "../lib/background-open"
 import { MachineSwitcher } from "./MachineSwitcher"
 import { getResolvedKeybindings } from "../lib/keybindings"
 import { useIsStandalone } from "../hooks/useIsStandalone"
+import { useHasFinePointer } from "../lib/pointer"
 import { isMacApp } from "../lib/macApp"
 import type { ChatPreview, ChatTouchedFilesResult, KeybindingsSnapshot, SidebarChatRow, UpdateSnapshot } from "../../shared/types"
 import { isNightlyVersion } from "../../shared/types"
@@ -156,6 +157,18 @@ function VersionPill({ tone, label, busy, ...props }: {
   )
 }
 
+function useMediaQuery(query: string) {
+  return useSyncExternalStore(
+    (onChange) => {
+      const list = window.matchMedia(query)
+      list.addEventListener("change", onChange)
+      return () => list.removeEventListener("change", onChange)
+    },
+    () => window.matchMedia(query).matches,
+    () => false,
+  )
+}
+
 /** iOS's push runs a little longer than a pane opening: a whole page travels its own width. */
 const FOCUS_PUSH_MS = 350
 /** How far the page underneath drifts while the one on top crosses it, as a share of its width. */
@@ -163,6 +176,15 @@ const FOCUS_PARALLAX = "-30%"
 /** The sidebar card's own background, for the page on top, so it covers the one under it. */
 const FOCUS_PAGE_SURFACE = ["bg-background", "dark:bg-card"]
 const SIDEBAR_SCROLLER_SELECTOR = "[data-sidebar-scroller]"
+// A menu, select or dialog that is up. They portal out of the sidebar, so the
+// pointer is over one of these while it is no longer over the card.
+const OPEN_LAYER_SELECTOR = "[role='menu'][data-state='open'], [role='listbox'][data-state='open'], [role='dialog'][data-state='open'], [role='alertdialog'][data-state='open']"
+// The peek: how close to the window's left edge the mouse opens it, how far
+// past the card's right edge it may stray before the card leaves, and how long
+// it has to come back.
+const PEEK_EDGE_PX = 8
+const PEEK_SLOP_PX = 16
+const PEEK_CLOSE_DELAY_MS = 200
 
 /** The scroller itself, or the one inside. */
 function findSidebarScroller(element: HTMLElement) {
@@ -306,11 +328,6 @@ function useFocusMotion(focused: boolean) {
   return { pageMotionRef, skipFocusMotionRef, captureOutgoing }
 }
 
-/** When a chat last moved: the timestamp the sidebar's sections sort by (`thread-sections`). */
-function chatActivityAt(chat: SidebarChatRow) {
-  return Math.max(chat.lastMessageAt ?? 0, chat.lastAgentMessageAt ?? 0, chat.lastTurnEndedAt ?? 0)
-}
-
 function KannaSidebarImpl({
   activeChatId,
   connectionStatus,
@@ -353,24 +370,28 @@ function KannaSidebarImpl({
   // agree on what is on screen. The focused project is whichever one is current,
   // so opening a chat elsewhere re-points focus rather than leaving it.
   //
-  // Except for the moment after a channel is opened: the chat that makes its
-  // project current is still on its way, and until it lands "current" is the
-  // project you were last in, whose chats would flash by. The channel's own
-  // project is held as the focus until the current one catches up.
-  const [openingProjectId, setOpeningProjectId] = useState<string | null>(null)
-  if (openingProjectId && (!focusModeEnabled || openingProjectId === currentProjectId)) {
-    setOpeningProjectId(null)
-  }
-  const focusProjectId = openingProjectId ?? currentProjectId
+  // A project's own page (`/project/:id`) is that project focused whatever
+  // the setting says: it is what opening a channel shows on a phone, where
+  // the channel's chats are a page of their own between the channel list
+  // and a chat, reached and left through the browser's history so the
+  // system's swipe back works on it.
+  const location = useLocation()
+  const routeProjectId = useMemo(() => {
+    const match = /^\/project\/([^/]+)/.exec(location.pathname)
+    return match ? decodeURIComponent(match[1]!) : null
+  }, [location.pathname])
   const focusedProjectGroup = useMemo(
-    () => resolveFocusedProjectGroup(allProjectsData.projectGroups, focusModeEnabled, focusProjectId),
-    [allProjectsData.projectGroups, focusProjectId, focusModeEnabled]
+    () => resolveFocusedProjectGroup(
+      allProjectsData.projectGroups,
+      focusModeEnabled || routeProjectId !== null,
+      routeProjectId ?? currentProjectId
+    ),
+    [allProjectsData.projectGroups, currentProjectId, focusModeEnabled, routeProjectId]
   )
   const data = useMemo(
     () => focusSidebarData(allProjectsData, focusedProjectGroup),
     [allProjectsData, focusedProjectGroup]
   )
-  const location = useLocation()
   const navigate = useNavigate()
   const isStandalone = useIsStandalone()
   const { pageMotionRef, skipFocusMotionRef, captureOutgoing } = useFocusMotion(focusedProjectGroup !== null)
@@ -401,27 +422,15 @@ function KannaSidebarImpl({
    */
   const leaveArchivedView = useSidebarViewStore((state) => state.leaveArchived)
 
-  // Channels is two levels: the project list, then one project's chats. The
-  // second level is focus mode, so opening a channel turns it on, and leaving
-  // focus mode (the pill) is the way back to the list. Focus follows the open
-  // chat's project, so the channel's most recent chat is opened too, or a new
-  // one where it has none; a channel already current keeps the chat it is on.
+  // Opening a channel where its chats can't hang off it as a menu (a phone,
+  // or any touch screen): they are a page of their own, pushed onto the
+  // history. Menu, then the channel's chats, then a chat, and back the same
+  // way. The outgoing page is captured so the push animates, as focus mode's
+  // does; the system's swipe back needs none of ours.
   const selectProject = useCallback((projectId: string) => {
-    // Focus mode can already be on with nothing focused (no chat open), and
-    // then the store has no change to announce the push with.
     captureOutgoing()
-    setFocusMode(true)
-    if (projectId === currentProjectId && activeChatId) return
-    setOpeningProjectId(projectId)
-    const group = allProjectsData.projectGroups.find((item) => item.groupKey === projectId)
-    const newestChat = group?.chats
-      .filter((chat) => chat.lastMessageAt != null)
-      .reduce<SidebarChatRow | null>((newest, chat) => (
-        !newest || chatActivityAt(chat) > chatActivityAt(newest) ? chat : newest
-      ), null)
-    if (newestChat) navigate(`/chat/${newestChat.chatId}`)
-    else onCreateChat(projectId)
-  }, [activeChatId, allProjectsData.projectGroups, captureOutgoing, currentProjectId, navigate, onCreateChat])
+    navigate(`/project/${encodeURIComponent(projectId)}`)
+  }, [captureOutgoing, navigate])
 
   const handleRestoreChat = useCallback((chatId: string) => {
     leaveArchivedView()
@@ -442,7 +451,19 @@ function KannaSidebarImpl({
   }, [leaveArchivedView, sidebarView])
   const resolvedKeybindings = useMemo(() => getResolvedKeybindings(keybindings), [keybindings])
   const focusShortcutHint = formatActionShortcut(resolvedKeybindings, "toggleFocusMode") ?? undefined
-  const exitFocusMode = useCallback(() => setFocusMode(false), [])
+  // Leaving the focused page. On a project's own page that is going back:
+  // through the history where there is one to go back through, so the Back
+  // button and the system's swipe land in the same place, and to the menu
+  // for a page opened directly.
+  const exitFocusMode = useCallback(() => {
+    if (routeProjectId === null) {
+      setFocusMode(false)
+      return
+    }
+    captureOutgoing()
+    if (((window.history.state as { idx?: number } | null)?.idx ?? 0) > 0) navigate(-1)
+    else navigate("/", { replace: true })
+  }, [captureOutgoing, navigate, routeProjectId])
   const visibleChats = useMemo(
     () => getVisibleSidebarChats(data.projectGroups, collapsedSections, expandedGroups),
     [collapsedSections, data.projectGroups, expandedGroups]
@@ -762,19 +783,19 @@ function KannaSidebarImpl({
     function handleEscape(event: KeyboardEvent) {
       if (event.key !== "Escape" || event.defaultPrevented) return
       if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return
-      if (document.querySelector("[role='menu'][data-state='open'], [role='listbox'][data-state='open'], [role='dialog'][data-state='open'], [role='alertdialog'][data-state='open']")) return
+      if (document.querySelector(OPEN_LAYER_SELECTOR)) return
       const target = event.target
       if (target instanceof HTMLElement && !target.hasAttribute(CHAT_INPUT_ATTRIBUTE)
         && (target.isContentEditable || target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT")) return
 
       event.preventDefault()
       // Animated, unlike the toggle shortcut (`useFocusMotion`): Escape is
-      // the step back out that the pill's click is, pressed once to leave.
-      setFocusMode(false)
+      // the step back out that the back button is, pressed once to leave.
+      exitFocusMode()
     }
     window.addEventListener("keydown", handleEscape)
     return () => window.removeEventListener("keydown", handleEscape)
-  }, [hasFocusedProject])
+  }, [exitFocusMode, hasFocusedProject])
 
   useEffect(() => {
     if (!activeChatId || !scrollContainerRef.current) return
@@ -833,10 +854,98 @@ function KannaSidebarImpl({
     }
   }, [isResizingSidebar])
 
+  // The peek: a collapsed sidebar comes back as an overlay while the mouse is
+  // at the window's left edge, and leaves once the mouse has left it. Nothing
+  // is expanded: the chat keeps its width under the card.
+  //
+  // Listened for on the document rather than on a strip along the edge. A
+  // strip would take the clicks that land on it, and a fast mouse crosses 8px
+  // between two events; the move that leaves the window by its left side is
+  // caught instead, which is also what makes the edge easy to hit when the
+  // window is not against the screen's.
+  const sidebarCardRef = useRef<HTMLDivElement>(null)
+  const [peekRequested, setPeekRequested] = useState(false)
+  if (!collapsed && peekRequested) setPeekRequested(false)
+  const peeking = collapsed && peekRequested
+  useEffect(() => {
+    if (!collapsed) return
+    let open = false
+    let closeTimer: number | undefined
+
+    function show() {
+      window.clearTimeout(closeTimer)
+      closeTimer = undefined
+      open = true
+      setPeekRequested(true)
+    }
+
+    function hideSoon() {
+      closeTimer ??= window.setTimeout(() => {
+        closeTimer = undefined
+        open = false
+        setPeekRequested(false)
+      }, PEEK_CLOSE_DELAY_MS)
+    }
+
+    // Whether something the card started is still going on: a drag (resize,
+    // reorder), a menu or dialog opened from a row, a rename being typed.
+    // Closing under any of them would take away what the user is using.
+    function isBusy(event: MouseEvent) {
+      if (event.buttons !== 0) return true
+      if (document.querySelector(OPEN_LAYER_SELECTOR)) return true
+      const focused = document.activeElement
+      return focused instanceof HTMLElement
+        && (focused.tagName === "INPUT" || focused.tagName === "TEXTAREA")
+        && Boolean(sidebarCardRef.current?.contains(focused))
+    }
+
+    function handlePointerMove(event: PointerEvent) {
+      if (event.pointerType !== "mouse") return
+      if (event.clientX <= PEEK_EDGE_PX) {
+        if (!open && event.buttons === 0) show()
+        return
+      }
+      const card = sidebarCardRef.current
+      if (!open || !card) return
+      // Where the card rests, not where it is: a mouse that outruns the card
+      // on its way in is still headed for it. 8px is the card's left margin.
+      const overCard = event.clientX <= 8 + card.offsetWidth + PEEK_SLOP_PX
+      if (overCard || isBusy(event)) {
+        window.clearTimeout(closeTimer)
+        closeTimer = undefined
+      } else {
+        hideSoon()
+      }
+    }
+
+    function handleMouseLeave(event: MouseEvent) {
+      if (event.clientX <= 0) {
+        if (!open && event.buttons === 0) show()
+      } else if (open && !isBusy(event)) {
+        hideSoon()
+      }
+    }
+
+    window.addEventListener("pointermove", handlePointerMove)
+    document.documentElement.addEventListener("mouseleave", handleMouseLeave)
+    return () => {
+      window.clearTimeout(closeTimer)
+      window.removeEventListener("pointermove", handlePointerMove)
+      document.documentElement.removeEventListener("mouseleave", handleMouseLeave)
+    }
+  }, [collapsed])
+
   const hasVisibleChats = activeVisibleCount > 0
   // `/` is the sidebar itself on mobile; the projects page lives at `/home`
   // there. On desktop both paths show the projects page.
-  const isRootActive = location.pathname === "/"
+  // A project's page is the sidebar too, on a phone: the same list, focused.
+  const isRootActive = location.pathname === "/" || routeProjectId !== null
+  // Whether a channel's chats are a page or a menu. A menu needs a pointer
+  // that can hover and a sidebar with room beside it, which the phone
+  // layout, where the sidebar is the whole screen, has not.
+  const hasFinePointer = useHasFinePointer()
+  const isPhoneLayout = useMediaQuery("(max-width: 767px)")
+  const channelsOpenAsPages = !hasFinePointer || isPhoneLayout
   const isLocalProjectsActive = isRootActive || location.pathname === "/home"
   const newSidebarEnabled = useAppSettingsStore((s) => s.settings?.newSidebarEnabled !== false)
   const devbox = useAppSettingsStore((s) => s.settings?.devbox === true)
@@ -937,6 +1046,7 @@ function KannaSidebarImpl({
       )}
 
       <div
+        ref={sidebarCardRef}
         data-sidebar="open"
         className={cn(
           "fixed inset-0 z-50 bg-background dark:bg-card flex flex-col h-[100dvh] select-none",
@@ -950,10 +1060,18 @@ function KannaSidebarImpl({
           // contents never reflow. The pane clock and curve every pane beside
           // the chat shares (paneAnimation.ts): 300ms in, 240ms out, glide.
           // visibility rides along: visible for the slide, hidden once gone.
-          "md:transition-[margin-left,visibility] md:duration-300 md:ease-glide motion-reduce:transition-none",
-          collapsed && "md:!ml-[calc(var(--sidebar-width)*-1)] md:!duration-[240ms] md:invisible"
+          "md:transition-[margin-left,translate,box-shadow,visibility] md:duration-300 md:ease-glide motion-reduce:transition-none",
+          collapsed && "md:!ml-[calc(var(--sidebar-width)*-1)]",
+          collapsed && !peeking && "md:!duration-[240ms] md:invisible",
+          // The peek slides the collapsed card back in by a transform, over
+          // the chat rather than beside it: the margin stays where collapsing
+          // left it, so nothing reflows. It lands where the open sidebar
+          // sits, and on the same clock and curve as the margin. Expanding
+          // from a peek therefore runs the two against each other and they
+          // cancel: the card holds still while the chat makes room for it.
+          peeking && "md:translate-x-[calc(var(--sidebar-width)+8px)] md:shadow-2xl"
         )}
-        inert={collapsed}
+        inert={collapsed && !peeking}
         style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
       >
         {/* In the Mac app this row is the window's title bar: it drags the
@@ -978,38 +1096,63 @@ function KannaSidebarImpl({
           data-window-drag
           className="px-2.5 h-[64px] md:h-auto md:py-1 border-b grid grid-cols-[84px_minmax(0,1fr)_84px] items-center md:pl-3 md:pr-1 md:flex md:justify-between mac-app:md:h-[calc(var(--mac-traffic-lights-center)*2-18px)] mac-app:md:border-b-0 mac-app:md:py-0 mac-app:md:pl-[calc(var(--mac-traffic-lights-inset)+83px)]"
         >
+          {/* A phone's bar is a navigation bar: what leads it is the way back
+              when there is one, and the title sits in the middle as a title.
+              So in focus mode Back takes Settings' place here, and the
+              project's name below is text, not the button it is on desktop
+              (where the bar has no middle and the two are one control). */}
           <div className="md:hidden flex">
-            <Button
-              variant="ghost"
-              size="icon"
-              className={cn(
-                "w-[42px] rounded-lg hover:!border-border/0 hover:!bg-transparent !border-0",
-                isSettingsActive ? "text-foreground" : "text-muted-foreground"
-              )}
-              onClick={() => navigate("/settings/general")}
-              title="Settings"
-            >
-              <Settings className="h-5 w-5" />
-            </Button>
+            {focusedProjectGroup ? (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="w-[42px] rounded-lg hover:!border-border/0 hover:!bg-transparent !border-0"
+                onClick={exitFocusMode}
+                title="Back"
+                aria-label={`Back from ${focusedProjectGroup.title}`}
+              >
+                <ChevronLeft className="size-6" />
+              </Button>
+            ) : (
+              <Button
+                variant="ghost"
+                size="icon"
+                className={cn(
+                  "w-[42px] rounded-lg hover:!border-border/0 hover:!bg-transparent !border-0",
+                  isSettingsActive ? "text-foreground" : "text-muted-foreground"
+                )}
+                onClick={() => navigate("/settings/general")}
+                title="Settings"
+              >
+                <Settings className="h-5 w-5" />
+              </Button>
+            )}
           </div>
           {/* Focus mode's page is titled by its project, not by the app: the
               back button takes the logo and wordmark's place. */}
           {focusedProjectGroup ? (
-            <FocusModePill
-              // 2px in from the bar's 12px padding: the 20px chevron then
-              // centers 24px from the card's edge, on the column the flower
-              // and every row icon below share.
-              className="justify-self-center md:ml-[2px] md:justify-self-auto mac-app:md:hidden"
-              projectTitle={focusedProjectGroup.title}
-              shortcutHint={focusShortcutHint}
-              onExit={exitFocusMode}
-            />
+            <>
+              <span className="min-w-0 justify-self-center truncate text-base font-medium md:hidden">
+                {focusedProjectGroup.title}
+              </span>
+              <FocusModePill
+                // 2px in from the bar's 12px padding: the 20px chevron then
+                // centers 24px from the card's edge, on the column the flower
+                // and every row icon below share.
+                className="hidden md:ml-[2px] md:flex mac-app:md:hidden"
+                projectTitle={focusedProjectGroup.title}
+                shortcutHint={focusShortcutHint}
+                onExit={exitFocusMode}
+              />
+            </>
           ) : (
           <div className="flex items-center justify-self-center gap-2 md:justify-self-auto mac-app:md:hidden">
             <button
               type="button"
-              onClick={onCollapse}
-              title="Collapse sidebar"
+              // Reachable while collapsed only in a peek, where it keeps the
+              // sidebar rather than sending it away.
+              onClick={collapsed ? onExpand : onCollapse}
+              title={collapsed ? "Keep sidebar open" : "Collapse sidebar"}
               className="hidden md:flex group/sidebar-collapse relative items-center justify-center h-5 w-5 sm:h-6 sm:w-6"
             >
               <Flower className="absolute inset-0.5 h-4 w-4 sm:h-5 sm:w-5 text-logo transition-all duration-200 ease-out opacity-100 scale-100 group-hover/sidebar-collapse:opacity-0 group-hover/sidebar-collapse:scale-0" />
@@ -1146,7 +1289,8 @@ function KannaSidebarImpl({
                     <div className="relative">
                       <button
                         type="button"
-                        onClick={onCompose}
+                        // On a project's page, a chat in that project.
+                        onClick={routeProjectId ? () => onCreateChat(routeProjectId) : onCompose}
                         // Hover only lifts the text, as the icon buttons' does.
                         // No box, so it never frames the filter button.
                         className="flex w-full items-center gap-2 rounded-lg border border-border/0 px-2 py-1.5 max-md:py-2 text-sm max-md:text-base text-muted-foreground transition-colors hover:text-accent-foreground"
@@ -1261,6 +1405,7 @@ function KannaSidebarImpl({
                 nowMs={nowMs}
                 activeChatId={activeChatId}
                 onSelect={selectProject}
+                opensAsPage={channelsOpenAsPages}
                 onSelectChat={selectChat}
                 renderChatHoverCard={renderChannelChatHoverCard}
                 actions={channelActions}
@@ -1400,7 +1545,7 @@ function KannaSidebarImpl({
         >
           <PanelLeft className="size-4" />
         </Button>
-        <MacHistoryButtons overSidebar={!collapsed} />
+        <MacHistoryButtons overSidebar={!collapsed || peeking} />
       </div>
 
       <ArchivedChatsDialog

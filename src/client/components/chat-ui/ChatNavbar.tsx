@@ -318,8 +318,11 @@ function ChatNavbarImpl({
       data-window-drag
       ref={headerRef}
       inert={inert || undefined}
+      // Read by the title slot, which sits lower while there is a sidebar bar
+      // to line up with (ChatTabs, ChatNavbarTitle).
+      data-sidebar-collapsed={sidebarCollapsed || undefined}
       className={cn(
-        "absolute top-0 left-0 right-0 z-10 md:pt-[9px] max-md:px-2 md:pl-1 md:pr-2 border-border/0 flex items-center justify-center mac-app:md:pt-0 mac-app:md:pb-0",
+        "group/navbar absolute top-0 left-0 right-0 z-10 md:pt-[9px] max-md:px-2 md:pl-1 md:pr-2 border-border/0 flex items-center justify-center mac-app:md:pt-0 mac-app:md:pb-0",
         className
       )}
     >

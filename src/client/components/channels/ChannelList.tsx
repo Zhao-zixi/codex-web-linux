@@ -2,7 +2,6 @@ import { Fragment, memo, useCallback, useMemo, useRef, useState, type ReactEleme
 import { ChevronDown, SquarePen } from "lucide-react"
 import type { SidebarProjectGroup } from "../../../shared/types"
 import { computeChannelSections, getChannelPeekGroups, getPinnedChannelChats, type ChannelPeekGroup, type ChannelSection } from "../../lib/channel-sections"
-import { useHasFinePointer } from "../../lib/pointer"
 import { getThreadDetailLabel } from "../../lib/thread-detail-label"
 import type { SidebarThread } from "../../lib/thread-sections"
 import { isBackgroundOpenClick } from "../../lib/background-open"
@@ -299,6 +298,7 @@ export function ChannelList({
   nowMs,
   activeChatId,
   onSelect,
+  opensAsPage,
   onSelectChat,
   renderChatHoverCard,
   renderChatMenu,
@@ -319,8 +319,14 @@ export function ChannelList({
   nowMs: number
   /** The open chat, highlighted in a channel's hover card. Normalized. */
   activeChatId: string | null
-  /** Opens the channel itself. Touch only: with a pointer, a click opens up its card. */
+  /** Opens the channel as a page of its chats. Only where `opensAsPage`. */
   onSelect: (projectId: string) => void
+  /**
+   * A channel's chats are a page you go to, not a menu beside it: a phone,
+   * or any touch screen. There is then no hover card at all, and a tap opens
+   * the page.
+   */
+  opensAsPage: boolean
   /** Opens a chat picked from a channel's hover card. */
   onSelectChat: (chatId: string) => void
   renderChatHoverCard: RenderChatHoverCard
@@ -337,8 +343,7 @@ export function ChannelList({
   }, [])
   // Without hover there is no menu to pin, so a tap opens the channel itself
   // (`onSelect`): the only way to its chats on touch.
-  const hasFinePointer = useHasFinePointer()
-  const handleSelect = hasFinePointer ? togglePinnedChannel : onSelect
+  const handleSelect = opensAsPage ? onSelect : togglePinnedChannel
   const channelPins = useChannelPinStore((state) => state.pins)
   const togglePin = useChannelPinStore((state) => state.toggle)
   // Browser-local inputs to the sections; see `ThreadSections`.
@@ -399,7 +404,7 @@ export function ChannelList({
       })}
       {/* One card for every channel above, on whichever is under the pointer.
           Every channel has one: at the least it offers a new chat. */}
-      <ListHoverCard
+      {opensAsPage ? null : <ListHoverCard
         containerRef={listRef}
         rowAttribute={CHANNEL_ROW_ATTRIBUTE}
         side="right"
@@ -458,7 +463,7 @@ export function ChannelList({
             />
           )
         }}
-      </ListHoverCard>
+      </ListHoverCard>}
     </div>
   )
 }

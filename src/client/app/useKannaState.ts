@@ -1101,9 +1101,16 @@ export function useKannaState(activeChatId: string | null): KannaState {
     navigate("/")
   }, [activeProjectId, fallbackLocalProjectPath, navigate, startChatFromIntent])
 
-  // On mobile the sidebar is the `/` page rather than an overlay, so "open"
-  // means navigate there. Desktop always shows it and never calls this.
-  const openSidebar = useCallback(() => navigate("/"), [navigate])
+  // On mobile the sidebar is a page rather than an overlay (`/`, or a
+  // project's page of chats), so "open" means go to it. That is back to
+  // wherever the chat was opened from, through the history, so the chat's
+  // Back button and the system's swipe back agree; and `/` for a chat opened
+  // directly, with nothing behind it. Desktop always shows the sidebar and
+  // never calls this.
+  const openSidebar = useCallback(() => {
+    if (((window.history.state as { idx?: number } | null)?.idx ?? 0) > 0) navigate(-1)
+    else navigate("/")
+  }, [navigate])
   const collapseSidebar = useCallback(() => setSidebarCollapsed(true), [])
   const expandSidebar = useCallback(() => setSidebarCollapsed(false), [])
 

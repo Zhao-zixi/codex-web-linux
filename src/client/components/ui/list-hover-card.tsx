@@ -1,4 +1,4 @@
-import { type ComponentPropsWithoutRef, type ReactNode, type RefObject, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
+import { type ComponentPropsWithoutRef, type CSSProperties, type ReactNode, type RefObject, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import * as PopoverPrimitive from "@radix-ui/react-popover"
 import { useHasFinePointer } from "../../lib/pointer"
@@ -17,7 +17,7 @@ import { cn } from "../../lib/utils"
  * pointer those overlap.
  */
 export const HOVER_CARD_SURFACE_CLASSNAME =
-  "z-50 w-80 rounded-lg border border-border bg-popover/95 px-1.5 py-2 text-xs text-popover-foreground shadow-xl outline-none backdrop-blur-sm animate-in fade-in-0 zoom-in-95 data-[side=right]:slide-in-from-left-2 data-[side=left]:slide-in-from-right-2 data-[state=closed]:hidden"
+  "z-50 w-80 rounded-lg border border-border bg-popover/95 px-1.5 py-2 text-xs text-popover-foreground shadow-xl outline-none backdrop-blur-sm animate-in fade-in-0 zoom-in-95 data-[side=right]:slide-in-from-left-2 data-[side=left]:slide-in-from-right-2 data-[side=bottom]:slide-in-from-top-2 data-[side=top]:slide-in-from-bottom-2 data-[state=closed]:hidden"
 
 /**
  * Draws the safe triangle (see `ListHoverCard`) so it can be seen while its
@@ -51,6 +51,17 @@ const COLLISION_PADDING_PX = 12
  * mounts, and without one that first layout has no cap at all.
  */
 export const LIST_HOVER_CARD_ROOM_BELOW = "--list-hover-card-room-below"
+
+/**
+ * Set on the row a card is up for, for as long as it is up.
+ *
+ * A row's hover style follows the pointer, and the pointer leaves the row to
+ * reach its card: across other rows inside the safe triangle, then onto the
+ * card itself. Without this the row goes plain the moment it is left, and a
+ * card stands there belonging to nothing. Rows style it alongside `:hover`
+ * (`data-[hover-card-open]:…`).
+ */
+export const HOVER_CARD_OPEN_ATTRIBUTE = "data-hover-card-open"
 
 /** A Radix menu (a row's right-click menu) that is up. */
 const OPEN_MENU_SELECTOR = "[data-radix-menu-content][data-state='open']"
@@ -126,8 +137,11 @@ export function ListHoverCard({
   containerRef: RefObject<HTMLElement | null>
   /** The attribute rows carry their key in. */
   rowAttribute?: string
-  /** Which side of the row the card opens on: away from the window's edge. */
-  side: "left" | "right"
+  /**
+   * Which side of the row the card opens on: away from the window's edge for
+   * a list down a side, beneath for a row of things along a bar.
+   */
+  side: "left" | "right" | "bottom"
   /**
    * The gap between the row and the card. The default clears a sidebar's
    * edge, so the card reads as beside it. Negative laps the card over
@@ -164,6 +178,11 @@ export function ListHoverCard({
   children: (rowKey: string, dismiss: () => void) => ReactNode | null
   className?: string
 }) {
+  // How far the bridge laps onto the row, past the gap. Beside a list it
+  // lands in the row's end padding, where a few pixels close any subpixel
+  // seam and cover nothing you would click. Beneath a bar it would lie
+  // across the bottom of the thing itself (a tab), so there it is a hairline.
+  const bridgeOverlap = side === "bottom" ? 1 : 5
   const hasFinePointer = useHasFinePointer()
   const [hoveredKey, setHoveredKey] = useState<string | null>(null)
   // What the pointer handlers read and write. They are registered once, so
@@ -194,7 +213,15 @@ export function ListHoverCard({
     if (!content || !apex) return null
     const rect = content.getBoundingClientRect()
     // Where Radix actually put it: a card with no room on its side flips.
-    const opensRight = content.dataset.side !== "left"
+    const placed = content.dataset.side
+    if (placed === "bottom" || placed === "top") {
+      // Above or below its row: the card's near edge runs side to side.
+      const opensDown = placed === "bottom"
+      const nearY = opensDown ? rect.top : rect.bottom
+      const apexY = apex.y + (opensDown ? -SAFE_TRIANGLE_APEX_BACKSET_PX : SAFE_TRIANGLE_APEX_BACKSET_PX)
+      return [{ x: apex.x, y: apexY }, { x: rect.left, y: nearY }, { x: rect.right, y: nearY }]
+    }
+    const opensRight = placed !== "left"
     const nearX = opensRight ? rect.left : rect.right
     const apexX = apex.x + (opensRight ? -SAFE_TRIANGLE_APEX_BACKSET_PX : SAFE_TRIANGLE_APEX_BACKSET_PX)
     return [{ x: apexX, y: apex.y }, { x: nearX, y: rect.top }, { x: nearX, y: rect.bottom }]
@@ -250,7 +277,12 @@ export function ListHoverCard({
   }, [])
 
   const dismiss = useCallback(() => {
-    dismissedKeyRef.current = hoveredKeyRef.current
+    // Only a card that is up has a row to hold closed. One click asks twice
+    // (the press outside the card, then focus leaving it), and the second
+    // ask, with the card already down, used to overwrite the held row with
+    // nothing: the hold was gone, and the next pixel of movement raised the
+    // card again. Open, closed, open.
+    if (hoveredKeyRef.current !== null) dismissedKeyRef.current = hoveredKeyRef.current
     setHovered(null)
   }, [setHovered])
 
@@ -287,9 +319,35 @@ export function ListHoverCard({
     function settle(key: string | null, point: Point) {
       clearRestTimer()
       if (key != null && key === dismissedKeyRef.current) return
-      dismissedKeyRef.current = null
       apexRef.current = key === null ? null : point
       setHovered(key)
+    }
+
+    // A dismissal holds for as long as the pointer is still on the row it
+    // was made on, and that is judged by where the pointer is, against the
+    // row's box, on every move anywhere on the page. Not by which element an
+    // event names, and not by enter and leave events: a click often rebuilds
+    // what is under the pointer (a tab becoming the open one), and the
+    // browser then reports elements entered and left that the pointer never
+    // moved across. Each of those used to end the hold on the very click
+    // that began it, and the card came straight back.
+    function releaseDismissalIfLeft(event: PointerEvent) {
+      const dismissed = dismissedKeyRef.current
+      if (dismissed === null) return
+      const row = container!.querySelector(`[${rowAttribute}="${CSS.escape(dismissed)}"]`)
+      const rect = row?.getBoundingClientRect()
+      const stillOnRow = rect !== undefined
+        && event.clientX >= rect.left && event.clientX <= rect.right
+        && event.clientY >= rect.top && event.clientY <= rect.bottom
+      if (!stillOnRow) dismissedKeyRef.current = null
+    }
+
+    // A press on a row dismisses its card, whoever else notices the press:
+    // the row was acted on, and its card should not be up over the result.
+    function handlePointerDown(event: PointerEvent) {
+      const key = keyAt(event.target)
+      if (key === null || pinnedKeyRef.current !== null) return
+      dismissedKeyRef.current = key
     }
 
     // `pointerover` for a row arriving under a still pointer (a scroll, a
@@ -387,12 +445,16 @@ export function ListHoverCard({
       if (pinnedKeyRef.current === null) setHovered(null)
     }
 
+    document.addEventListener("pointermove", releaseDismissalIfLeft, true)
+    container.addEventListener("pointerdown", handlePointerDown, true)
     container.addEventListener("pointerover", track)
     container.addEventListener("pointermove", track)
     container.addEventListener("pointerleave", handlePointerLeave)
     window.addEventListener("blur", handleWindowBlur)
     return () => {
       stopTrackingOutside()
+      document.removeEventListener("pointermove", releaseDismissalIfLeft, true)
+      container.removeEventListener("pointerdown", handlePointerDown, true)
       container.removeEventListener("pointerover", track)
       container.removeEventListener("pointermove", track)
       container.removeEventListener("pointerleave", handlePointerLeave)
@@ -441,6 +503,17 @@ export function ListHoverCard({
 
   const content = hasFinePointer && shownKey ? children(shownKey, dismiss) : null
   const open = content != null
+
+  // The card's row is marked while the card is up (`HOVER_CARD_OPEN_ATTRIBUTE`).
+  // By attribute on the element, not through React: the rows are the owner's,
+  // memoized, and know nothing of which one is hovered.
+  useLayoutEffect(() => {
+    if (!open || !shownKey) return
+    const row = containerRef.current?.querySelector<HTMLElement>(`[${rowAttribute}="${CSS.escape(shownKey)}"]`)
+    if (!row) return
+    row.setAttribute(HOVER_CARD_OPEN_ATTRIBUTE, "")
+    return () => row.removeAttribute(HOVER_CARD_OPEN_ATTRIBUTE)
+  }, [containerRef, open, rowAttribute, shownKey])
 
   // How much window there is from the card's resting top (level with its
   // row) down to the bottom edge, for a card whose contents scroll: see
@@ -505,6 +578,7 @@ export function ListHoverCard({
           onOpenAutoFocus={(event) => event.preventDefault()}
           onCloseAutoFocus={(event) => event.preventDefault()}
           onPointerLeave={handleContentPointerLeave}
+          style={{ "--bridge": `${Math.max(0, sideOffset) + bridgeOverlap}px` } as CSSProperties}
           onInteractOutside={(event) => {
             const target = event.target
             if (keepOpenOnRowClick && target instanceof Element && target.closest(`[${rowAttribute}]`)
@@ -514,12 +588,20 @@ export function ListHoverCard({
           }}
           className={cn(
             HOVER_CARD_SURFACE_CLASSNAME,
-            // The bridge. Wider than the 15px `sideOffset`, so it overlaps
-            // the row's last pixels and no subpixel gap drops the pointer on
-            // its way across. Full height, since a card near the screen's
-            // bottom shifts up and its rows must stay reachable.
-            "relative before:absolute before:inset-y-0 before:w-5 before:content-['']",
-            "data-[side=right]:before:-left-5 data-[side=left]:before:-right-5",
+            // The bridge: an invisible part of the card over the gap to the
+            // row, overlapping the row's edge so no subpixel seam drops the
+            // pointer on its way across. It runs the card's full length,
+            // since a card near the screen's edge is shifted to fit and its
+            // rows must stay reachable.
+            // Beside its row it is a strip down the card's near side; above
+            // or below, one along it. As deep as the gap and a little more
+            // (`--bridge`), and no deeper: it lies over the row, and what it
+            // covers takes the card's clicks, not the row's.
+            "relative before:absolute before:content-['']",
+            "data-[side=right]:before:inset-y-0 data-[side=right]:before:left-[calc(var(--bridge)*-1)] data-[side=right]:before:w-(--bridge)",
+            "data-[side=left]:before:inset-y-0 data-[side=left]:before:right-[calc(var(--bridge)*-1)] data-[side=left]:before:w-(--bridge)",
+            "data-[side=bottom]:before:inset-x-0 data-[side=bottom]:before:top-[calc(var(--bridge)*-1)] data-[side=bottom]:before:h-(--bridge)",
+            "data-[side=top]:before:inset-x-0 data-[side=top]:before:bottom-[calc(var(--bridge)*-1)] data-[side=top]:before:h-(--bridge)",
             // Grows from the row it describes rather than from its own
             // centre (the surface's zoom-in-95 otherwise pivots there).
             "origin-(--radix-popover-content-transform-origin)",

@@ -293,6 +293,15 @@ export function GeneralSection({
     }
   }
 
+  async function handleChatTabsChange(enabled: boolean) {
+    try {
+      setAppSettingsError(null)
+      await handleWriteAppSettings({ chatTabsEnabled: enabled })
+    } catch (error) {
+      setAppSettingsError(error instanceof Error ? error.message : "Unable to save appearance settings.")
+    }
+  }
+
   async function handleAnalyticsPreferenceChange(enabled: boolean) {
     try {
       setAppSettingsError(null)
@@ -381,6 +390,15 @@ export function GeneralSection({
                 void handleProjectIconsInChatsChange(checked)
               }}
               aria-label={SETTINGS_ROWS.projectIconsInChats.title}
+            />
+          </SettingsRow>
+          <SettingsRow def={SETTINGS_ROWS.chatTabs}>
+            <Switch
+              checked={appSettings?.chatTabsEnabled === true}
+              onCheckedChange={(checked) => {
+                void handleChatTabsChange(checked)
+              }}
+              aria-label={SETTINGS_ROWS.chatTabs.title}
             />
           </SettingsRow>
         </SettingsGroup>

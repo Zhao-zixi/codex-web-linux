@@ -66,6 +66,7 @@ interface AppSettingsFile {
   }
   newSidebarEnabled?: unknown
   projectIconsInChats?: unknown
+  chatTabsEnabled?: unknown
   newProjectsDirectory?: unknown
   setupShown?: unknown
   setupCompleted?: unknown
@@ -189,6 +190,7 @@ function toFilePayload(state: AppSettingsState) {
     providerDefaults: state.providerDefaults,
     newSidebarEnabled: state.newSidebarEnabled,
     ...(state.projectIconsInChats === false ? { projectIconsInChats: false } : {}),
+    ...(state.chatTabsEnabled === true ? { chatTabsEnabled: true } : {}),
     newProjectsDirectory: state.newProjectsDirectory,
     setupShown: state.setupShown,
     setupCompleted: state.setupCompleted,
@@ -219,6 +221,7 @@ function toSnapshot(
     providerDefaults: state.providerDefaults,
     newSidebarEnabled: state.newSidebarEnabled,
     ...(state.projectIconsInChats === false ? { projectIconsInChats: false } : {}),
+    ...(state.chatTabsEnabled === true ? { chatTabsEnabled: true } : {}),
     newProjectsDirectory: state.newProjectsDirectory,
     setupShown: state.setupShown,
     setupCompleted: state.setupCompleted,
@@ -306,6 +309,7 @@ function normalizeAppSettings(
     providerDefaults: normalizeProviderDefaults(source?.providerDefaults),
     newSidebarEnabled,
     ...(source?.projectIconsInChats === false ? { projectIconsInChats: false } : {}),
+    ...(source?.chatTabsEnabled === true ? { chatTabsEnabled: true } : {}),
     newProjectsDirectory,
     // Onboarding markers default to false so a machine that has never run the
     // wizard still gets it; once set they stay set for every browser.
@@ -346,6 +350,7 @@ function toComparablePayload(source: AppSettingsFile) {
     providerDefaults: source.providerDefaults,
     newSidebarEnabled: source.newSidebarEnabled,
     projectIconsInChats: source.projectIconsInChats,
+    chatTabsEnabled: source.chatTabsEnabled,
     newProjectsDirectory: typeof source.newProjectsDirectory === "string"
       ? source.newProjectsDirectory.trim()
       : source.newProjectsDirectory,

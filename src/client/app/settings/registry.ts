@@ -118,6 +118,12 @@ export const SETTINGS_ROWS = defineRows({
     description: "Lead each chat in the sidebar's Chats view with its project's icon, in place of the agent's.",
     keywords: ["sidebar", "icon", "favicon", "app icon", "project", "chats", "monogram", "initials"],
   },
+  chatTabs: {
+    sectionId: "general",
+    title: "Chat Tabs",
+    description: "Keep the chats you open as tabs in the title bar, to switch between, rearrange and close.",
+    keywords: ["tabs", "tab bar", "title bar", "navbar", "open chats", "switch"],
+  },
   chatSounds: {
     sectionId: "general",
     title: "Chat Sounds",

@@ -20,6 +20,8 @@ import { Kbd } from "../components/ui/kbd"
 import { SidebarViewSwitcher } from "../components/chat-ui/sidebar/SidebarViewSwitcher"
 import { ChannelList, type ChannelActions, type RenderChatHoverCard, type RenderChatMenu } from "../components/channels/ChannelList"
 import { useSidebarViewStore } from "../stores/sidebarViewStore"
+import { useChatTabsStore } from "../stores/chatTabsStore"
+import { isBackgroundOpenClick } from "../lib/background-open"
 import { MachineSwitcher } from "./MachineSwitcher"
 import { getResolvedKeybindings } from "../lib/keybindings"
 import { useIsStandalone } from "../hooks/useIsStandalone"
@@ -532,8 +534,15 @@ function KannaSidebarImpl({
   }, [])
 
   const selectChat = useCallback((chatId: string) => {
+    // With chat tabs on, Cmd+click: a tab for the chat, and you stay where
+    // you are, as a browser opens a link in the background. Without them
+    // there would be nothing to show for the click.
+    if (useAppSettingsStore.getState().settings?.chatTabsEnabled === true && isBackgroundOpenClick()) {
+      useChatTabsStore.getState().open(chatId, activeChatId)
+      return
+    }
     navigate(`/chat/${chatId}`)
-  }, [navigate])
+  }, [activeChatId, navigate])
 
   // Same navigation with a landing spot attached. Always navigates, even to the
   // chat already open: the pathname wouldn't change, but the request id does,

@@ -5,6 +5,9 @@ import { useNavigate, useOutletContext } from "react-router-dom"
 import type { ChatInputHandle } from "../../components/chat-ui/ChatInput"
 import { ChatNavbar, ChatNavbarWash } from "../../components/chat-ui/ChatNavbar"
 import { ChatNavbarTitle } from "../../components/chat-ui/ChatNavbarTitle"
+import { ChatTabs } from "../../components/chat-ui/ChatTabs"
+import { SidebarChatHoverCard } from "../../components/chat-ui/sidebar/ChatHoverCard"
+import type { SidebarThread } from "../../lib/thread-sections"
 import type { ThreadRowMenuActions } from "../../components/chat-ui/sidebar/ThreadRow"
 import { WidgetsSidebar } from "../../components/chat-ui/widgets/WidgetsSidebar"
 // Code-split: GitWidgets pulls @pierre/diffs, which pulls shiki core and ~300
@@ -29,7 +32,7 @@ import { shouldOpenLocalFileLinkInEditor } from "../../lib/pathUtils"
 import { getChatViewer, openViewer, useChatViewer, useViewerStore } from "../../stores/viewerStore"
 import type { DiffViewerContext } from "../../components/chat-ui/git/DiffViewer"
 import { useProjectRepoUrl, useSidebarChatHasMessages } from "../../stores/sidebarStore"
-import { useSidebarViewStore } from "../../stores/sidebarViewStore"
+import { useAppSettingsStore } from "../../stores/appSettingsStore"
 import { DEFAULT_PROJECT_TERMINAL_LAYOUT, isTerminalVisible, useTerminalLayoutStore } from "../../stores/terminalLayoutStore"
 import { usePaneChatKey } from "../../lib/paneVisibility"
 import { useTerminalPreferencesStore } from "../../stores/terminalPreferencesStore"
@@ -38,7 +41,7 @@ import { shouldCloseTerminalPane } from "../terminalLayoutResize"
 import { interpolateLayout, PANE_CLOSE_MS, PANE_EASING, PANE_OPEN_MS, paneDurationMs, prefersReducedMotion } from "../paneAnimation"
 import { useStickyChatFocus } from "../useStickyChatFocus"
 import { useTerminalToggleAnimation } from "../useTerminalToggleAnimation"
-import type { AgentProvider, ChatSkillsSnapshot, SubagentActivity, TranscriptEntry } from "../../../shared/types"
+import type { AgentProvider, ChatPreview, ChatSkillsSnapshot, ChatTouchedFilesResult, SubagentActivity, TranscriptEntry } from "../../../shared/types"
 import type { KannaState } from "../useKannaState"
 import { getNextMeasuredInputHeight, getTranscriptPaddingBottom } from "../useKannaState"
 import { ChatInputDock } from "./ChatInputDock"
@@ -595,11 +598,11 @@ export function ChatPage() {
 
   const isMobileViewport = useIsMobileViewport()
   const navigate = useNavigate()
-  // The Channels view's sidebar lists projects, so the bar names the chat
-  // (`ChatNavbarTitle`).
-  const channelsView = useSidebarViewStore((store) => store.view === "channels")
-  const activeChatIdForTitle = state.activeChatId
-  // The chat's sidebar-row menu, on the title that stands in for that row.
+  // The navbar's left end names the open chat (`ChatNavbarTitle`), or with
+  // the Chat Tabs setting on holds every chat you have open, as tabs
+  // (`ChatTabs`). Either way in every sidebar view.
+  const chatTabsEnabled = useAppSettingsStore((store) => store.settings?.chatTabsEnabled === true)
+  // The chat's sidebar-row menu, on the title or tab that stands in for that row.
   const navbarTitleActions = useMemo<ThreadRowMenuActions>(() => ({
     onCreateChat: (id) => { void state.handleCreateChat(id) },
     onRenameChat: (chat) => { void state.handleRenameChat(chat) },
@@ -612,30 +615,69 @@ export function ChatPage() {
     onRestoreChat: (id) => { void state.handleRestoreChat(id) },
     onDeleteChat: (chat) => { void state.handleDeleteChat(chat) },
   }), [state.handleArchiveChat, state.handleCopyPath, state.handleCreateChat, state.handleDeleteChat, state.handleForkChat, state.handleOpenExternalPath, state.handleRenameChat, state.handleRestoreChat, state.handleShareChat, state.handleToggleChatPin])
+  // Straight to the socket: the sidebar's rename asks for the name in a
+  // dialog, and here it has already been typed, in the tab.
+  const handleRenameChatTab = useCallback((chatId: string, title: string) => {
+    void state.socket.command({ type: "chat.rename", chatId, title }).catch(() => {})
+  }, [state.socket])
+  const handleSelectChatTab = useCallback((chatId: string) => navigate(`/chat/${chatId}`), [navigate])
+  const handleCloseLastChatTab = useCallback(() => navigate("/"), [navigate])
+  // The sidebar's chat card, beneath a tab. The same fetches the sidebar's
+  // makes, straight to the socket, since nothing here holds what they return.
+  const renderChatTabHoverCard = useCallback((containerRef: RefObject<HTMLDivElement | null>, threads: SidebarThread[]) => (
+    <SidebarChatHoverCard
+      containerRef={containerRef}
+      threads={threads}
+      side="bottom"
+      // Just clear of the tab; the default distance is a sidebar's edge.
+      sideOffset={6}
+      onSelectChat={handleSelectChatTab}
+      onSelectMessage={(chatId, role) => navigate(`/chat/${chatId}`, { state: buildChatJumpLocationState(role) })}
+      onOpenArchivedChat={(chatId) => { void state.handleOpenArchivedChat(chatId) }}
+      onSetupGit={(chatId) => { void state.handleSetupGit(chatId) }}
+      onLoadTouchedFiles={(chatId) => state.socket.command<ChatTouchedFilesResult>({ type: "chat.touchedFiles", chatId })}
+      onLoadPreview={(chatId) => state.socket.command<ChatPreview>({ type: "chat.getPreview", chatId })}
+      onOpenExternalPath={(action, path) => { void state.handleOpenExternalPath(action, path) }}
+    />
+  ), [handleSelectChatTab, navigate, state.handleOpenArchivedChat, state.handleOpenExternalPath, state.handleSetupGit, state.socket])
+  const handleRenameActiveChat = useCallback((title: string) => {
+    if (state.activeChatId) handleRenameChatTab(state.activeChatId, title)
+  }, [handleRenameChatTab, state.activeChatId])
   const handleOpenProjectFolder = useCallback(() => {
     void state.handleOpenExternal("open_finder")
   }, [state.handleOpenExternal])
-  // Straight to the socket: the sidebar's rename asks for the name in a
-  // dialog, and here it has already been typed.
-  const handleRenameActiveChat = useCallback((title: string) => {
-    if (!activeChatIdForTitle) return
-    void state.socket.command({ type: "chat.rename", chatId: activeChatIdForTitle, title }).catch(() => {})
-  }, [activeChatIdForTitle, state.socket])
   const navbarTitleText = state.runtime?.title
   const navbarBranchName = state.chatDiffSnapshot?.branchName
   // Memoized: the navbar it goes into is, and a new element each render
   // would re-render it with every streamed entry.
-  const navbarTitle = useMemo(() => (channelsView && state.activeChatId && navbarTitleText ? (
-    <ChatNavbarTitle
-      chatId={state.activeChatId}
-      title={navbarTitleText}
-      branchName={navbarBranchName}
-      editorLabel={state.editorLabel}
-      actions={navbarTitleActions}
-      onOpenFolder={handleOpenProjectFolder}
-      onRename={handleRenameActiveChat}
-    />
-  ) : null), [channelsView, handleOpenProjectFolder, handleRenameActiveChat, navbarBranchName, navbarTitleActions, navbarTitleText, state.activeChatId, state.editorLabel])
+  const navbarTitle = useMemo(() => {
+    if (chatTabsEnabled) {
+      return (
+        <ChatTabs
+          activeChatId={state.activeChatId}
+          editorLabel={state.editorLabel}
+          actions={navbarTitleActions}
+          onSelect={handleSelectChatTab}
+          onRename={handleRenameChatTab}
+          onCloseLast={handleCloseLastChatTab}
+          onNewChat={state.handleCompose}
+          renderHoverCard={renderChatTabHoverCard}
+        />
+      )
+    }
+    if (!state.activeChatId || !navbarTitleText) return null
+    return (
+      <ChatNavbarTitle
+        chatId={state.activeChatId}
+        title={navbarTitleText}
+        branchName={navbarBranchName}
+        editorLabel={state.editorLabel}
+        actions={navbarTitleActions}
+        onOpenFolder={handleOpenProjectFolder}
+        onRename={handleRenameActiveChat}
+      />
+    )
+  }, [chatTabsEnabled, handleCloseLastChatTab, handleOpenProjectFolder, handleRenameActiveChat, handleRenameChatTab, handleSelectChatTab, navbarBranchName, navbarTitleActions, navbarTitleText, renderChatTabHoverCard, state.activeChatId, state.editorLabel, state.handleCompose])
   const terminalLayout = useMemo(() => {
     const mainSizes = getEffectiveTerminalMainSizes(storedTerminalLayout.mainSizes, isMobileViewport)
     return mainSizes === storedTerminalLayout.mainSizes ? storedTerminalLayout : { ...storedTerminalLayout, mainSizes }
@@ -1190,7 +1232,7 @@ export function ChatPage() {
       onDrop={handleTranscriptDrop}
     >
       <CardContent className="flex flex-1 min-h-0 flex-col overflow-hidden p-0 relative">
-        <ChatNavbarWash resetKey={state.activeChatId} />
+        <ChatNavbarWash resetKey={state.activeChatId} opaqueBar={chatTabsEnabled} />
         <TranscriptRenderOptionsProvider value={transcriptRenderOptions}>
         <ToolPayloadProvider store={toolPayloadStore}>
         <ChatTranscriptViewport
@@ -1492,6 +1534,7 @@ export function ChatPage() {
       rightSidebarShortcut={resolvedKeybindings.bindings.toggleRightSidebar}
       branchName={state.chatDiffSnapshot?.branchName}
       titleSlot={navbarTitle}
+      hideBranchLabel={chatTabsEnabled}
       repoUrl={activeProjectRepoUrl}
       hasGitRepo={state.chatDiffSnapshot?.status !== "no_repo"}
       gitStatus={state.chatDiffSnapshot?.status}

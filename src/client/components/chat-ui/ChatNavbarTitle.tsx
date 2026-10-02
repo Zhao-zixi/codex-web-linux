@@ -1,9 +1,9 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react"
 import { GitBranch } from "lucide-react"
 import { getRepoUrlLabel } from "../../../shared/git-url"
+import { FOCUS_FALLBACK_IGNORE_ATTRIBUTE } from "../../app/chatFocusPolicy"
 import { getProjectSidebarLabel } from "../../lib/project-label"
 import { flattenSidebarThreads } from "../../lib/thread-sections"
-import { FOCUS_FALLBACK_IGNORE_ATTRIBUTE } from "../../app/chatFocusPolicy"
 import { useSidebarStore } from "../../stores/sidebarStore"
 import { openContextMenuFromButton } from "../open-external-menu"
 import { ProjectIcon } from "../ui/project-icon"
@@ -19,13 +19,13 @@ const TITLE_LINK = "min-w-0 truncate transition-colors hover:text-foreground"
  *
  * No pencil. The text cursor over a title is the affordance, the one a
  * Finder or Notion title gives, and a pencil would either sit there always,
- * as noise between the title and the project, or appear on hover and need
+ * as noise beside the title, or appear on hover and need
  * room held open for it.
  *
  * The name you typed shows at once and until the server's title catches up,
  * so the old one never flashes back in between.
  */
-function EditableTitle({ title, onRename }: { title: string; onRename: (title: string) => void }) {
+export function EditableTitle({ title, onRename }: { title: string; onRename: (title: string) => void }) {
   const [draft, setDraft] = useState<string | null>(null)
   const [submitted, setSubmitted] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -90,6 +90,8 @@ function EditableTitle({ title, onRename }: { title: string; onRename: (title: s
         aria-label="Chat title"
         onChange={(event) => setDraft(event.target.value)}
         onBlur={commit}
+        // Selecting text in the field is not dragging what holds it (a tab).
+        onPointerDown={(event) => event.stopPropagation()}
         onKeyDown={(event) => {
           // The page's shortcuts are not for a title being typed.
           event.stopPropagation()
@@ -111,25 +113,23 @@ function EditableTitle({ title, onRename }: { title: string; onRename: (title: s
 }
 
 /**
- * The Channels view's chat title, at the left end of the chat navbar: the
- * project's icon, the chat's title, then where it is and on which branch.
- * The sidebar there lists projects, not chats, so nothing else on screen says
- * which chat this is.
+ * The open chat's title, at the left end of the chat navbar: its project's
+ * icon, its title, then its project and branch. What the navbar shows unless
+ * chat tabs are turned on (`ChatTabs`), in every sidebar view.
  *
  * It stands in for the chat's sidebar row, and so carries that row's
  * right-click menu (`ThreadRowMenu`), which the icon also opens on a click,
- * and names the project as that row's
- * trailing label does (`getProjectSidebarLabel`): the rename, the repo, or
- * the folder. The project opens its folder. The branch, always spelled out
- * here, opens the repo's page on its forge, and is plain text where the
- * project has no such page.
+ * and names the project as that row's trailing label does
+ * (`getProjectSidebarLabel`): the rename, the repo, or the folder. The
+ * project opens its folder. The branch opens the repo's page on its forge,
+ * and is plain text where the project has no such page.
  *
  * Its own component, reading the sidebar store itself: the chat page must not
  * re-render every time the open chat's sidebar row moves, which through a
  * turn is constantly.
  *
- * The block itself never takes the pointer, so the bar under it still drags
- * the window in the Mac app; only its parts do.
+ * The block never takes the pointer beyond its own contents, so the rest of
+ * the bar still drags the window in the Mac app.
  */
 export const ChatNavbarTitle = memo(function ChatNavbarTitle({
   chatId,
@@ -140,14 +140,14 @@ export const ChatNavbarTitle = memo(function ChatNavbarTitle({
   onOpenFolder,
   onRename,
 }: {
-  /** Saves a title typed in place. */
-  onRename: (title: string) => void
   chatId: string
   title: string
   branchName?: string
   editorLabel: string
   actions: ThreadRowMenuActions
   onOpenFolder: () => void
+  /** Saves a title typed in place. */
+  onRename: (title: string) => void
 }) {
   // The group, not the row: it carries the project's name, icon and repo too.
   // Groups keep their identity across pushes that didn't touch them.
@@ -218,6 +218,9 @@ export const ChatNavbarTitle = memo(function ChatNavbarTitle({
   )
 
   return (
+    // 9px down on the web, where the bar to line up with is the sidebar's,
+    // whose search icon sits lower than this row's center (set by eye
+    // against it). In the Mac app both bars center on the traffic lights.
     <div className="pointer-events-none hidden min-w-0 flex-1 translate-y-[9px] items-center md:flex mac-app:md:translate-y-0">
       {thread ? (
         <ThreadRowMenu thread={thread} archived={thread.archived} editorLabel={editorLabel} {...actions}>

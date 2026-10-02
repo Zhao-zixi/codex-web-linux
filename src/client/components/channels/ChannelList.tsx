@@ -5,6 +5,7 @@ import { computeChannelSections, getChannelPeekGroups, getPinnedChannelChats, ty
 import { useHasFinePointer } from "../../lib/pointer"
 import { getThreadDetailLabel } from "../../lib/thread-detail-label"
 import type { SidebarThread } from "../../lib/thread-sections"
+import { isBackgroundOpenClick } from "../../lib/background-open"
 import { getPathBasename } from "../../lib/formatters"
 import { cn, normalizeChatId } from "../../lib/utils"
 import { useChannelPinStore } from "../../stores/channelPinStore"
@@ -138,7 +139,7 @@ function ChannelPeek({
                     "flex w-full items-center gap-2.5 rounded-lg border px-2 py-1.5 text-sm transition-colors",
                     normalizeChatId(thread.chatId) === activeChatId
                       ? "border-border bg-muted"
-                      : "border-border/0 group-hover/peek:border-border group-hover/peek:bg-muted"
+                      : "border-border/0 group-hover/peek:border-border group-hover/peek:bg-muted group-data-[hover-card-open]/peek:border-border group-data-[hover-card-open]/peek:bg-muted"
                   )}
                 >
                   <ThreadRowContent
@@ -249,7 +250,9 @@ const ChannelRow = memo(function ChannelRow({ group, active, menuPinned, pinned,
                 ? "border-border bg-muted text-foreground"
                 : menuPinned
                   ? "border-border bg-muted"
-                  : "border-border/0 group-hover/channel:border-border group-hover/channel:bg-muted",
+                  // Hovered, or its menu is up under a pointer that has left
+                  // for it (`HOVER_CARD_OPEN_ATTRIBUTE`).
+                  : "border-border/0 group-hover/channel:border-border group-hover/channel:bg-muted group-data-[hover-card-open]/channel:border-border group-data-[hover-card-open]/channel:bg-muted",
               !active && (unread ? "text-foreground" : "text-muted-foreground"),
               unread && "font-semibold"
             )}
@@ -428,6 +431,12 @@ export function ChannelList({
               }}
               renderChatMenu={renderChatMenu}
               onSelectChat={(chatId) => {
+                // Opening in the background leaves you here, menu and all,
+                // to open the next one.
+                if (isBackgroundOpenClick()) {
+                  onSelectChat(chatId)
+                  return
+                }
                 unpinChannel()
                 dismiss()
                 onSelectChat(chatId)

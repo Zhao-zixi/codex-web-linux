@@ -1,5 +1,6 @@
 import { useCallback } from "react"
 import { create } from "zustand"
+import { SIDEBAR_PINNED_EXPANDED_STORAGE_KEY } from "../lib/storageKeys"
 
 /**
  * Which sidebar sections you have opened or folded, against their defaults.
@@ -10,7 +11,12 @@ import { create } from "zustand"
  * every such trip would put each section back to its default.
  *
  * One set of overrides per list (`scope`), keyed by the section's stable key.
- * In memory only: a reload starts from the defaults.
+ *
+ * In memory, so a reload starts from the defaults, except for Pinned, which
+ * is kept in this browser. The other sections are named for what is in them
+ * today (a date, "Relevant"), and a fold that outlived the day would hide
+ * tomorrow's chats under the same name. Pinned is the one section that is
+ * the same thing every day, and folding it is a standing choice.
  */
 
 type SectionOverrides = Readonly<Record<string, boolean>>
@@ -22,14 +28,44 @@ interface SidebarSectionState {
 
 const NO_OVERRIDES: SectionOverrides = {}
 
+/** The one section whose fold is remembered across reloads. */
+const PERSISTED_SECTION_KEY = "pinned"
+
+function readStoredOverrides(): Record<string, SectionOverrides> {
+  if (typeof window === "undefined") return {}
+  try {
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(SIDEBAR_PINNED_EXPANDED_STORAGE_KEY) ?? "{}")
+    if (!parsed || typeof parsed !== "object") return {}
+    return Object.fromEntries(
+      Object.entries(parsed)
+        .filter((entry): entry is [string, boolean] => typeof entry[1] === "boolean")
+        .map(([scope, expanded]) => [scope, { [PERSISTED_SECTION_KEY]: expanded }])
+    )
+  } catch {
+    return {}
+  }
+}
+
+function persistPinnedOverrides(overrides: Readonly<Record<string, SectionOverrides>>) {
+  if (typeof window === "undefined") return
+  const stored = Object.fromEntries(
+    Object.entries(overrides).flatMap(([scope, sections]) => (
+      PERSISTED_SECTION_KEY in sections ? [[scope, sections[PERSISTED_SECTION_KEY]]] : []
+    ))
+  )
+  window.localStorage.setItem(SIDEBAR_PINNED_EXPANDED_STORAGE_KEY, JSON.stringify(stored))
+}
+
 const useSidebarSectionStore = create<SidebarSectionState>()((set) => ({
-  overrides: {},
-  setExpanded: (scope, sectionKey, expanded) => set((state) => ({
-    overrides: {
+  overrides: readStoredOverrides(),
+  setExpanded: (scope, sectionKey, expanded) => set((state) => {
+    const overrides = {
       ...state.overrides,
       [scope]: { ...state.overrides[scope], [sectionKey]: expanded },
-    },
-  })),
+    }
+    if (sectionKey === PERSISTED_SECTION_KEY) persistPinnedOverrides(overrides)
+    return { overrides }
+  }),
 }))
 
 /** A list's overrides, and the setter for one of its sections. */

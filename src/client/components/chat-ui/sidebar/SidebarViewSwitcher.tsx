@@ -7,23 +7,6 @@ import { InputPopover, PopoverMenuItem } from "../ChatPreferenceControls"
 export type SidebarView = "recents" | "projects" | "channels" | "archived"
 
 /**
- * One row's text: the name with its qualifier trailing it inline — rows in a
- * picker this small read better on one line each.
- *
- * Same treatment as `PopoverMenuItem`'s own `description` subtitle. The weight
- * has to be stated: unlike that slot, this sits *inside* the label, so it would
- * otherwise inherit its medium weight and read as part of the name.
- */
-function ViewLabel({ name, detail }: { name: string; detail: string }) {
-  return (
-    <span className="flex items-baseline gap-1.5">
-      <span>{name}</span>
-      <span className="text-xs font-normal text-muted-foreground">{detail}</span>
-    </span>
-  )
-}
-
-/**
  * Swaps the sidebar between its Chats, Projects, Channels and Archived views.
  *
  * Sits at the right end of the New Chat row — one fixed spot that doesn't move
@@ -60,7 +43,7 @@ export function SidebarViewSwitcher({
             }}
             selected={view === "recents"}
             icon={<MessageCircle className="h-4 w-4" />}
-            label={<ViewLabel name="Chats" detail="grouped by relevance" />}
+            label="Chats"
           />
           <PopoverMenuItem
             onClick={() => {
@@ -69,7 +52,7 @@ export function SidebarViewSwitcher({
             }}
             selected={view === "projects"}
             icon={<Folder className="h-4 w-4" />}
-            label={<ViewLabel name="Projects" detail="grouped by recency" />}
+            label="Projects"
           />
           <PopoverMenuItem
             onClick={() => {
@@ -78,7 +61,7 @@ export function SidebarViewSwitcher({
             }}
             selected={view === "channels"}
             icon={<Hash className="h-4 w-4" />}
-            label={<ViewLabel name="Channels" detail="projects, then their chats" />}
+            label="Channels"
           />
           <PopoverMenuItem
             onClick={() => {
@@ -87,7 +70,7 @@ export function SidebarViewSwitcher({
             }}
             selected={view === "archived"}
             icon={<Archive className="h-4 w-4" />}
-            label={<ViewLabel name="Archived" detail="recently archived" />}
+            label="Archived"
           />
         </>
       )}

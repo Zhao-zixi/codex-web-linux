@@ -132,10 +132,17 @@ interface Props {
   rightSidebarShortcut?: string[]
   branchName?: string
   /**
-   * Channels view: what this chat is (`ChatNavbarTitle`), at the bar's left
-   * end beside the sidebar. A node, so memoize it: this bar is.
+   * What the bar's left end holds, beside the sidebar: the open chat's
+   * title (`ChatNavbarTitle`), or the open chats as tabs (`ChatTabs`). A
+   * node, so memoize it: this bar is.
    */
   titleSlot?: ReactNode
+  /**
+   * Drops the branch name (or "Setup Git") from the right sidebar's button,
+   * leaving its icon. For the tab bar, where every pixel of the bar is a
+   * tab's; the sidebar the button opens still says both.
+   */
+  hideBranchLabel?: boolean
   /** The project's forge page, for the "Open in…" menu's last entry. */
   repoUrl?: string
   hasGitRepo?: boolean
@@ -144,6 +151,9 @@ interface Props {
   headerRef?: Ref<HTMLDivElement>
   inert?: boolean
 }
+
+/** How long after a chat opens its scroll position is still being put back. */
+const WASH_SETTLE_MS = 400
 
 /**
  * The fade what scrolls under the navbar goes into: the transcript and the
@@ -164,12 +174,30 @@ interface Props {
  * that remounts (the transcript, per chat). `resetKey` re-reads it when one
  * mounts without scrolling, which fires nothing.
  */
-export function ChatNavbarWash({ stopAtTranscriptScrollbar = true, resetKey }: {
+export function ChatNavbarWash({ stopAtTranscriptScrollbar = true, resetKey, opaqueBar = false }: {
   stopAtTranscriptScrollbar?: boolean
   resetKey?: string | null
+  /**
+   * Solid behind the chat tabs, down to their bottom edge, with
+   * the fade starting there. A bar full of things to read can't have text
+   * scrolling up behind it, even dimmed: that is text behind text.
+   */
+  opaqueBar?: boolean
 }) {
   const washRef = useRef<HTMLDivElement>(null)
   const [scrolled, setScrolled] = useState(false)
+  // The fade is for scrolling: it eases in as text first goes under the bar.
+  // A chat being opened is not that. Its scroller mounts at the top and is
+  // put where it was read to a frame or two later, and easing through that
+  // made every switch fade the wash out and back in. So for a moment after a
+  // switch the wash takes its state at once, and eases again after.
+  const [settling, setSettling] = useState(true)
+
+  useEffect(() => {
+    setSettling(true)
+    const settled = window.setTimeout(() => setSettling(false), WASH_SETTLE_MS)
+    return () => window.clearTimeout(settled)
+  }, [resetKey])
 
   useEffect(() => {
     const host = washRef.current?.parentElement
@@ -195,13 +223,38 @@ export function ChatNavbarWash({ stopAtTranscriptScrollbar = true, resetKey }: {
     <div
       ref={washRef}
       className={cn(
-        "absolute top-0 left-0 z-10 h-[100px] pointer-events-none transition-opacity duration-200 ease-out",
+        "absolute top-0 left-0 z-10 h-[100px] pointer-events-none",
+        settling ? "transition-none" : "transition-opacity duration-200 ease-out",
         stopAtTranscriptScrollbar ? "right-[var(--transcript-scrollbar-w,0px)]" : "right-0",
-        scrolled ? "opacity-100" : "opacity-0"
+        // Behind the tabs it is always there: only its fade comes and goes
+        // with the scroll (below). Fading the solid part meant every tab
+        // switch, which starts the next chat unscrolled for a frame, faded
+        // the bar out and back in with the transcript showing through it.
+        opaqueBar || scrolled ? "opacity-100" : "opacity-0"
       )}
     >
-      <div className="absolute inset-x-0 top-0 h-[var(--chat-navbar-h,53px)] bg-gradient-to-b from-background lg:from-background/0"></div>
-      <div className="absolute inset-0 bg-gradient-to-b from-background via-background/50 to-background/10 md:to-background/0"></div>
+      {opaqueBar ? (
+        // Solid down to the tabs' bottom edge and no further, then a short
+        // fade. The tabs are 30px tall, centered on a line that differs by
+        // app: on the web 36px down (the row's 27px center, plus the 9px the
+        // tabs drop to meet the sidebar's bar), in the Mac app the traffic
+        // lights' center.
+        <>
+          <div className="absolute inset-x-0 top-0 h-[51px] bg-background mac-app:md:h-[calc(var(--mac-traffic-lights-center)+15px)]"></div>
+          <div
+            className={cn(
+              "absolute inset-x-0 top-[51px] h-4 bg-gradient-to-b from-background to-background/0 mac-app:md:top-[calc(var(--mac-traffic-lights-center)+15px)]",
+              settling ? "transition-none" : "transition-opacity duration-200 ease-out",
+              scrolled ? "opacity-100" : "opacity-0"
+            )}
+          ></div>
+        </>
+      ) : (
+        <>
+          <div className="absolute inset-x-0 top-0 h-[var(--chat-navbar-h,53px)] bg-gradient-to-b from-background lg:from-background/0"></div>
+          <div className="absolute inset-0 bg-gradient-to-b from-background via-background/50 to-background/10 md:to-background/0"></div>
+        </>
+      )}
     </div>
   )
 }
@@ -234,6 +287,7 @@ function ChatNavbarImpl({
   rightSidebarShortcut,
   branchName,
   titleSlot,
+  hideBranchLabel = false,
   repoUrl,
   hasGitRepo = true,
   gitStatus = "unknown",
@@ -249,6 +303,7 @@ function ChatNavbarImpl({
     : gitStatus === "unknown"
       ? null
       : (branchName ?? "Detached HEAD")
+  const showBranchLabel = Boolean(branchLabel) && !hideBranchLabel
   const isMac = platform === "darwin"
   const rightPanelVisible = widgetsOpen
 
@@ -321,7 +376,8 @@ function ChatNavbarImpl({
             holding: nothing with the sidebar open, the expand button and the
             room for the traffic lights with it collapsed. It is the row's
             flexible middle, taking what the buttons leave. Desktop only (it
-            hides itself under `md`), so the spacer stays for a phone. */}
+            hides itself under `md`), so the spacer stays for a phone, and for
+            a page with no chat to title. */}
         {titleSlot}
         <div className={cn("min-w-0 flex-1", titleSlot ? "md:hidden" : null)} />
 
@@ -424,7 +480,7 @@ function ChatNavbarImpl({
                             of jumping. Out is quicker than in: leaving is the
                             answer to the click. The text keeps its own width
                             while it folds, clipped rather than re-truncated. */}
-                        {branchLabel ? (
+                        {showBranchLabel ? (
                           <span
                             aria-hidden={widgetsOpen || undefined}
                             className={cn(

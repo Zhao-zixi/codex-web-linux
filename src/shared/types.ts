@@ -1278,6 +1278,12 @@ export interface AppSettingsSnapshot {
    * agent's icon otherwise sits. On unless false, and absent when on.
    */
   projectIconsInChats?: boolean
+  /**
+   * Show the chats you have open as tabs in the chat's title bar, in place of
+   * the one chat's title. Off unless true, and absent when off. The tabs
+   * themselves are each browser's own; this is only whether to show them.
+   */
+  chatTabsEnabled?: boolean
   /** Base directory where cloned and newly created projects are placed. */
   newProjectsDirectory: string
   /**
@@ -1330,6 +1336,7 @@ export interface AppSettingsPatch {
   submitWhileRunning?: SubmitWhileRunning
   newSidebarEnabled?: boolean
   projectIconsInChats?: boolean
+  chatTabsEnabled?: boolean
   newProjectsDirectory?: string
   setupShown?: boolean
   setupCompleted?: boolean

@@ -479,9 +479,12 @@ export function ChatHoverCardContent({
 function SidebarChatHoverCardImpl({
   containerRef,
   threads,
+  side = "right",
   sideOffset,
   ...actions
 }: {
+  /** Beside a list down the sidebar; beneath for chats along a bar (the tabs). */
+  side?: "right" | "bottom"
   /** The list's element; every chat row is somewhere beneath it. */
   containerRef: RefObject<HTMLDivElement | null>
   /** Every row the list can show, from `useStableSidebarThreads`. */
@@ -496,7 +499,7 @@ function SidebarChatHoverCardImpl({
   )
 
   return (
-    <ListHoverCard containerRef={containerRef} rowAttribute="data-chat-id" side="right" sideOffset={sideOffset}>
+    <ListHoverCard containerRef={containerRef} rowAttribute="data-chat-id" side={side} sideOffset={sideOffset}>
       {(rowChatId, dismiss) => {
         // Null once the hovered chat leaves the list (archived from elsewhere,
         // filtered out by focus mode), which closes the card rather than

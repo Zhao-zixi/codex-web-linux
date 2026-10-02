@@ -37,7 +37,9 @@ import { SwapIn } from "./WidgetCard"
  * target, not a list.
  */
 export const ROW_HIGHLIGHT_CLASS = "border-border bg-muted"
-export const ROW_HOVER_CLASS = "hover:border-border hover:bg-muted"
+// Also while the row's hover card is up (`HOVER_CARD_OPEN_ATTRIBUTE`): the
+// pointer leaves the row to reach the card, and the row should not go plain.
+export const ROW_HOVER_CLASS = "hover:border-border hover:bg-muted data-[hover-card-open]:border-border data-[hover-card-open]:bg-muted"
 
 /** A row's box, before any highlight. */
 const ROW_BASE_CLASS = "flex w-full min-w-0 items-start gap-2 rounded-lg border border-transparent px-[5px] py-1.5 text-left text-sm"
@@ -266,7 +268,7 @@ export function WidgetRow({
     >
       <WidgetIconColumn>{icon}</WidgetIconColumn>
       <div className="min-w-0 flex-1">
-        <div className={cn("truncate leading-5", muted ? "text-muted-foreground group-hover/row:text-foreground" : "text-foreground")}>{title}</div>
+        <div className={cn("truncate leading-5", muted ? "text-muted-foreground group-hover/row:text-foreground group-data-[hover-card-open]/row:text-foreground" : "text-foreground")}>{title}</div>
         {subtitle ? <div className="truncate text-xs leading-4 text-muted-foreground">{subtitle}</div> : null}
       </div>
       {meta || subMeta ? (

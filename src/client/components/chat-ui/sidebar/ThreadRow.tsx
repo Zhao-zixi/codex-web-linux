@@ -167,7 +167,10 @@ function ThreadRowImpl({
           "group flex w-full cursor-pointer select-none items-center gap-2.5 rounded-lg border px-2 py-1.5 max-md:py-1.5 text-left text-sm max-md:text-base active:scale-[0.985] transition-transform",
           isActive
             ? "bg-muted hover:bg-muted border-border"
-            : "border-border/0 hover:border-border hover:bg-muted/20 dark:hover:border-slate-400/10",
+            // The hover, and the same while the row's hover card is up: the
+            // pointer leaves the row to reach the card (see
+            // `HOVER_CARD_OPEN_ATTRIBUTE`).
+            : "border-border/0 hover:border-border hover:bg-muted/20 dark:hover:border-slate-400/10 data-[hover-card-open]:border-border data-[hover-card-open]:bg-muted/20 dark:data-[hover-card-open]:border-slate-400/10",
         )}
         onClick={() => onSelect(thread.chatId)}
       >

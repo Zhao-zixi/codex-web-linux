@@ -87,9 +87,9 @@ describe("getChannelPeekGroups", () => {
       chat("today", NOW),
       chat("yesterday", NOW - DAY),
     ])).toEqual([
+      ["In Progress", ["running"]],
       ["Relevant", ["unread"]],
       ["Pinned", ["pinned"]],
-      ["In Progress", ["running"]],
       ["Today", ["today"]],
     ])
   })

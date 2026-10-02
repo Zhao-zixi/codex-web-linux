@@ -623,10 +623,14 @@
     filter: blur(0);
   }
 
+  /* translate is the peek's (WidgetsColumn); visibility takes the closed
+     column out once it has faded, since nothing clips it there. */
   [data-right-sidebar-visual] {
     transition:
       opacity var(--pane-duration, 300ms) var(--ease-glide),
-      filter var(--pane-duration, 300ms) var(--ease-glide);
+      filter var(--pane-duration, 300ms) var(--ease-glide),
+      translate var(--pane-duration, 300ms) var(--ease-glide),
+      visibility var(--pane-duration, 300ms);
     will-change: opacity, filter;
   }
 
@@ -642,6 +646,10 @@
   [data-right-sidebar-visual][data-right-sidebar-open="true"] {
     opacity: 1;
     filter: blur(0);
+  }
+
+  [data-widgets-column] > [data-right-sidebar-visual][data-right-sidebar-open="false"] {
+    visibility: hidden;
   }
 
   /* Custom scrollbar styling */

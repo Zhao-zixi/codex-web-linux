@@ -374,7 +374,7 @@ const MobileSidebarPane = memo(function MobileSidebarPane({
       />
       <div
         className={cn(
-          "absolute inset-y-0 right-0 flex w-[min(92vw,30rem)] max-w-full min-h-0 flex-col overflow-hidden bg-background shadow-2xl transition-transform ease-glide motion-reduce:transition-none",
+          "absolute inset-y-0 right-0 flex w-[min(92vw,30rem)] max-w-full min-h-0 flex-col overflow-hidden transition-transform ease-glide motion-reduce:transition-none",
           "pt-[max(env(safe-area-inset-top),0px)] pb-[max(env(safe-area-inset-bottom),0px)]",
           showRightSidebar ? "translate-x-0 duration-300" : "translate-x-full duration-[240ms]",
         )}
@@ -688,6 +688,9 @@ export function ChatPage() {
   const showTerminalPane = Boolean(projectId && isTerminalVisible(terminalLayout, terminalChatKey) && hasTerminals)
   const shouldRenderTerminalLayout = Boolean(projectId && hasTerminals)
   const showRightSidebar = Boolean(projectId && widgetsOpen)
+  // The closed column shown over the chat (WidgetsColumn's peek): its widgets
+  // are on screen then, so they load as they do when it is open.
+  const [widgetsPeeking, setWidgetsPeeking] = useState(false)
   const shouldRenderDesktopRightSidebarLayout = Boolean(projectId) && !isMobileViewport
   const layoutWidth = useLayoutWidth(layoutRootRef)
   const fixedTerminalHeight = useFixedTerminalHeight({
@@ -1471,7 +1474,7 @@ export function ChatPage() {
       activeProvider={state.runtime?.provider ?? null}
       availableProviders={state.availableProviders}
       socket={state.socket}
-      active={showRightSidebar}
+      active={showRightSidebar || widgetsPeeking}
       entries={state.chatSnapshot?.messages ?? EMPTY_TRANSCRIPT_ENTRIES}
       subagents={state.runtime?.subagents ?? EMPTY_SUBAGENTS}
       onRunQuickAction={handleRunQuickAction}
@@ -1497,6 +1500,7 @@ export function ChatPage() {
           storedWidthPx={globalRightSidebarSize}
           layoutWidth={layoutWidth}
           onResize={setRightSidebarSize}
+          onPeekChange={setWidgetsPeeking}
           content={rightPanelContent}
         />
       ) : null}

@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ButtonHTMLAttributes, type CSSProperties } from "react"
 import { ArrowLeft, ArrowRight, ChevronLeft, Flower, House, Loader2, PanelLeft, Search, Plus, Settings, Settings2, SquarePen, Terminal } from "lucide-react"
 import { useLocation, useNavigate, useNavigationType } from "react-router-dom"
+import { OPEN_LAYER_SELECTOR, useEdgePeek } from "./useEdgePeek"
 import { APP_NAME } from "../../shared/branding"
 import { Button } from "../components/ui/button"
 import { StillTooltips } from "../components/ui/tooltip"
@@ -176,15 +177,6 @@ const FOCUS_PARALLAX = "-30%"
 /** The sidebar card's own background, for the page on top, so it covers the one under it. */
 const FOCUS_PAGE_SURFACE = ["bg-background", "dark:bg-card"]
 const SIDEBAR_SCROLLER_SELECTOR = "[data-sidebar-scroller]"
-// A menu, select or dialog that is up. They portal out of the sidebar, so the
-// pointer is over one of these while it is no longer over the card.
-const OPEN_LAYER_SELECTOR = "[role='menu'][data-state='open'], [role='listbox'][data-state='open'], [role='dialog'][data-state='open'], [role='alertdialog'][data-state='open']"
-// The peek: how close to the window's left edge the mouse opens it, how far
-// past the card's right edge it may stray before the card leaves, and how long
-// it has to come back.
-const PEEK_EDGE_PX = 8
-const PEEK_SLOP_PX = 16
-const PEEK_CLOSE_DELAY_MS = 200
 
 /** The scroller itself, or the one inside. */
 function findSidebarScroller(element: HTMLElement) {
@@ -854,86 +846,12 @@ function KannaSidebarImpl({
     }
   }, [isResizingSidebar])
 
-  // The peek: a collapsed sidebar comes back as an overlay while the mouse is
-  // at the window's left edge, and leaves once the mouse has left it. Nothing
-  // is expanded: the chat keeps its width under the card.
-  //
-  // Listened for on the document rather than on a strip along the edge. A
-  // strip would take the clicks that land on it, and a fast mouse crosses 8px
-  // between two events; the move that leaves the window by its left side is
-  // caught instead, which is also what makes the edge easy to hit when the
-  // window is not against the screen's.
+  // The peek (useEdgePeek): the collapsed card shown over the chat while the
+  // mouse is at the window's left edge. Nothing is expanded: the chat keeps
+  // its width under the card. 8px is both how near the edge opens it and the
+  // card's left margin once it is there.
   const sidebarCardRef = useRef<HTMLDivElement>(null)
-  const [peekRequested, setPeekRequested] = useState(false)
-  if (!collapsed && peekRequested) setPeekRequested(false)
-  const peeking = collapsed && peekRequested
-  useEffect(() => {
-    if (!collapsed) return
-    let open = false
-    let closeTimer: number | undefined
-
-    function show() {
-      window.clearTimeout(closeTimer)
-      closeTimer = undefined
-      open = true
-      setPeekRequested(true)
-    }
-
-    function hideSoon() {
-      closeTimer ??= window.setTimeout(() => {
-        closeTimer = undefined
-        open = false
-        setPeekRequested(false)
-      }, PEEK_CLOSE_DELAY_MS)
-    }
-
-    // Whether something the card started is still going on: a drag (resize,
-    // reorder), a menu or dialog opened from a row, a rename being typed.
-    // Closing under any of them would take away what the user is using.
-    function isBusy(event: MouseEvent) {
-      if (event.buttons !== 0) return true
-      if (document.querySelector(OPEN_LAYER_SELECTOR)) return true
-      const focused = document.activeElement
-      return focused instanceof HTMLElement
-        && (focused.tagName === "INPUT" || focused.tagName === "TEXTAREA")
-        && Boolean(sidebarCardRef.current?.contains(focused))
-    }
-
-    function handlePointerMove(event: PointerEvent) {
-      if (event.pointerType !== "mouse") return
-      if (event.clientX <= PEEK_EDGE_PX) {
-        if (!open && event.buttons === 0) show()
-        return
-      }
-      const card = sidebarCardRef.current
-      if (!open || !card) return
-      // Where the card rests, not where it is: a mouse that outruns the card
-      // on its way in is still headed for it. 8px is the card's left margin.
-      const overCard = event.clientX <= 8 + card.offsetWidth + PEEK_SLOP_PX
-      if (overCard || isBusy(event)) {
-        window.clearTimeout(closeTimer)
-        closeTimer = undefined
-      } else {
-        hideSoon()
-      }
-    }
-
-    function handleMouseLeave(event: MouseEvent) {
-      if (event.clientX <= 0) {
-        if (!open && event.buttons === 0) show()
-      } else if (open && !isBusy(event)) {
-        hideSoon()
-      }
-    }
-
-    window.addEventListener("pointermove", handlePointerMove)
-    document.documentElement.addEventListener("mouseleave", handleMouseLeave)
-    return () => {
-      window.clearTimeout(closeTimer)
-      window.removeEventListener("pointermove", handlePointerMove)
-      document.documentElement.removeEventListener("mouseleave", handleMouseLeave)
-    }
-  }, [collapsed])
+  const peeking = useEdgePeek({ side: "left", enabled: collapsed, panelRef: sidebarCardRef, edgePx: 8, insetPx: 8 })
 
   const hasVisibleChats = activeVisibleCount > 0
   // `/` is the sidebar itself on mobile; the projects page lives at `/home`

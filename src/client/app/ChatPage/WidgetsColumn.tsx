@@ -7,6 +7,7 @@ import {
   RIGHT_SIDEBAR_MIN_WIDTH_PX,
 } from "../../stores/rightSidebarStore"
 import { paneDurationMs, prefersReducedMotion } from "../paneAnimation"
+import { useEdgePeek } from "../useEdgePeek"
 
 /** The chat's narrowest, as a share of the page: beside the widget column, and beside the viewer's pane. */
 export const CHAT_MIN_WORKSPACE_SIZE_PERCENT = 20
@@ -57,6 +58,8 @@ interface WidgetsColumnProps {
   storedWidthPx: number
   layoutWidth: number
   onResize: (widthPx: number) => void
+  /** The closed column is being shown over the chat, or no longer is: its content is on screen. */
+  onPeekChange: (peeking: boolean) => void
   content: ReactNode
 }
 
@@ -76,13 +79,28 @@ export const WidgetsColumn = memo(function WidgetsColumn({
   storedWidthPx,
   layoutWidth,
   onResize,
+  onPeekChange,
   content,
 }: WidgetsColumnProps) {
   const sliding = useColumnSlide(open, switchKey)
+  // The peek (useEdgePeek): the closed column shown over the chat while the
+  // mouse is at the window's right edge. Only the last 2px open it, where the
+  // left sidebar takes 8: the transcript's scrollbar lives along this edge,
+  // and reaching for it must not bring the column down over it.
+  const visualRef = useRef<HTMLDivElement>(null)
+  const peeking = useEdgePeek({ side: "right", enabled: !open, panelRef: visualRef, edgePx: 2 })
+  useEffect(() => {
+    onPeekChange(peeking)
+    // The column can go away mid-peek (a narrower window, no project).
+    return () => { if (peeking) onPeekChange(false) }
+  }, [onPeekChange, peeking])
+  // Over the chat rather than beside it: in a peek, and while a column kept
+  // from a peek is still making its room.
+  const floating = !open || sliding
   const [dragWidthPx, setDragWidthPx] = useState<number | null>(null)
   const dragStartRef = useRef<{ pointerX: number; widthPx: number } | null>(null)
   const widthPx = getWidgetsColumnWidthPx(dragWidthPx ?? storedWidthPx, layoutWidth)
-  const durationMs = paneDurationMs(open)
+  const durationMs = paneDurationMs(open || peeking)
   const dragging = dragWidthPx !== null
 
   // The resize cursor, and no text selected, wherever the pointer strays
@@ -164,9 +182,13 @@ export const WidgetsColumn = memo(function WidgetsColumn({
       />
       <div
         // The pane clock and curve (paneAnimation.ts), on the width.
-        className={cn("relative h-full min-h-0 shrink-0 overflow-hidden", sliding && "transition-[width] ease-glide")}
+        // Nothing is clipped here: the content runs past this box to the
+        // right while it opens or closes, and to the left in a peek. The row
+        // this sits at the end of does the clipping (`panes`, ChatPage).
+        // Floating, it is raised over the viewer (z-30), under the navbar.
+        className={cn("relative h-full min-h-0 shrink-0", sliding && "transition-[width] ease-glide", floating && "z-30")}
         style={{ width: open ? widthPx : 0, transitionDuration: sliding ? `${durationMs}ms` : undefined }}
-        inert={!open || undefined}
+        inert={!(open || peeking) || undefined}
         data-widgets-column
       >
         {/* At its full width whatever the column's, pinned to the column's
@@ -176,10 +198,24 @@ export const WidgetsColumn = memo(function WidgetsColumn({
             the transcript (WidgetsSidebar pads its top by the navbar's
             height). */}
         <div
-          className="absolute inset-y-0 left-0 min-h-0 overflow-hidden"
+          ref={visualRef}
+          className={cn(
+            "absolute inset-y-0 left-0 min-h-0 overflow-hidden",
+            // The peek slides the content back in by a transform, from where
+            // the closed column leaves it: just past the window's edge. Its
+            // width stays 0, so the chat does not reflow. Opening from a peek
+            // widens the column on the same clock and curve as this returns
+            // to 0, and the two cancel: the content holds still while the
+            // chat makes room for it. No surface or edge of its own: over
+            // the chat the widgets are cards floating on it.
+            peeking && "-translate-x-full",
+          )}
           style={{ width: widthPx, "--pane-duration": `${durationMs}ms` } as CSSProperties}
-          data-right-sidebar-open={open ? "true" : "false"}
-          data-right-sidebar-animated={sliding ? "true" : "false"}
+          data-right-sidebar-open={open || peeking ? "true" : "false"}
+          // Closed counts as animated: the peek comes and goes from there.
+          // Going to a chat where the column is closed still snaps, since
+          // the closed content is off screen for whatever it does.
+          data-right-sidebar-animated={sliding || (!open && !prefersReducedMotion()) ? "true" : "false"}
           data-right-sidebar-visual
         >
           {content}

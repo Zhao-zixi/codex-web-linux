@@ -17,6 +17,8 @@ export interface SidebarThread {
    * project name; only the sidebar shows the branch.
    */
   projectLabel: ProjectSidebarLabel
+  /** The project's own icon (`SidebarProjectGroup.iconUrl`), for rows that show it. */
+  projectIconUrl?: string
   archived: boolean
   lastActivityAt: number
   row: SidebarChatRow
@@ -99,6 +101,7 @@ export function flattenSidebarThreads(data: SidebarData): SidebarThread[] {
           projectId: group.groupKey,
           projectTitle: group.title,
           projectLabel,
+          ...(group.iconUrl ? { projectIconUrl: group.iconUrl } : {}),
           archived,
           lastActivityAt: activityAt(row),
           row,
@@ -144,6 +147,7 @@ export function stabilizeSidebarThreads(
       && before.archived === thread.archived
       && before.lastActivityAt === thread.lastActivityAt
       && before.projectLabel === thread.projectLabel
+      && before.projectIconUrl === thread.projectIconUrl
     if (!same) {
       changed = true
       return thread

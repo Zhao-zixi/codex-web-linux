@@ -112,6 +112,12 @@ export const SETTINGS_ROWS = defineRows({
     description: "Light, dark, or match the system appearance.",
     keywords: ["appearance", "dark mode", "light mode"],
   },
+  projectIconsInChats: {
+    sectionId: "general",
+    title: "Project Icons in Chats",
+    description: "Lead each chat in the sidebar's Chats view with its project's icon, in place of the agent's.",
+    keywords: ["sidebar", "icon", "favicon", "app icon", "project", "chats", "monogram", "initials"],
+  },
   chatSounds: {
     sectionId: "general",
     title: "Chat Sounds",

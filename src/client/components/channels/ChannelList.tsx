@@ -1,7 +1,7 @@
-import { memo, useCallback, useMemo, useRef, useState, type ReactNode, type RefObject } from "react"
-import { ChevronDown, Hash, SquarePen } from "lucide-react"
+import { Fragment, memo, useCallback, useMemo, useRef, useState, type ReactElement, type ReactNode, type RefObject } from "react"
+import { ChevronDown, SquarePen } from "lucide-react"
 import type { SidebarProjectGroup } from "../../../shared/types"
-import { computeChannelSections, getChannelPeekGroups, type ChannelPeekGroup } from "../../lib/channel-sections"
+import { computeChannelSections, getChannelPeekGroups, getPinnedChannelChats, type ChannelPeekGroup, type ChannelSection } from "../../lib/channel-sections"
 import { useHasFinePointer } from "../../lib/pointer"
 import { getThreadDetailLabel } from "../../lib/thread-detail-label"
 import type { SidebarThread } from "../../lib/thread-sections"
@@ -15,6 +15,7 @@ import { renderChatStatusDot, ThreadRowContent } from "../chat-ui/ThreadRowConte
 import { ProjectSectionMenu } from "../chat-ui/sidebar/Menus"
 import { SectionHeader } from "../chat-ui/sidebar/ThreadSections"
 import { LIST_HOVER_CARD_ROOM_BELOW, ListHoverCard } from "../ui/list-hover-card"
+import { ProjectIcon } from "../ui/project-icon"
 
 /** What a channel row carries its project id in, for the list's hover card. */
 const CHANNEL_ROW_ATTRIBUTE = "data-channel-id"
@@ -25,6 +26,14 @@ const CHANNEL_ROW_ATTRIBUTE = "data-channel-id"
  * own takes (previews, touched files, jump targets), and the sidebar already
  * holds all of it.
  */
+/**
+ * A chat's right-click menu (`ThreadRowMenu`), around its row in a channel's
+ * card. Handed in for the same reason as the hover card: the sidebar holds
+ * what it does. `closeCard` is for the items that take you elsewhere or open
+ * a dialog, which the card would otherwise be left hanging over.
+ */
+export type RenderChatMenu = (thread: SidebarThread, row: ReactElement, closeCard: () => void) => ReactNode
+
 export type RenderChatHoverCard = (
   containerRef: RefObject<HTMLDivElement | null>,
   threads: SidebarThread[],
@@ -35,25 +44,48 @@ export type RenderChatHoverCard = (
  * get to (`getChannelPeekGroups`), each a click away from here instead.
  */
 function ChannelPeek({
-  peekGroups,
+  group,
+  pinned,
   activeChatId,
   nowMs,
   onSelectChat,
   onNewChat,
   onShowMore,
+  onClose,
   renderChatHoverCard,
+  renderChatMenu,
 }: {
-  /** Empty for a channel with no chats yet: the card is then New Chat alone. */
-  peekGroups: ChannelPeekGroup[]
+  /** Closes the card, pinned or not. */
+  onClose: () => void
+  renderChatMenu: RenderChatMenu
+  group: SidebarProjectGroup
+  /** Pinned is opened up: the click that holds the menu asked for the rest of it. */
+  pinned: boolean
   activeChatId: string | null
   nowMs: number
   onSelectChat: (chatId: string) => void
   onNewChat: () => void
-  /** Present while the channel has chats the card is not showing. */
-  onShowMore?: () => void
+  onShowMore: () => void
   renderChatHoverCard: RenderChatHoverCard
 }) {
   const listRef = useRef<HTMLDivElement>(null)
+  const draftStartTimes = useDraftStartTimes()
+  const pendingSends = usePendingSendTimes()
+  // Worked out here, memoized on the project, and not by the list on each of
+  // its renders: the sidebar is pushed several times a second through a
+  // turn, and this is every chat of a project being sorted into sections,
+  // then handed as a fresh list to the chat card below.
+  const { peekGroups, canShowMore } = useMemo(() => {
+    const all = getChannelPeekGroups(group, nowMs, draftStartTimes, pendingSends, true)
+    const first = getChannelPeekGroups(group, nowMs, draftStartTimes, pendingSends)
+    const countChats = (groups: ChannelPeekGroup[]) => (
+      groups.reduce((count, peekGroup) => count + peekGroup.threads.length, 0)
+    )
+    // "Show more" takes a row. Hiding a single chat behind it saves nothing,
+    // so that chat is simply shown.
+    const showAll = pinned || countChats(all) - countChats(first) <= 1
+    return { peekGroups: showAll ? all : first, canShowMore: !showAll }
+  }, [draftStartTimes, group, nowMs, pendingSends, pinned])
   const peekThreads = useMemo(() => peekGroups.flatMap((peekGroup) => peekGroup.threads), [peekGroups])
 
   return (
@@ -67,33 +99,28 @@ function ChannelPeek({
           <span>New Chat</span>
         </span>
       </button>
-      {/* Edge to edge, through the card's 4px padding. 3px either side plus
-          the rows' own pixel is that same 4px. */}
-      {peekGroups.length > 0 ? <div className="-mx-1 my-[3px] h-px bg-border" /> : null}
       {/* A long list runs from under New Chat to the bottom of the window,
           and scrolls there. Near the foot of the sidebar that would leave it
           a sliver, so it never gets less than 280px, and the card rises
           above its channel to find them (see `LIST_HOVER_CARD_ROOM_BELOW`).
-          The 51px is everything else in the card: its vertical padding and
-          border (8px), New Chat (36px) and the divider (7px).
+          The 44px is everything else in the card: its vertical padding and
+          border (8px) and New Chat (36px).
 
           Scrolls here rather than on the card, which must not clip the
           bridge it lays over the gap to the row. */}
       <div
         ref={listRef}
         className="overflow-y-auto overscroll-contain"
-        style={{ maxHeight: `max(280px, calc(var(${LIST_HOVER_CARD_ROOM_BELOW}) - 51px))` }}
+        style={{ maxHeight: `max(280px, calc(var(${LIST_HOVER_CARD_ROOM_BELOW}, 60vh) - 44px))` }}
       >
-        {peekGroups.map((peekGroup, index) => (
+        {peekGroups.map((peekGroup) => (
           <div key={peekGroup.key}>
-            {/* The first group goes unnamed: the divider above it has already
-                said where the chats start. */}
-            {index === 0 ? null : (
-              <div className="px-1.5 pb-1 pt-1.5 text-[11px] font-medium text-muted-foreground">{peekGroup.label}</div>
-            )}
+            {/* Every group is named, the first included: its label is what
+                sets the chats apart from New Chat above them. */}
+            <div className="px-1.5 pb-1 pt-1.5 text-[11px] font-medium text-muted-foreground">{peekGroup.label}</div>
             {peekGroup.threads.map((thread) => (
+              <Fragment key={thread.chatId}>{renderChatMenu(thread, (
               <button
-                key={thread.chatId}
                 type="button"
                 // What the chat hover card finds the row under the pointer by.
                 data-chat-id={normalizeChatId(thread.chatId)}
@@ -122,12 +149,13 @@ function ChannelPeek({
                   />
                 </span>
               </button>
+              ), onClose)}</Fragment>
             ))}
           </div>
         ))}
         {/* A row like the others, so it sits in their rhythm and takes their
             hover. Clicking the channel does the same thing. */}
-        {onShowMore ? (
+        {canShowMore ? (
           <button type="button" onClick={onShowMore} className="group/peek block w-full py-px text-left">
             <span className="flex w-full items-center gap-2.5 rounded-lg border border-border/0 px-2 py-1.5 text-sm text-muted-foreground transition-colors group-hover/peek:border-border group-hover/peek:bg-muted">
               <ChevronDown className="size-4 shrink-0" />
@@ -167,10 +195,10 @@ interface ChannelRowProps {
 
 /**
  * A project as a channel: its mark, its name, and a count of the chats that
- * want you (unread, or waiting on an answer). The mark is the hash while every
- * chat in it is idle and read, and otherwise the status glyph of its most
- * pressing chat, in the hash's slot so the name never shifts. Bold means
- * something in it is unread, as a Slack channel's is.
+ * want you (unread, or waiting on an answer). The mark is the project's icon
+ * while every chat in it is idle and read, and otherwise the status glyph of
+ * its most pressing chat, in the icon's slot so the name never shifts. Bold
+ * means something in it is unread, as a Slack channel's is.
  *
  * The row has no hover card of its own: the list keeps one for all of them
  * and finds the row under the pointer by `CHANNEL_ROW_ATTRIBUTE`.
@@ -227,7 +255,7 @@ const ChannelRow = memo(function ChannelRow({ group, active, menuPinned, pinned,
             )}
           >
             <span className="flex size-4 shrink-0 items-center justify-center">
-              {statusMark ?? <Hash className="size-4 opacity-70" />}
+              {statusMark ?? <ProjectIcon name={group.title} iconUrl={group.iconUrl} />}
             </span>
             <span className="min-w-0 flex-1 truncate">{group.title}</span>
             {/* Neutral: the mark on the left carries the colour. A tint of the
@@ -257,8 +285,16 @@ export function ChannelList({
   onSelect,
   onSelectChat,
   renderChatHoverCard,
+  renderChatMenu,
   actions,
+  threads,
+  renderPinnedChatRow,
 }: {
+  /** Every chat the sidebar holds, identity-stable (`useStableSidebarThreads`). */
+  threads: SidebarThread[]
+  /** A sidebar chat row, for the pinned chats listed above the channels. */
+  renderPinnedChatRow: (thread: SidebarThread) => ReactNode
+  renderChatMenu: RenderChatMenu
   /** Must be stable (memoized): it reaches every memoized row. */
   actions: ChannelActions
   projectGroups: SidebarProjectGroup[]
@@ -296,13 +332,21 @@ export function ChannelList({
     () => computeChannelSections(projectGroups, nowMs, channelPins, draftStartTimes, pendingSends),
     [channelPins, draftStartTimes, nowMs, pendingSends, projectGroups]
   )
+  // Pinned chats lead the Pinned section, above any pinned channels: a pin
+  // is "keep this in view", and they would otherwise be out of sight inside
+  // their channels' cards. The section exists for either kind.
+  const pinnedThreads = useMemo(() => getPinnedChannelChats(threads), [threads])
+  const shownSections = useMemo<ChannelSection[]>(() => {
+    if (pinnedThreads.length === 0 || sections.some((section) => section.key === "pinned")) return sections
+    return [{ key: "pinned", label: "Pinned", collapsible: true, defaultExpanded: true, groups: [] }, ...sections]
+  }, [pinnedThreads.length, sections])
   // In a store, so the sections are as you left them when you come back from
   // a channel (which unmounts this list).
   const [expandOverrides, setSectionExpanded] = useSectionOverrides("channels")
 
   return (
     <div ref={listRef}>
-      {sections.map((section) => {
+      {shownSections.map((section) => {
         const isExpanded = !section.collapsible || (expandOverrides[section.key] ?? section.defaultExpanded)
         return (
           <div key={section.key}>
@@ -315,6 +359,11 @@ export function ChannelList({
               // No gap: the rows carry the Chats view's 2px spacing inside
               // themselves (see `ChannelRow`).
               <div className="mb-3 flex flex-col">
+                {/* Chat rows keep their own 2px gap; the pixel either side
+                    sets them off from the channel rows by the same. */}
+                {section.key === "pinned" && pinnedThreads.length > 0 ? (
+                  <div className="space-y-[2px] py-px">{pinnedThreads.map(renderPinnedChatRow)}</div>
+                ) : null}
                 {section.groups.map((group) => (
                   <ChannelRow
                     key={group.groupKey}
@@ -361,22 +410,11 @@ export function ChannelList({
         {(projectId, dismiss) => {
           const group = projectGroups.find((item) => item.groupKey === projectId)
           if (!group) return null
-          const allPeekGroups = getChannelPeekGroups(group, nowMs, draftStartTimes, pendingSends, true)
-          const firstPeekGroups = getChannelPeekGroups(group, nowMs, draftStartTimes, pendingSends)
-          // Pinned is opened up: the click that holds the menu is the one
-          // that asked for the rest of it.
-          const pinned = pinnedChannelId === projectId
-          // "Show more" takes a row. Hiding a single chat behind it saves
-          // nothing, so that chat is simply shown.
-          const countChats = (peekGroups: ChannelPeekGroup[]) => (
-            peekGroups.reduce((count, peekGroup) => count + peekGroup.threads.length, 0)
-          )
-          const hiddenCount = countChats(allPeekGroups) - countChats(firstPeekGroups)
-          const showAll = pinned || hiddenCount <= 1
           return (
             <ChannelPeek
-              peekGroups={showAll ? allPeekGroups : firstPeekGroups}
-              onShowMore={showAll ? undefined : () => setPinnedChannelId(projectId)}
+              group={group}
+              pinned={pinnedChannelId === projectId}
+              onShowMore={() => setPinnedChannelId(projectId)}
               activeChatId={activeChatId}
               nowMs={nowMs}
               onNewChat={() => {
@@ -384,6 +422,11 @@ export function ChannelList({
                 dismiss()
                 actions.onCreateChat(projectId)
               }}
+              onClose={() => {
+                unpinChannel()
+                dismiss()
+              }}
+              renderChatMenu={renderChatMenu}
               onSelectChat={(chatId) => {
                 unpinChannel()
                 dismiss()

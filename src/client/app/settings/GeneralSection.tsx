@@ -284,6 +284,15 @@ export function GeneralSection({
     })
   }
 
+  async function handleProjectIconsInChatsChange(enabled: boolean) {
+    try {
+      setAppSettingsError(null)
+      await handleWriteAppSettings({ projectIconsInChats: enabled })
+    } catch (error) {
+      setAppSettingsError(error instanceof Error ? error.message : "Unable to save appearance settings.")
+    }
+  }
+
   async function handleAnalyticsPreferenceChange(enabled: boolean) {
     try {
       setAppSettingsError(null)
@@ -364,6 +373,15 @@ export function GeneralSection({
                 </SelectItem>
               ))}
             </SettingsSelect>
+          </SettingsRow>
+          <SettingsRow def={SETTINGS_ROWS.projectIconsInChats}>
+            <Switch
+              checked={appSettings?.projectIconsInChats !== false}
+              onCheckedChange={(checked) => {
+                void handleProjectIconsInChatsChange(checked)
+              }}
+              aria-label={SETTINGS_ROWS.projectIconsInChats.title}
+            />
           </SettingsRow>
         </SettingsGroup>
 

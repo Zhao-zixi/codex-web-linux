@@ -205,6 +205,8 @@ export function deriveSidebarData(
      * — see `SidebarProjectGroup.hasGitRepo`.
      */
     projectsWithoutRepo?: ReadonlySet<string>
+    /** Icon URL per project path, from `ProjectIcons.getUrls()`. */
+    projectIcons?: ReadonlyMap<string, string>
   }
 ): SidebarData {
   const nowMs = options?.nowMs ?? Date.now()
@@ -290,6 +292,7 @@ export function deriveSidebarData(
 
   const projectGroups: SidebarProjectGroup[] = projects.map((project) => {
     const repoLabel = options?.repoLabels?.get(project.id)
+    const iconUrl = options?.projectIcons?.get(project.localPath)
     const chats = toSidebarChatRows(project, chatsByProjectId.get(project.id) ?? [])
     const archivedChats = toSidebarChatRows(project, archivedChatsByProjectId.get(project.id) ?? [])
     const { previewChats, olderChats } = getSidebarChatBuckets(chats, nowMs)
@@ -310,6 +313,7 @@ export function deriveSidebarData(
       ...(repoLabel?.branchName ? { branchName: repoLabel.branchName } : {}),
       ...(repoLabel?.repoOwner ? { repoOwner: repoLabel.repoOwner } : {}),
       ...(repoLabel?.repoUrl ? { repoUrl: repoLabel.repoUrl } : {}),
+      ...(iconUrl ? { iconUrl } : {}),
       localPath: project.localPath,
       chats,
       previewChats,

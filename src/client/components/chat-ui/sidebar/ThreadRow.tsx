@@ -33,6 +33,8 @@ interface ThreadRowProps {
    * emphasis and dimming inside one would just fight it.
    */
   dimIdleTitles?: boolean
+  /** See `ThreadRowContent`. */
+  showProjectIcon?: boolean
   onSelect: (chatId: string) => void
   onCreateChat: (projectId: string) => void
   onRenameChat: (chat: SidebarThread["row"]) => void
@@ -72,6 +74,7 @@ function ThreadRowImpl({
   nowMs,
   detailLabelOverride,
   dimIdleTitles = true,
+  showProjectIcon = false,
   onSelect,
   onCreateChat,
   onRenameChat,
@@ -89,7 +92,6 @@ function ThreadRowImpl({
   // re-rendered this row on every keystroke in the composer. The card reads the
   // text itself, from inside its own open subtree.
   const hasDraft = useChatHasDraft(thread.row.chatId)
-  const clearDraft = useChatInputStore((state) => state.clearDraft)
   const detailLabel = detailLabelOverride ?? getThreadDetailLabel(thread, detailScope, nowMs)
   const hoverActions = archived ? (
     <Button
@@ -136,24 +138,20 @@ function ThreadRowImpl({
   )
 
   return (
-    <ChatRowMenu
-      canFork={thread.row.canFork}
+    <ThreadRowMenu
+      thread={thread}
       archived={archived}
-      pinned={Boolean(thread.row.pinnedAt)}
-      onTogglePin={!archived && onToggleChatPin ? () => onToggleChatPin(thread.row) : undefined}
       editorLabel={editorLabel}
-      repoUrl={thread.projectLabel.repoUrl}
-      onNewChat={() => onCreateChat(thread.projectId)}
-      onRestore={archived ? () => onRestoreChat(thread.row.chatId) : undefined}
-      onRename={() => onRenameChat(thread.row)}
-      onShare={() => onShareChat(thread.row.chatId)}
-      onCopyPath={() => onCopyPath(thread.row.localPath)}
-      onOpenInFinder={() => onOpenExternalPath("open_finder", thread.row.localPath)}
-      onOpenInEditor={() => onOpenExternalPath("open_editor", thread.row.localPath)}
-      onFork={() => onForkChat(thread.row)}
-      onClearDraft={hasDraft ? () => clearDraft(thread.row.chatId) : undefined}
-      onArchive={archived ? () => {} : () => onArchiveChat(thread.row)}
-      onDelete={() => onDeleteChat(thread.row)}
+      onCreateChat={onCreateChat}
+      onRenameChat={onRenameChat}
+      onShareChat={onShareChat}
+      onCopyPath={onCopyPath}
+      onOpenExternalPath={onOpenExternalPath}
+      onForkChat={onForkChat}
+      onToggleChatPin={onToggleChatPin}
+      onArchiveChat={onArchiveChat}
+      onRestoreChat={onRestoreChat}
+      onDeleteChat={onDeleteChat}
     >
       <div
         // Two readers: the sidebar's scroll-to-active querySelector, and the
@@ -179,10 +177,69 @@ function ThreadRowImpl({
           isActive={isActive}
           dimIdleTitles={dimIdleTitles}
           hasDraft={hasDraft}
+          showProjectIcon={showProjectIcon}
           detailLabel={detailLabel}
           hoverActions={hoverActions}
         />
       </div>
+    </ThreadRowMenu>
+  )
+}
+
+/** What a chat's right-click menu does, as the sidebar hands it to a row. */
+export type ThreadRowMenuActions = Pick<
+  ThreadRowProps,
+  | "onCreateChat" | "onRenameChat" | "onShareChat" | "onCopyPath" | "onOpenExternalPath"
+  | "onForkChat" | "onToggleChatPin" | "onArchiveChat" | "onRestoreChat" | "onDeleteChat"
+>
+
+/**
+ * A chat's right-click menu, around whatever stands for the chat.
+ *
+ * Apart from `ThreadRow` so that anywhere else a chat is listed (the chats in
+ * a channel's menu) gets this menu and not a copy of it: the same items, in
+ * the same order, doing the same things.
+ */
+export function ThreadRowMenu({
+  thread,
+  archived = false,
+  editorLabel,
+  onCreateChat,
+  onRenameChat,
+  onShareChat,
+  onCopyPath,
+  onOpenExternalPath,
+  onForkChat,
+  onToggleChatPin,
+  onArchiveChat,
+  onRestoreChat,
+  onDeleteChat,
+  children,
+}: Pick<ThreadRowProps, "thread" | "archived" | "editorLabel"> & ThreadRowMenuActions & { children: ReactNode }) {
+  const hasDraft = useChatHasDraft(thread.row.chatId)
+  const clearDraft = useChatInputStore((state) => state.clearDraft)
+
+  return (
+    <ChatRowMenu
+      canFork={thread.row.canFork}
+      archived={archived}
+      pinned={Boolean(thread.row.pinnedAt)}
+      onTogglePin={!archived && onToggleChatPin ? () => onToggleChatPin(thread.row) : undefined}
+      editorLabel={editorLabel}
+      repoUrl={thread.projectLabel.repoUrl}
+      onNewChat={() => onCreateChat(thread.projectId)}
+      onRestore={archived ? () => onRestoreChat(thread.row.chatId) : undefined}
+      onRename={() => onRenameChat(thread.row)}
+      onShare={() => onShareChat(thread.row.chatId)}
+      onCopyPath={() => onCopyPath(thread.row.localPath)}
+      onOpenInFinder={() => onOpenExternalPath("open_finder", thread.row.localPath)}
+      onOpenInEditor={() => onOpenExternalPath("open_editor", thread.row.localPath)}
+      onFork={() => onForkChat(thread.row)}
+      onClearDraft={hasDraft ? () => clearDraft(thread.row.chatId) : undefined}
+      onArchive={archived ? () => {} : () => onArchiveChat(thread.row)}
+      onDelete={() => onDeleteChat(thread.row)}
+    >
+      {children}
     </ChatRowMenu>
   )
 }

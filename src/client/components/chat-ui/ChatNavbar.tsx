@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, type Ref } from "react"
+import { memo, useEffect, useRef, useState, type ReactNode, type Ref } from "react"
 import { ArrowLeft, Check, Flower, Loader2, MoreHorizontal, PanelLeft, PanelRight, Search, Terminal, UserRoundPlus } from "lucide-react"
 import type { EditorOpenSettings, EditorPreset, OpenExternalAction, TerminalPreset } from "../../../shared/protocol"
 import { Button } from "../ui/button"
@@ -131,6 +131,11 @@ interface Props {
   terminalShortcut?: string[]
   rightSidebarShortcut?: string[]
   branchName?: string
+  /**
+   * Channels view: what this chat is (`ChatNavbarTitle`), at the bar's left
+   * end beside the sidebar. A node, so memoize it: this bar is.
+   */
+  titleSlot?: ReactNode
   /** The project's forge page, for the "Open in…" menu's last entry. */
   repoUrl?: string
   hasGitRepo?: boolean
@@ -228,6 +233,7 @@ function ChatNavbarImpl({
   terminalShortcut,
   rightSidebarShortcut,
   branchName,
+  titleSlot,
   repoUrl,
   hasGitRepo = true,
   gitStatus = "unknown",
@@ -311,7 +317,13 @@ function ChatNavbarImpl({
           </Button>
         </div>
 
-        <div className="flex-1 min-w-0" />
+        {/* In the row's flow, so it starts after whatever the left group is
+            holding: nothing with the sidebar open, the expand button and the
+            room for the traffic lights with it collapsed. It is the row's
+            flexible middle, taking what the buttons leave. Desktop only (it
+            hides itself under `md`), so the spacer stays for a phone. */}
+        {titleSlot}
+        <div className={cn("min-w-0 flex-1", titleSlot ? "md:hidden" : null)} />
 
         {localPath && (onOpenExternal || onToggleEmbeddedTerminal || onToggleWidgets || onExportTranscript) ? (
           <div className="flex items-center gap-2 flex-shrink-0">

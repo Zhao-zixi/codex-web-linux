@@ -65,6 +65,7 @@ interface AppSettingsFile {
     pi?: ProviderPreferenceInput
   }
   newSidebarEnabled?: unknown
+  projectIconsInChats?: unknown
   newProjectsDirectory?: unknown
   setupShown?: unknown
   setupCompleted?: unknown
@@ -187,6 +188,7 @@ function toFilePayload(state: AppSettingsState) {
     defaultProvider: state.defaultProvider,
     providerDefaults: state.providerDefaults,
     newSidebarEnabled: state.newSidebarEnabled,
+    ...(state.projectIconsInChats === false ? { projectIconsInChats: false } : {}),
     newProjectsDirectory: state.newProjectsDirectory,
     setupShown: state.setupShown,
     setupCompleted: state.setupCompleted,
@@ -216,6 +218,7 @@ function toSnapshot(
     defaultProvider: state.defaultProvider,
     providerDefaults: state.providerDefaults,
     newSidebarEnabled: state.newSidebarEnabled,
+    ...(state.projectIconsInChats === false ? { projectIconsInChats: false } : {}),
     newProjectsDirectory: state.newProjectsDirectory,
     setupShown: state.setupShown,
     setupCompleted: state.setupCompleted,
@@ -302,6 +305,7 @@ function normalizeAppSettings(
     defaultProvider: normalizeDefaultProvider(source?.defaultProvider),
     providerDefaults: normalizeProviderDefaults(source?.providerDefaults),
     newSidebarEnabled,
+    ...(source?.projectIconsInChats === false ? { projectIconsInChats: false } : {}),
     newProjectsDirectory,
     // Onboarding markers default to false so a machine that has never run the
     // wizard still gets it; once set they stay set for every browser.
@@ -341,6 +345,7 @@ function toComparablePayload(source: AppSettingsFile) {
     defaultProvider: source.defaultProvider,
     providerDefaults: source.providerDefaults,
     newSidebarEnabled: source.newSidebarEnabled,
+    projectIconsInChats: source.projectIconsInChats,
     newProjectsDirectory: typeof source.newProjectsDirectory === "string"
       ? source.newProjectsDirectory.trim()
       : source.newProjectsDirectory,

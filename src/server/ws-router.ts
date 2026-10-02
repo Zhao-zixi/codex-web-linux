@@ -24,6 +24,7 @@ import { installSkill, listGlobalSkillsWithSources, listInstalledSkills, searchS
 import { writeStandaloneTranscriptExport } from "./standalone-export"
 import { TerminalManager } from "./terminal-manager"
 import type { WorktreeProbe } from "./worktree-probe"
+import type { ProjectIcons } from "./project-icons"
 import type { ProviderAuthManager } from "./provider-auth"
 import type { UpdateManager } from "./update-manager"
 import type { UsageLimitsManager } from "./usage-limits"
@@ -102,6 +103,7 @@ interface CreateWsRouterArgs {
   store: EventStore
   diffStore: Pick<DiffStore, "getProjectSnapshot" | "getSnapshotVersion" | "refreshSnapshot" | "initializeGit" | "getGitHubPublishInfo" | "checkGitHubRepoAvailability" | "publishToGitHub" | "listBranches" | "previewMergeBranch" | "mergeBranch" | "syncBranch" | "checkoutBranch" | "createBranch" | "generateCommitMessage" | "commitFiles" | "discardFile" | "ignoreFile" | "readPatch" | "readCommit" | "readBranch">
   worktreeProbe: Pick<WorktreeProbe, "getStates" | "getRepoLabels" | "getProjectsWithoutRepo">
+  projectIcons?: Pick<ProjectIcons, "getUrls">
   agent: AgentCoordinator
   terminals: TerminalManager
   portTunnels?: Pick<PortTunnelManager, "expose" | "unexpose" | "getPublicUrl">
@@ -228,6 +230,7 @@ export function createWsRouter({
   store,
   diffStore,
   worktreeProbe,
+  projectIcons,
   agent,
   terminals,
   portTunnels,
@@ -410,6 +413,7 @@ export function createWsRouter({
       workingTrees: worktreeProbe.getStates(),
       repoLabels: worktreeProbe.getRepoLabels(),
       projectsWithoutRepo: worktreeProbe.getProjectsWithoutRepo(),
+      projectIcons: projectIcons?.getUrls(),
     })
 
     const sidebar: SidebarSnapshotEntry = {

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { SidebarChatRow, SidebarProjectGroup } from "../../shared/types"
-import { computeChannelSections, getChannelPeekGroups } from "./channel-sections"
+import { computeChannelSections, getChannelPeekGroups, getPinnedChannelChats } from "./channel-sections"
+import { flattenSidebarThreads } from "./thread-sections"
 
 const NOW = new Date(2026, 9, 1, 12).getTime()
 const DAY = 24 * 60 * 60 * 1_000
@@ -86,9 +87,9 @@ describe("getChannelPeekGroups", () => {
       chat("today", NOW),
       chat("yesterday", NOW - DAY),
     ])).toEqual([
+      ["Relevant", ["unread"]],
       ["Pinned", ["pinned"]],
       ["In Progress", ["running"]],
-      ["Relevant", ["unread"]],
       ["Today", ["today"]],
     ])
   })
@@ -106,5 +107,20 @@ describe("getChannelPeekGroups", () => {
 
   test("is empty for a project with no chats to show", () => {
     expect(peek([chat("unsent", NOW, { lastMessageAt: undefined })])).toEqual([])
+  })
+})
+
+describe("getPinnedChannelChats", () => {
+  test("lists pinned chats from every project in pin order, without archived ones", () => {
+    const threads = flattenSidebarThreads({
+      projectGroups: [
+        project("a", [chat("later", NOW, { pinnedAt: 20 }), chat("plain", NOW)]),
+        {
+          ...project("b", [chat("earlier", NOW, { pinnedAt: 10 })]),
+          archivedChats: [chat("archived", NOW, { pinnedAt: 5 })],
+        } as SidebarProjectGroup,
+      ],
+    })
+    expect(getPinnedChannelChats(threads).map((thread) => thread.chatId)).toEqual(["earlier", "later"])
   })
 })

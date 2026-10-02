@@ -46,8 +46,16 @@ const COLLISION_PADDING_PX = 12
  * scrolling inside, and only where a row sits too low to leave it the
  * minimum does it rise above the row to make room (Radix shifts a card that
  * doesn't fit, by exactly what it lacks).
+ *
+ * Read it with a fallback (`var(…, 60vh)`). It is set a commit after the card
+ * mounts, and without one that first layout has no cap at all.
  */
 export const LIST_HOVER_CARD_ROOM_BELOW = "--list-hover-card-room-below"
+
+/** A Radix menu (a row's right-click menu) that is up. */
+const OPEN_MENU_SELECTOR = "[data-radix-menu-content][data-state='open']"
+/** Marks every hover card's element, so one can tell the pointer is over another. */
+const LIST_HOVER_CARD_ATTRIBUTE = "data-list-hover-card"
 
 interface Point {
   x: number
@@ -166,6 +174,14 @@ export function ListHoverCard({
   const dismissedKeyRef = useRef<string | null>(null)
   const anchorRef = useRef<{ getBoundingClientRect: () => DOMRect } | null>(null)
   const contentRef = useRef<HTMLDivElement | null>(null)
+  // The card's element as state too, for the one effect that has to run when
+  // it appears: Radix mounts the card through a portal, a commit after the
+  // render that opened it, so on that render the ref is still empty.
+  const [contentNode, setContentNode] = useState<HTMLDivElement | null>(null)
+  const setContent = useCallback((node: HTMLDivElement | null) => {
+    contentRef.current = node
+    setContentNode(node)
+  }, [])
   // The safe triangle's point: where the pointer last was on the card's row.
   const apexRef = useRef<Point | null>(null)
   const pointerRef = useRef<Point | null>(null)
@@ -384,14 +400,44 @@ export function ListHoverCard({
     }
   }, [clearRestTimer, containerRef, drawSafeTriangle, getSafeTriangle, hasFinePointer, rowAttribute, setHovered])
 
+  // A right-click menu opened from inside the card makes everything under it
+  // dead to the pointer while it is up (Radix's menus do), which the browser
+  // reports as the pointer leaving the card. It hasn't: the menu belongs to a
+  // row in the card, and closing the card would take the menu with it. So
+  // that leave is held, and looked at again on the first move after the menu
+  // has gone, when where the pointer really is can be told.
+  const menuHoldRef = useRef<((event: PointerEvent) => void) | null>(null)
+  const releaseMenuHold = useCallback(() => {
+    if (!menuHoldRef.current) return
+    window.removeEventListener("pointermove", menuHoldRef.current)
+    menuHoldRef.current = null
+  }, [])
+  useEffect(() => releaseMenuHold, [releaseMenuHold])
+
   const handleContentPointerLeave = useCallback((event: { relatedTarget: EventTarget | null }) => {
     if (pinnedKeyRef.current !== null) return
     const next = event.relatedTarget
     // Back onto the list: its pointer listeners re-anchor the card in the
     // same move, so clearing here would only flicker it.
     if (next instanceof Node && containerRef.current?.contains(next)) return
+    if (document.querySelector(OPEN_MENU_SELECTOR)) {
+      if (menuHoldRef.current) return
+      const recheck = (moveEvent: PointerEvent) => {
+        if (document.querySelector(OPEN_MENU_SELECTOR)) return
+        releaseMenuHold()
+        const target = moveEvent.target
+        // Any hover card counts: one nested in this card is outside its
+        // element, but not outside it.
+        const stillOver = target instanceof Element
+          && (containerRef.current?.contains(target) || target.closest(`[${LIST_HOVER_CARD_ATTRIBUTE}]`))
+        if (!stillOver && pinnedKeyRef.current === null) setHovered(null)
+      }
+      menuHoldRef.current = recheck
+      window.addEventListener("pointermove", recheck)
+      return
+    }
     setHovered(null)
-  }, [containerRef, setHovered])
+  }, [containerRef, releaseMenuHold, setHovered])
 
   const content = hasFinePointer && shownKey ? children(shownKey, dismiss) : null
   const open = content != null
@@ -401,13 +447,19 @@ export function ListHoverCard({
   // `LIST_HOVER_CARD_ROOM_BELOW`. Measured when the card moves to a row, not
   // while it is up; a window resized under an open card is rare and the next
   // row corrects it.
+  //
+  // Keyed on the card's element as well as its row: the first time a card
+  // opens there is no element yet when this runs for the row (see
+  // `contentNode`). Missing that left the variable unset on every first
+  // open, and a list capped by an unset variable is not capped at all: a
+  // channel with hundreds of chats laid every one of them out, off the
+  // bottom of the window.
   useLayoutEffect(() => {
-    const content = contentRef.current
     const anchor = anchorRef.current
-    if (!content || !anchor) return
+    if (!contentNode || !anchor) return
     const room = window.innerHeight - (anchor.getBoundingClientRect().top + alignOffset) - COLLISION_PADDING_PX
-    content.style.setProperty(LIST_HOVER_CARD_ROOM_BELOW, `${Math.max(0, room)}px`)
-  }, [alignOffset, open, shownKey])
+    contentNode.style.setProperty(LIST_HOVER_CARD_ROOM_BELOW, `${Math.max(0, room)}px`)
+  }, [alignOffset, contentNode, shownKey])
 
   // The card is placed a frame after it mounts, and again when the row under
   // it changes; the drawn triangle follows it there.
@@ -440,7 +492,8 @@ export function ListHoverCard({
       />
       <PopoverPrimitive.Portal>
         <PopoverPrimitive.Content
-          ref={contentRef}
+          ref={setContent}
+          {...{ [LIST_HOVER_CARD_ATTRIBUTE]: "" }}
           side={side}
           // Top-aligned with the row: centred, a tall card floats above the
           // row it describes and leaves you tracing back to which.

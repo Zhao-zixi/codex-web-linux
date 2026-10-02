@@ -4,6 +4,8 @@ import { flushSync } from "react-dom"
 import { useNavigate, useOutletContext } from "react-router-dom"
 import type { ChatInputHandle } from "../../components/chat-ui/ChatInput"
 import { ChatNavbar, ChatNavbarWash } from "../../components/chat-ui/ChatNavbar"
+import { ChatNavbarTitle } from "../../components/chat-ui/ChatNavbarTitle"
+import type { ThreadRowMenuActions } from "../../components/chat-ui/sidebar/ThreadRow"
 import { WidgetsSidebar } from "../../components/chat-ui/widgets/WidgetsSidebar"
 // Code-split: GitWidgets pulls @pierre/diffs, which pulls shiki core and ~300
 // language grammars. The widget column is not first paint, so none of that
@@ -27,6 +29,7 @@ import { shouldOpenLocalFileLinkInEditor } from "../../lib/pathUtils"
 import { getChatViewer, openViewer, useChatViewer, useViewerStore } from "../../stores/viewerStore"
 import type { DiffViewerContext } from "../../components/chat-ui/git/DiffViewer"
 import { useProjectRepoUrl, useSidebarChatHasMessages } from "../../stores/sidebarStore"
+import { useSidebarViewStore } from "../../stores/sidebarViewStore"
 import { DEFAULT_PROJECT_TERMINAL_LAYOUT, isTerminalVisible, useTerminalLayoutStore } from "../../stores/terminalLayoutStore"
 import { usePaneChatKey } from "../../lib/paneVisibility"
 import { useTerminalPreferencesStore } from "../../stores/terminalPreferencesStore"
@@ -592,6 +595,47 @@ export function ChatPage() {
 
   const isMobileViewport = useIsMobileViewport()
   const navigate = useNavigate()
+  // The Channels view's sidebar lists projects, so the bar names the chat
+  // (`ChatNavbarTitle`).
+  const channelsView = useSidebarViewStore((store) => store.view === "channels")
+  const activeChatIdForTitle = state.activeChatId
+  // The chat's sidebar-row menu, on the title that stands in for that row.
+  const navbarTitleActions = useMemo<ThreadRowMenuActions>(() => ({
+    onCreateChat: (id) => { void state.handleCreateChat(id) },
+    onRenameChat: (chat) => { void state.handleRenameChat(chat) },
+    onShareChat: (id) => { void state.handleShareChat(id) },
+    onCopyPath: (path) => { void state.handleCopyPath(path) },
+    onOpenExternalPath: (action, path) => { void state.handleOpenExternalPath(action, path) },
+    onForkChat: (chat) => { void state.handleForkChat(chat) },
+    onToggleChatPin: (chat) => { void state.handleToggleChatPin(chat) },
+    onArchiveChat: (chat) => { void state.handleArchiveChat(chat) },
+    onRestoreChat: (id) => { void state.handleRestoreChat(id) },
+    onDeleteChat: (chat) => { void state.handleDeleteChat(chat) },
+  }), [state.handleArchiveChat, state.handleCopyPath, state.handleCreateChat, state.handleDeleteChat, state.handleForkChat, state.handleOpenExternalPath, state.handleRenameChat, state.handleRestoreChat, state.handleShareChat, state.handleToggleChatPin])
+  const handleOpenProjectFolder = useCallback(() => {
+    void state.handleOpenExternal("open_finder")
+  }, [state.handleOpenExternal])
+  // Straight to the socket: the sidebar's rename asks for the name in a
+  // dialog, and here it has already been typed.
+  const handleRenameActiveChat = useCallback((title: string) => {
+    if (!activeChatIdForTitle) return
+    void state.socket.command({ type: "chat.rename", chatId: activeChatIdForTitle, title }).catch(() => {})
+  }, [activeChatIdForTitle, state.socket])
+  const navbarTitleText = state.runtime?.title
+  const navbarBranchName = state.chatDiffSnapshot?.branchName
+  // Memoized: the navbar it goes into is, and a new element each render
+  // would re-render it with every streamed entry.
+  const navbarTitle = useMemo(() => (channelsView && state.activeChatId && navbarTitleText ? (
+    <ChatNavbarTitle
+      chatId={state.activeChatId}
+      title={navbarTitleText}
+      branchName={navbarBranchName}
+      editorLabel={state.editorLabel}
+      actions={navbarTitleActions}
+      onOpenFolder={handleOpenProjectFolder}
+      onRename={handleRenameActiveChat}
+    />
+  ) : null), [channelsView, handleOpenProjectFolder, handleRenameActiveChat, navbarBranchName, navbarTitleActions, navbarTitleText, state.activeChatId, state.editorLabel])
   const terminalLayout = useMemo(() => {
     const mainSizes = getEffectiveTerminalMainSizes(storedTerminalLayout.mainSizes, isMobileViewport)
     return mainSizes === storedTerminalLayout.mainSizes ? storedTerminalLayout : { ...storedTerminalLayout, mainSizes }
@@ -1447,6 +1491,7 @@ export function ChatPage() {
       terminalShortcut={resolvedKeybindings.bindings.toggleEmbeddedTerminal}
       rightSidebarShortcut={resolvedKeybindings.bindings.toggleRightSidebar}
       branchName={state.chatDiffSnapshot?.branchName}
+      titleSlot={navbarTitle}
       repoUrl={activeProjectRepoUrl}
       hasGitRepo={state.chatDiffSnapshot?.status !== "no_repo"}
       gitStatus={state.chatDiffSnapshot?.status}

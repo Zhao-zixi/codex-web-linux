@@ -122,7 +122,8 @@ export interface ChannelPeekGroup {
 /**
  * The chats a channel's hover card offers: the ones you are most likely
  * hovering it to reach. That is everything in the Chats view's sections down
- * to Relevant (Pinned, In Progress, Relevant), and then one group further:
+ * to Relevant (Relevant, Pinned, In Progress, in that order here), and then
+ * one group further:
  * the project's most recent date bucket. A project with nothing pressing
  * therefore shows just its latest day of chats.
  *
@@ -139,9 +140,24 @@ export function getChannelPeekGroups(
   const sections = computeSidebarThreadSections(threads, nowMs, draftStartTimes, pendingSends)
   const buckets = all ? sections.buckets : sections.buckets.slice(0, 1)
   return [
+    // Relevant leads here, above Pinned, unlike the Chats view: a channel's
+    // pinned chats are already in the sidebar, above the channels, so what
+    // the card has to put first is what wants you now.
+    { key: "relevant", label: "Relevant", threads: mergeRelevantThreads(sections, draftStartTimes) },
     { key: "pinned", label: "Pinned", threads: sections.pinned },
     { key: "in-progress", label: "In Progress", threads: sections.inProgress },
-    { key: "relevant", label: "Relevant", threads: mergeRelevantThreads(sections, draftStartTimes) },
     ...buckets.map((bucket) => ({ key: bucket.key, label: bucket.label, threads: bucket.threads })),
   ].filter((peekGroup) => peekGroup.threads.length > 0)
+}
+
+/**
+ * Every pinned chat, across projects, in the order they were pinned: what the
+ * Channels sidebar lists above its channels. A pin means "keep this in view",
+ * and a channel list shows no chats, so without this a pinned chat would only
+ * be found inside its channel's card.
+ */
+export function getPinnedChannelChats(threads: readonly SidebarThread[]): SidebarThread[] {
+  return threads
+    .filter((thread) => !thread.archived && thread.row.pinnedAt != null)
+    .sort((left, right) => left.row.pinnedAt! - right.row.pinnedAt! || left.chatId.localeCompare(right.chatId))
 }

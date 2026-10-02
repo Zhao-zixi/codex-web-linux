@@ -127,6 +127,11 @@ interface Props {
    * keeps its sections apart from the others' and from the Chats view's.
    */
   expandScope?: string
+  /**
+   * Rows lead with their project's icon. For the Chats view, which spans
+   * projects; a channel's own chats are all one project and leave it off.
+   */
+  showProjectIcons?: boolean
 }
 
 /**
@@ -151,6 +156,7 @@ function ThreadSectionsImpl({
   onCopyPath,
   onOpenExternalPath,
   expandScope = "chats",
+  showProjectIcons = false,
 }: Props) {
   // Drafts are browser-local, so they reach the sections as an argument rather
   // than as a field on the rows the server sent.
@@ -203,6 +209,7 @@ function ThreadSectionsImpl({
       detailScope="cross-project"
       nowMs={nowMs}
       dimIdleTitles={false}
+      showProjectIcon={showProjectIcons}
       onSelect={onSelectChat}
       onCreateChat={onCreateChat}
       onRenameChat={onRenameChat}
@@ -302,6 +309,7 @@ function ThreadSectionsImpl({
                     detailScope="cross-project"
                     nowMs={nowMs}
                     dimIdleTitles={false}
+                    showProjectIcon={showProjectIcons}
                     onSelect={onOpenArchivedChat}
                     onCreateChat={onCreateChat}
                     onRenameChat={onRenameChat}

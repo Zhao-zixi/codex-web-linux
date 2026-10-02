@@ -1151,6 +1151,13 @@ export interface SidebarProjectGroup {
    * repo apart from a GitHub one.
    */
   repoUrl?: string
+  /**
+   * The project's own icon, found in its files and stored small (see
+   * `project-icons.ts`). The file name changes with the icon, so the URL can
+   * be cached forever. Absent when the project has none, or it hasn't been
+   * looked for yet: draw the monogram.
+   */
+  iconUrl?: string
   localPath: string
   chats: SidebarChatRow[]
   previewChats: SidebarChatRow[]
@@ -1266,6 +1273,11 @@ export interface AppSettingsSnapshot {
   providerDefaults: ChatProviderPreferences
   /** Labs: the tabbed Chats/Projects "New Sidebar". On by default; false opts back into the legacy sidebar. */
   newSidebarEnabled: boolean
+  /**
+   * Draw each chat's project icon in the sidebar's Chats view, where the
+   * agent's icon otherwise sits. On unless false, and absent when on.
+   */
+  projectIconsInChats?: boolean
   /** Base directory where cloned and newly created projects are placed. */
   newProjectsDirectory: string
   /**
@@ -1317,6 +1329,7 @@ export interface AppSettingsPatch {
   chatBrowserNotificationPreference?: ChatBrowserNotificationPreference
   submitWhileRunning?: SubmitWhileRunning
   newSidebarEnabled?: boolean
+  projectIconsInChats?: boolean
   newProjectsDirectory?: string
   setupShown?: boolean
   setupCompleted?: boolean

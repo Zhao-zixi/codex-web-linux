@@ -183,6 +183,39 @@ describe("ThreadRowContent draft glyph", () => {
   })
 })
 
+describe("ThreadRowContent project icon", () => {
+  const iconUrl = "/api/project-icons/0123456789abcdef-0123456789ab.png"
+
+  test("is off unless asked for", () => {
+    const html = renderRow({ thread: { ...thread(), projectIconUrl: iconUrl }, detailLabel: null })
+
+    expect(html).not.toContain(iconUrl)
+  })
+
+  test("takes the harness icon's slot, as an image or as initials", () => {
+    const withIcon = renderRow({ thread: { ...thread(), projectIconUrl: iconUrl }, showProjectIcon: true, detailLabel: null })
+    expect(withIcon).toContain(`src="${iconUrl}"`)
+
+    const withoutIcon = renderRow({ thread: { ...thread(), projectTitle: "kanna-site" }, showProjectIcon: true, detailLabel: null })
+    expect(withoutIcon).toContain(">KS<")
+  })
+
+  test("yields to the status dot and the draft pencil", () => {
+    const running = renderRow({
+      thread: { ...thread({ status: "running" }), projectIconUrl: iconUrl },
+      showStatus: true,
+      showProjectIcon: true,
+      detailLabel: null,
+    })
+    expect(running).toContain("animate-spin")
+    expect(running).not.toContain(iconUrl)
+
+    const drafted = renderRow({ thread: { ...thread(), projectIconUrl: iconUrl }, showProjectIcon: true, hasDraft: true, detailLabel: null })
+    expect(drafted).toContain("lucide-pencil-line")
+    expect(drafted).not.toContain(iconUrl)
+  })
+})
+
 describe("ThreadRowContent detail label", () => {
   test("renders exactly what it is given", () => {
     expect(renderRow({ thread: thread(), detailLabel: "4h" })).toContain("4h")

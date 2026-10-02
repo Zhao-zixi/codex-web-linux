@@ -14,11 +14,11 @@ import { CHAT_INPUT_ATTRIBUTE } from "./chatFocusPolicy"
 import { projectActivity } from "./kannaStateHelpers"
 import { PANE_EASING, prefersReducedMotion } from "./paneAnimation"
 import { SidebarChatHoverCard } from "../components/chat-ui/sidebar/ChatHoverCard"
-import { ThreadRow } from "../components/chat-ui/sidebar/ThreadRow"
+import { ThreadRow, ThreadRowMenu } from "../components/chat-ui/sidebar/ThreadRow"
 import { ThreadSections } from "../components/chat-ui/sidebar/ThreadSections"
 import { Kbd } from "../components/ui/kbd"
 import { SidebarViewSwitcher } from "../components/chat-ui/sidebar/SidebarViewSwitcher"
-import { ChannelList, type ChannelActions, type RenderChatHoverCard } from "../components/channels/ChannelList"
+import { ChannelList, type ChannelActions, type RenderChatHoverCard, type RenderChatMenu } from "../components/channels/ChannelList"
 import { useSidebarViewStore } from "../stores/sidebarViewStore"
 import { MachineSwitcher } from "./MachineSwitcher"
 import { getResolvedKeybindings } from "../lib/keybindings"
@@ -49,6 +49,7 @@ import {
 } from "../stores/focusModeStore"
 import { formatActionShortcut } from "../lib/keybindings"
 import { SIDEBAR_MAX_WIDTH_PX } from "../lib/sidebarWidth"
+import type { SidebarThread } from "../lib/thread-sections"
 import { useStableSidebarThreads } from "./useStableSidebarThreads"
 import { OPEN_COMMAND_PALETTE_EVENT, openCommandPalette } from "../components/command-palette/CommandPalette"
 
@@ -541,6 +542,54 @@ function KannaSidebarImpl({
     navigate(`/chat/${chatId}`, { state: buildChatJumpLocationState(role) })
   }, [navigate])
 
+  // A pinned chat, listed above the channels in the Channels view. The same
+  // row as the Chats view's, naming its project: these come from all of them.
+  const renderPinnedChatRow = useCallback((thread: SidebarThread) => (
+    <ThreadRow
+      key={thread.chatId}
+      thread={thread}
+      isActive={activeChatId === normalizeChatId(thread.chatId)}
+      editorLabel={editorLabel}
+      detailScope="cross-project"
+      nowMs={nowMs}
+      dimIdleTitles={false}
+      onSelect={selectChat}
+      onCreateChat={onCreateChat}
+      onRenameChat={onRenameChat}
+      onShareChat={onShareChat}
+      onCopyPath={onCopyPath}
+      onOpenExternalPath={onOpenExternalPath}
+      onForkChat={onForkChat}
+      onToggleChatPin={onToggleChatPin}
+      onArchiveChat={onArchiveChat}
+      onRestoreChat={handleRestoreChat}
+      onDeleteChat={onDeleteChat}
+    />
+  ), [activeChatId, editorLabel, handleRestoreChat, nowMs, onArchiveChat, onCopyPath, onCreateChat, onDeleteChat, onForkChat, onOpenExternalPath, onRenameChat, onShareChat, onToggleChatPin, selectChat])
+
+  // The chat rows' own right-click menu, for the chats inside a channel's
+  // card. The items that take you elsewhere or open a dialog close the card
+  // first; the rest (pin, archive, copy, open in…) leave you where you were,
+  // card included.
+  const renderChannelChatMenu = useCallback<RenderChatMenu>((thread, row, closeCard) => (
+    <ThreadRowMenu
+      thread={thread}
+      editorLabel={editorLabel}
+      onCreateChat={(projectId) => { closeCard(); onCreateChat(projectId) }}
+      onRenameChat={(chat) => { closeCard(); onRenameChat(chat) }}
+      onShareChat={(chatId) => { closeCard(); onShareChat(chatId) }}
+      onForkChat={(chat) => { closeCard(); onForkChat(chat) }}
+      onDeleteChat={(chat) => { closeCard(); onDeleteChat(chat) }}
+      onCopyPath={onCopyPath}
+      onOpenExternalPath={onOpenExternalPath}
+      onToggleChatPin={onToggleChatPin}
+      onArchiveChat={onArchiveChat}
+      onRestoreChat={handleRestoreChat}
+    >
+      {row}
+    </ThreadRowMenu>
+  ), [editorLabel, handleRestoreChat, onArchiveChat, onCopyPath, onCreateChat, onDeleteChat, onForkChat, onOpenExternalPath, onRenameChat, onShareChat, onToggleChatPin])
+
   const channelActions = useMemo<ChannelActions>(() => ({
     editorLabel,
     onCreateChat,
@@ -782,6 +831,7 @@ function KannaSidebarImpl({
   const isLocalProjectsActive = isRootActive || location.pathname === "/home"
   const newSidebarEnabled = useAppSettingsStore((s) => s.settings?.newSidebarEnabled !== false)
   const devbox = useAppSettingsStore((s) => s.settings?.devbox === true)
+  const projectIconsInChats = useAppSettingsStore((s) => s.settings?.projectIconsInChats !== false)
   const newSidebarProjectsView = newSidebarEnabled && sidebarView === "projects"
 
   // New Sidebar's Projects tab hides projects with no chats and sorts by
@@ -1156,6 +1206,7 @@ function KannaSidebarImpl({
               <ThreadSections
                 // A channel's chats remember their sections per channel.
                 expandScope={sidebarView === "channels" && focusedProjectGroup ? `channel:${focusedProjectGroup.groupKey}` : undefined}
+                showProjectIcons={projectIconsInChats && sidebarView === "recents"}
                 threads={threads}
                 activeChatId={activeChatId}
                 editorLabel={editorLabel}
@@ -1204,6 +1255,9 @@ function KannaSidebarImpl({
                 onSelectChat={selectChat}
                 renderChatHoverCard={renderChannelChatHoverCard}
                 actions={channelActions}
+                renderChatMenu={renderChannelChatMenu}
+                threads={threads}
+                renderPinnedChatRow={renderPinnedChatRow}
               />
             ) : null}
 

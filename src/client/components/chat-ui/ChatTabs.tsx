@@ -2,11 +2,12 @@ import { memo, useCallback, useEffect, useMemo, useRef, type ReactNode, type Ref
 import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent, type Modifier } from "@dnd-kit/core"
 import { SortableContext, arrayMove, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable"
 import { CSS as DndCSS } from "@dnd-kit/utilities"
-import { X } from "lucide-react"
+import { PencilLine, X } from "lucide-react"
 import { getAdjacentChatTab, getChatTabAfterClose, type ChatTab } from "../../lib/chat-tabs"
 import { isMacApp } from "../../lib/macApp"
 import { flattenSidebarThreads, type SidebarThread } from "../../lib/thread-sections"
 import { cn, normalizeChatId } from "../../lib/utils"
+import { useChatHasDraft } from "../../stores/chatInputStore"
 import { useChatTabsStore } from "../../stores/chatTabsStore"
 import { useSidebarData, useSidebarReady } from "../../stores/sidebarStore"
 import { openContextMenuFromButton } from "../open-external-menu"
@@ -40,8 +41,9 @@ interface TabProps {
  * hover.
  *
  * The mark is what the channel list's is: the chat's status while it wants
- * something (running, waiting on you, unread), and otherwise its project's
- * icon, which is all a tab says of its project. On the open tab it is also a
+ * something (running, waiting on you, unread), then a pencil for an unsent
+ * draft, and otherwise its project's icon, which is all a tab says of its
+ * project. On the open tab it is also a
  * button for the chat's menu, which a right-click anywhere on a tab opens
  * too.
  *
@@ -56,9 +58,15 @@ const Tab = memo(function Tab({ tab, thread, active, isNew, editorLabel, actions
   })
   const title = thread?.title ?? "New Chat"
   const statusMark = thread ? renderChatStatusDot(thread.row) : null
+  // An unsent draft takes the icon's place, as on the chat's sidebar row
+  // (`ThreadRowContent`): the same pencil, in the same red, yielding only to
+  // a status that is about what the agent needs.
+  const hasDraft = useChatHasDraft(tab.chatId)
   const mark = (
     <span className="relative flex size-4 shrink-0 items-center justify-center">
-      {statusMark ?? (thread ? <ProjectIcon name={thread.projectTitle} iconUrl={thread.projectIconUrl} /> : null)}
+      {statusMark ?? (hasDraft
+        ? <PencilLine className="h-4 w-4 shrink-0 text-logo" />
+        : thread ? <ProjectIcon name={thread.projectTitle} iconUrl={thread.projectIconUrl} /> : null)}
     </span>
   )
 
@@ -225,7 +233,7 @@ export const ChatTabs = memo(function ChatTabs({
   renderHoverCard: (containerRef: RefObject<HTMLDivElement | null>, threads: SidebarThread[]) => ReactNode
 }) {
   const tabs = useChatTabsStore((state) => state.tabs)
-  const { open, close, reorder, prune } = useChatTabsStore.getState()
+  const { open, close, reorder, prune, visit } = useChatTabsStore.getState()
   const data = useSidebarData()
   const sidebarReady = useSidebarReady()
   const listRef = useRef<HTMLDivElement>(null)
@@ -254,10 +262,10 @@ export const ChatTabs = memo(function ChatTabs({
   const tabThreads = useMemo(() => [...threadByChatId.values()], [threadByChatId])
 
   // The open chat has a tab. Opened right of the chat you came from.
-  const previousChatIdRef = useRef<string | null>(null)
+  // "Came from" is the store's history too, read before this visit joins it
+  // (the effect that records the visit is below, and so runs after).
   useEffect(() => {
-    if (activeChatId) open(activeChatId, previousChatIdRef.current)
-    previousChatIdRef.current = activeChatId
+    if (activeChatId) open(activeChatId, useChatTabsStore.getState().recentChatIds[0])
   }, [activeChatId, open])
 
   // A tab outlives neither its chat nor its chat being put away. The open
@@ -312,23 +320,19 @@ export const ChatTabs = memo(function ChatTabs({
       ?.scrollIntoView({ block: "nearest", inline: "nearest" })
   }, [activeChatId, tabs.length])
 
-  // The tabs you have been on, most recent first. Closing the open tab goes
-  // back to the one you were on before it, as closing one in a browser does,
-  // and only falls to its neighbour when there is no such tab left (a first
-  // visit, or its tab has since closed). This page's memory only: after a
-  // reload there is no "before" yet.
-  const recentChatIdsRef = useRef<string[]>([])
+  // Closing the open tab goes back to the one you were on before it, as
+  // closing one in a browser does, and only falls to its neighbour when
+  // there is no such tab left (a first visit, or its tab has since closed).
+  // The history is the store's (`recentChatIds`), which outlives this bar.
   useEffect(() => {
-    if (!activeChatId) return
-    recentChatIdsRef.current = [activeChatId, ...recentChatIdsRef.current.filter((chatId) => chatId !== activeChatId)]
-  }, [activeChatId])
+    if (activeChatId) visit(activeChatId)
+  }, [activeChatId, visit])
 
   const handleClose = useCallback((chatId: string) => {
-    const current = useChatTabsStore.getState().tabs
-    const lastSeen = recentChatIdsRef.current.find((recent) => (
+    const { tabs: current, recentChatIds } = useChatTabsStore.getState()
+    const lastSeen = recentChatIds.find((recent) => (
       recent !== chatId && current.some((tab) => tab.chatId === recent)
     ))
-    recentChatIdsRef.current = recentChatIdsRef.current.filter((recent) => recent !== chatId)
     const next = chatId === activeChatId ? lastSeen ?? getChatTabAfterClose(current, chatId) : undefined
     close(chatId)
     if (next === undefined) return

@@ -481,8 +481,11 @@ function SidebarChatHoverCardImpl({
   threads,
   side = "right",
   sideOffset,
+  holdRowUnderPointerOnMount,
   ...actions
 }: {
+  /** See `ListHoverCard`. */
+  holdRowUnderPointerOnMount?: boolean
   /** Beside a list down the sidebar; beneath for chats along a bar (the tabs). */
   side?: "right" | "bottom"
   /** The list's element; every chat row is somewhere beneath it. */
@@ -499,7 +502,7 @@ function SidebarChatHoverCardImpl({
   )
 
   return (
-    <ListHoverCard containerRef={containerRef} rowAttribute="data-chat-id" side={side} sideOffset={sideOffset}>
+    <ListHoverCard containerRef={containerRef} rowAttribute="data-chat-id" side={side} sideOffset={sideOffset} holdRowUnderPointerOnMount={holdRowUnderPointerOnMount}>
       {(rowChatId, dismiss) => {
         // Null once the hovered chat leaves the list (archived from elsewhere,
         // filtered out by focus mode), which closes the card rather than

@@ -631,6 +631,8 @@ export function ChatPage() {
       side="bottom"
       // Just clear of the tab; the default distance is a sidebar's edge.
       sideOffset={6}
+      // Opening a chat in another project rebuilds this navbar, card and all.
+      holdRowUnderPointerOnMount
       onSelectChat={handleSelectChatTab}
       onSelectMessage={(chatId, role) => navigate(`/chat/${chatId}`, { state: buildChatJumpLocationState(role) })}
       onOpenArchivedChat={(chatId) => { void state.handleOpenArchivedChat(chatId) }}

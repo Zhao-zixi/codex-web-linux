@@ -68,6 +68,9 @@ const OPEN_MENU_SELECTOR = "[data-radix-menu-content][data-state='open']"
 /** Marks every hover card's element, so one can tell the pointer is over another. */
 const LIST_HOVER_CARD_ATTRIBUTE = "data-list-hover-card"
 
+/** How soon after mounting a pointer found on a row is taken to have been there all along. */
+const HELD_ON_MOUNT_MS = 1000
+
 interface Point {
   x: number
   y: number
@@ -127,6 +130,7 @@ export function ListHoverCard({
   sideOffset = 15,
   alignOffset = 0,
   keepOpenOnRowClick = false,
+  holdRowUnderPointerOnMount = false,
   pinnedKey = null,
   onUnpin,
   alignTo,
@@ -154,6 +158,15 @@ export function ListHoverCard({
    * Set where clicking a row acts on its card instead of leaving it.
    */
   keepOpenOnRowClick?: boolean
+  /**
+   * Treats the row the pointer is already on when this mounts as dismissed,
+   * until the pointer leaves it. For a list that can be rebuilt by a click
+   * on one of its own rows (the chat tabs: opening a chat in another project
+   * rebuilds the navbar they are in). The rebuilt list is a new card that
+   * never saw the click, and would otherwise raise itself over the row that
+   * was just pressed.
+   */
+  holdRowUnderPointerOnMount?: boolean
   /**
    * Holds the card open on this row whatever the pointer does. A hover is a
    * peek and ends when the pointer leaves; a click on the row is a decision,
@@ -253,6 +266,7 @@ export function ListHoverCard({
     restTimerRef.current = null
   }, [])
 
+  const holdFirstRowRef = useRef(holdRowUnderPointerOnMount)
   const pinnedKeyRef = useRef(pinnedKey)
   // Before the handlers can run again: they read the ref.
   useLayoutEffect(() => {
@@ -310,6 +324,8 @@ export function ListHoverCard({
     const container = containerRef.current
     if (!container || !hasFinePointer) return
 
+    const mountedAt = performance.now()
+
     function keyAt(target: EventTarget | null) {
       const row = target instanceof Element ? target.closest(`[${rowAttribute}]`) : null
       return row?.getAttribute(rowAttribute) ?? null
@@ -357,6 +373,16 @@ export function ListHoverCard({
       if (event.pointerType === "touch") return
       const point = { x: event.clientX, y: event.clientY }
       pointerRef.current = point
+      if (holdFirstRowRef.current) {
+        // The first the list hears of the pointer: where it already was,
+        // if that is soon after mounting. Later, it is a pointer arriving.
+        holdFirstRowRef.current = false
+        const key = keyAt(event.target)
+        if (key !== null && performance.now() - mountedAt < HELD_ON_MOUNT_MS) {
+          dismissedKeyRef.current = key
+          return
+        }
+      }
       // A pinned card is not the pointer's to move.
       if (pinnedKeyRef.current !== null) return
       const key = keyAt(event.target)

@@ -9,7 +9,7 @@ import { isBackgroundOpenClick } from "../../lib/background-open"
 import { getPathBasename } from "../../lib/formatters"
 import { cn, normalizeChatId } from "../../lib/utils"
 import { useChannelPinStore } from "../../stores/channelPinStore"
-import { useDraftStartTimes } from "../../stores/chatInputStore"
+import { useChatHasDraft, useDraftStartTimes } from "../../stores/chatInputStore"
 import { usePendingSendTimes } from "../../stores/pendingSendStore"
 import { useSectionOverrides } from "../../stores/sidebarSectionStore"
 import { renderChatStatusDot, ThreadRowContent } from "../chat-ui/ThreadRowContent"
@@ -39,6 +39,24 @@ export type RenderChatHoverCard = (
   containerRef: RefObject<HTMLDivElement | null>,
   threads: SidebarThread[],
 ) => ReactNode
+
+/**
+ * A chat's row content in a channel's card: what its sidebar row shows,
+ * the pencil for an unsent draft included. Its own component for that: the
+ * draft is this browser's, read through a hook, one chat at a time.
+ */
+function PeekChatContent({ thread, nowMs }: { thread: SidebarThread; nowMs: number }) {
+  const hasDraft = useChatHasDraft(thread.chatId)
+  return (
+    <ThreadRowContent
+      thread={thread}
+      showStatus
+      dimIdleTitles={false}
+      hasDraft={hasDraft}
+      detailLabel={getThreadDetailLabel(thread, "project-scoped", nowMs)}
+    />
+  )
+}
 
 /**
  * What a channel's hover card holds: the chats you would open the channel to
@@ -142,12 +160,7 @@ function ChannelPeek({
                       : "border-border/0 group-hover/peek:border-border group-hover/peek:bg-muted group-data-[hover-card-open]/peek:border-border group-data-[hover-card-open]/peek:bg-muted"
                   )}
                 >
-                  <ThreadRowContent
-                    thread={thread}
-                    showStatus
-                    dimIdleTitles={false}
-                    detailLabel={getThreadDetailLabel(thread, "project-scoped", nowMs)}
-                  />
+                  <PeekChatContent thread={thread} nowMs={nowMs} />
                 </span>
               </button>
               ), onClose)}</Fragment>

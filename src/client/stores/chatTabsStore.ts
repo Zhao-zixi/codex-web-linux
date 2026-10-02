@@ -4,6 +4,7 @@ import {
   openChatTab,
   pruneChatTabs,
   reorderChatTabs,
+  MAX_CHAT_TABS,
   type ChatTab,
 } from "../lib/chat-tabs"
 import { CHAT_TABS_STORAGE_KEY } from "../lib/storageKeys"
@@ -16,6 +17,18 @@ import { CHAT_TABS_STORAGE_KEY } from "../lib/storageKeys"
 
 interface ChatTabsState {
   tabs: ChatTab[]
+  /**
+   * The chats you have been on, most recent first: what closing the open tab
+   * goes back to. This page's memory only, not stored: after a reload there
+   * is no "before" yet.
+   *
+   * Here and not in the tab bar, which does not live long enough to hold it:
+   * the chat page rebuilds its navbar whenever the open chat's project
+   * changes, and a history kept in the bar was lost on exactly the switches
+   * it was for.
+   */
+  recentChatIds: string[]
+  visit: (chatId: string) => void
   open: (chatId: string, afterChatId?: string | null) => void
   close: (chatId: string) => void
   reorder: (orderedChatIds: string[]) => void
@@ -49,6 +62,12 @@ export const useChatTabsStore = create<ChatTabsState>()((set) => {
 
   return {
     tabs: readStoredTabs(),
+    recentChatIds: [],
+    visit: (chatId) => set((state) => (
+      state.recentChatIds[0] === chatId
+        ? state
+        : { recentChatIds: [chatId, ...state.recentChatIds.filter((recent) => recent !== chatId)].slice(0, MAX_CHAT_TABS) }
+    )),
     open: (chatId, afterChatId) => update((tabs) => openChatTab(tabs, chatId, afterChatId)),
     close: (chatId) => update((tabs) => closeChatTab(tabs, chatId)),
     reorder: (orderedChatIds) => update((tabs) => reorderChatTabs(tabs, orderedChatIds)),

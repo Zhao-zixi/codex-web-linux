@@ -49,8 +49,13 @@ export function ProjectSectionMenu({
   onOpenInFinder,
   onOpenInEditor,
   onHide,
+  pinned,
+  onTogglePin,
   children,
 }: {
+  /** With `onTogglePin`, adds Pin / Unpin: the Channels view pins projects. */
+  pinned?: boolean
+  onTogglePin?: () => void
   editorLabel: string
   /** The project's forge page; absent when it has no browsable origin. */
   repoUrl?: string
@@ -74,6 +79,12 @@ export function ProjectSectionMenu({
           <SquarePen />
           <span>New Chat</span>
         </ContextMenuItem>
+        {onTogglePin ? (
+          <ContextMenuItem onSelect={onTogglePin}>
+            {pinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
+            <span className="text-xs font-medium">{pinned ? "Unpin" : "Pin"}</span>
+          </ContextMenuItem>
+        ) : null}
         <ContextMenuItem
           onSelect={onRename}
         >

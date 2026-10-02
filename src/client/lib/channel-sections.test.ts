@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { SidebarChatRow, SidebarProjectGroup } from "../../shared/types"
-import { computeChannelSections } from "./channel-sections"
+import { computeChannelSections, getChannelPeekGroups } from "./channel-sections"
 
 const NOW = new Date(2026, 9, 1, 12).getTime()
 const DAY = 24 * 60 * 60 * 1_000
@@ -69,5 +69,42 @@ describe("computeChannelSections", () => {
 
   test("ignores a pin for a project that is gone", () => {
     expect(sectionsOf([project("active", [chat("a", NOW)])], { gone: 1 })).toEqual([["Today", ["active"]]])
+  })
+})
+
+describe("getChannelPeekGroups", () => {
+  function peek(chats: SidebarChatRow[]) {
+    return getChannelPeekGroups(project("p", chats), NOW)
+      .map((group) => [group.label, group.threads.map((thread) => thread.chatId)])
+  }
+
+  test("offers everything down to Relevant, then the latest date bucket only", () => {
+    expect(peek([
+      chat("pinned", NOW - 9 * DAY, { pinnedAt: 1 }),
+      chat("running", NOW, { status: "running" }),
+      chat("unread", NOW - DAY, { unread: true }),
+      chat("today", NOW),
+      chat("yesterday", NOW - DAY),
+    ])).toEqual([
+      ["Pinned", ["pinned"]],
+      ["In Progress", ["running"]],
+      ["Relevant", ["unread"]],
+      ["Today", ["today"]],
+    ])
+  })
+
+  test("is the latest day alone for a project with nothing pressing", () => {
+    expect(peek([chat("a", NOW - DAY), chat("b", NOW - 9 * DAY)])).toEqual([["Yesterday", ["a"]]])
+  })
+
+  test("adds the older buckets when asked for all of them", () => {
+    const groups = getChannelPeekGroups(
+      project("p", [chat("a", NOW - DAY), chat("b", NOW - 9 * DAY)]), NOW, undefined, undefined, true,
+    )
+    expect(groups.map((group) => group.threads.map((thread) => thread.chatId))).toEqual([["a"], ["b"]])
+  })
+
+  test("is empty for a project with no chats to show", () => {
+    expect(peek([chat("unsent", NOW, { lastMessageAt: undefined })])).toEqual([])
   })
 })

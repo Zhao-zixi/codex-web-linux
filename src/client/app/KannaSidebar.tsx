@@ -18,7 +18,7 @@ import { ThreadRow } from "../components/chat-ui/sidebar/ThreadRow"
 import { ThreadSections } from "../components/chat-ui/sidebar/ThreadSections"
 import { Kbd } from "../components/ui/kbd"
 import { SidebarViewSwitcher } from "../components/chat-ui/sidebar/SidebarViewSwitcher"
-import { ChannelList } from "../components/channels/ChannelList"
+import { ChannelList, type ChannelActions, type RenderChatHoverCard } from "../components/channels/ChannelList"
 import { useSidebarViewStore } from "../stores/sidebarViewStore"
 import { MachineSwitcher } from "./MachineSwitcher"
 import { getResolvedKeybindings } from "../lib/keybindings"
@@ -540,6 +540,35 @@ function KannaSidebarImpl({
   const selectChatMessage = useCallback((chatId: string, role: ChatJumpRole) => {
     navigate(`/chat/${chatId}`, { state: buildChatJumpLocationState(role) })
   }, [navigate])
+
+  const channelActions = useMemo<ChannelActions>(() => ({
+    editorLabel,
+    onCreateChat,
+    onRenameProject,
+    onCopyPath,
+    onOpenExternalPath,
+    onShowArchivedProject: setArchivedProjectId,
+    onHideProject,
+  }), [editorLabel, onCopyPath, onCreateChat, onHideProject, onOpenExternalPath, onRenameProject])
+
+  // The chat hover card again, for the chats inside a channel's card. Stable,
+  // so the memoized channel rows are not re-rendered by it.
+  const renderChannelChatHoverCard = useCallback<RenderChatHoverCard>((containerRef, cardThreads) => (
+    <SidebarChatHoverCard
+      containerRef={containerRef}
+      threads={cardThreads}
+      // 2px off the channel's card, as that card is off the sidebar: a row
+      // ends 7px inside its card (padding and border).
+      sideOffset={9}
+      onSelectChat={selectChat}
+      onSelectMessage={selectChatMessage}
+      onOpenArchivedChat={onOpenArchivedChat}
+      onSetupGit={onSetupGit}
+      onLoadTouchedFiles={onLoadTouchedFiles}
+      onLoadPreview={onLoadPreview}
+      onOpenExternalPath={onOpenExternalPath}
+    />
+  ), [onLoadPreview, onLoadTouchedFiles, onOpenArchivedChat, onOpenExternalPath, onSetupGit, selectChat, selectChatMessage])
 
   const renderChatRow = useCallback((chat: SidebarChatRow) => {
     const thread = threadByChatId.get(chat.chatId)
@@ -1125,6 +1154,8 @@ function KannaSidebarImpl({
             {/* A channel that is open is its chats, as the Chats view shows them. */}
             {newSidebarEnabled && (sidebarView === "recents" || (sidebarView === "channels" && focusedProjectGroup)) ? (
               <ThreadSections
+                // A channel's chats remember their sections per channel.
+                expandScope={sidebarView === "channels" && focusedProjectGroup ? `channel:${focusedProjectGroup.groupKey}` : undefined}
                 threads={threads}
                 activeChatId={activeChatId}
                 editorLabel={editorLabel}
@@ -1168,7 +1199,11 @@ function KannaSidebarImpl({
                 projectGroups={allProjectsData.projectGroups}
                 activeProjectId={currentProjectId}
                 nowMs={nowMs}
+                activeChatId={activeChatId}
                 onSelect={selectProject}
+                onSelectChat={selectChat}
+                renderChatHoverCard={renderChannelChatHoverCard}
+                actions={channelActions}
               />
             ) : null}
 

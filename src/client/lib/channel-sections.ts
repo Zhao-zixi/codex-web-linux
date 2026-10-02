@@ -112,3 +112,36 @@ export function computeChannelSections(
   ]
   return result.filter((section) => section.groups.length > 0)
 }
+
+export interface ChannelPeekGroup {
+  key: string
+  label: string
+  threads: SidebarThread[]
+}
+
+/**
+ * The chats a channel's hover card offers: the ones you are most likely
+ * hovering it to reach. That is everything in the Chats view's sections down
+ * to Relevant (Pinned, In Progress, Relevant), and then one group further:
+ * the project's most recent date bucket. A project with nothing pressing
+ * therefore shows just its latest day of chats.
+ *
+ * `all` is the card asked for the rest: every date bucket, in order.
+ */
+export function getChannelPeekGroups(
+  group: SidebarProjectGroup,
+  nowMs: number,
+  draftStartTimes?: DraftStartTimes,
+  pendingSends?: PendingSendTimes,
+  all = false,
+): ChannelPeekGroup[] {
+  const threads = flattenSidebarThreads({ projectGroups: [group] })
+  const sections = computeSidebarThreadSections(threads, nowMs, draftStartTimes, pendingSends)
+  const buckets = all ? sections.buckets : sections.buckets.slice(0, 1)
+  return [
+    { key: "pinned", label: "Pinned", threads: sections.pinned },
+    { key: "in-progress", label: "In Progress", threads: sections.inProgress },
+    { key: "relevant", label: "Relevant", threads: mergeRelevantThreads(sections, draftStartTimes) },
+    ...buckets.map((bucket) => ({ key: bucket.key, label: bucket.label, threads: bucket.threads })),
+  ].filter((peekGroup) => peekGroup.threads.length > 0)
+}

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react"
 import { Workflow } from "lucide-react"
 import { normalizeToolCall } from "../../shared/tools"
 import type { SubagentActivity, TranscriptEntry, WorkflowAgent, WorkflowAgentState, WorkflowProgress } from "../../shared/types"
-import { CHAT_HOVER_CARD_CONTENT_CLASSNAME } from "../components/chat-ui/sidebar/ChatHoverCard"
+import { HOVER_CARD_SURFACE_CLASSNAME } from "../components/ui/list-hover-card"
 import { deriveSubagentDetails, deriveSubagentToolIds, latestWorkflows, orderTaskLog } from "../components/chat-ui/widgets/derive"
 import { AgentHoverCardContent, TaskHoverCardContent, TasksWidget } from "../components/chat-ui/widgets/TasksWidget"
 import type { StopTaskControl } from "../components/chat-ui/widgets/useStopTask"
@@ -309,7 +309,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 
 /** A hover card's content in the card's own surface, shown open. */
 function StaticCard({ children }: { children: ReactNode }) {
-  return <div className={cn(CHAT_HOVER_CARD_CONTENT_CLASSNAME, "animate-none")}>{children}</div>
+  return <div className={cn(HOVER_CARD_SURFACE_CLASSNAME, "animate-none")}>{children}</div>
 }
 
 export function WorkflowsGalleryPage() {

@@ -124,6 +124,12 @@ export const SETTINGS_ROWS = defineRows({
     description: "Keep the chats you open as tabs in the title bar, to switch between, rearrange and close.",
     keywords: ["tabs", "tab bar", "title bar", "navbar", "open chats", "switch"],
   },
+  widgetsPeek: {
+    sectionId: "general",
+    title: "Peek at Widgets",
+    description: "Show the closed widget column over the chat while the mouse is at the window's right edge.",
+    keywords: ["widgets", "right sidebar", "hover", "edge", "popout", "overlay", "slideover", "peek"],
+  },
   chatSounds: {
     sectionId: "general",
     title: "Chat Sounds",

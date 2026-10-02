@@ -374,13 +374,14 @@ const MobileSidebarPane = memo(function MobileSidebarPane({
       />
       <div
         className={cn(
-          "absolute inset-y-0 right-0 flex w-[min(92vw,30rem)] max-w-full min-h-0 flex-col overflow-hidden transition-transform ease-glide motion-reduce:transition-none",
+          "group/widgets absolute inset-y-0 right-0 flex w-[min(92vw,30rem)] max-w-full min-h-0 flex-col overflow-hidden transition-transform ease-glide motion-reduce:transition-none",
           "pt-[max(env(safe-area-inset-top),0px)] pb-[max(env(safe-area-inset-bottom),0px)]",
           showRightSidebar ? "translate-x-0 duration-300" : "translate-x-full duration-[240ms]",
         )}
         data-right-sidebar-open={showRightSidebar ? "true" : "false"}
         data-right-sidebar-animated="false"
         data-right-sidebar-visual
+        data-slideover
       >
         {content}
       </div>

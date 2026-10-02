@@ -149,7 +149,9 @@ export function WidgetSection({
  */
 export function WidgetGroup({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <section className={cn("divide-y divide-border overflow-hidden rounded-2xl border border-border bg-background dark:bg-card mac-app:rounded-[calc(var(--mac-window-radius)-8px)]", className)}>
+    // Lifted off whatever is under it while the column is a slideover (the
+    // desktop peek, the phone's sheet); beside the chat it sits flat.
+    <section className={cn("divide-y divide-border overflow-hidden rounded-2xl border border-border bg-background dark:bg-card mac-app:rounded-[calc(var(--mac-window-radius)-8px)] transition-shadow duration-200 ease-out group-data-[slideover]/widgets:shadow-md", className)}>
       {/* The right sidebar is scanned like the left one; see StillTooltips. */}
       <StillTooltips>{children}</StillTooltips>
     </section>

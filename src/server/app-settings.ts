@@ -67,6 +67,7 @@ interface AppSettingsFile {
   newSidebarEnabled?: unknown
   projectIconsInChats?: unknown
   chatTabsEnabled?: unknown
+  widgetsPeekEnabled?: unknown
   newProjectsDirectory?: unknown
   setupShown?: unknown
   setupCompleted?: unknown
@@ -191,6 +192,7 @@ function toFilePayload(state: AppSettingsState) {
     newSidebarEnabled: state.newSidebarEnabled,
     ...(state.projectIconsInChats === false ? { projectIconsInChats: false } : {}),
     ...(state.chatTabsEnabled === true ? { chatTabsEnabled: true } : {}),
+    ...(state.widgetsPeekEnabled === true ? { widgetsPeekEnabled: true } : {}),
     newProjectsDirectory: state.newProjectsDirectory,
     setupShown: state.setupShown,
     setupCompleted: state.setupCompleted,
@@ -222,6 +224,7 @@ function toSnapshot(
     newSidebarEnabled: state.newSidebarEnabled,
     ...(state.projectIconsInChats === false ? { projectIconsInChats: false } : {}),
     ...(state.chatTabsEnabled === true ? { chatTabsEnabled: true } : {}),
+    ...(state.widgetsPeekEnabled === true ? { widgetsPeekEnabled: true } : {}),
     newProjectsDirectory: state.newProjectsDirectory,
     setupShown: state.setupShown,
     setupCompleted: state.setupCompleted,
@@ -310,6 +313,7 @@ function normalizeAppSettings(
     newSidebarEnabled,
     ...(source?.projectIconsInChats === false ? { projectIconsInChats: false } : {}),
     ...(source?.chatTabsEnabled === true ? { chatTabsEnabled: true } : {}),
+    ...(source?.widgetsPeekEnabled === true ? { widgetsPeekEnabled: true } : {}),
     newProjectsDirectory,
     // Onboarding markers default to false so a machine that has never run the
     // wizard still gets it; once set they stay set for every browser.
@@ -351,6 +355,7 @@ function toComparablePayload(source: AppSettingsFile) {
     newSidebarEnabled: source.newSidebarEnabled,
     projectIconsInChats: source.projectIconsInChats,
     chatTabsEnabled: source.chatTabsEnabled,
+    widgetsPeekEnabled: source.widgetsPeekEnabled,
     newProjectsDirectory: typeof source.newProjectsDirectory === "string"
       ? source.newProjectsDirectory.trim()
       : source.newProjectsDirectory,

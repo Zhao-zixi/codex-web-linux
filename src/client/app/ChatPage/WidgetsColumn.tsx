@@ -7,6 +7,7 @@ import {
   RIGHT_SIDEBAR_MIN_WIDTH_PX,
 } from "../../stores/rightSidebarStore"
 import { paneDurationMs, prefersReducedMotion } from "../paneAnimation"
+import { useAppSettingsStore } from "../../stores/appSettingsStore"
 import { useEdgePeek } from "../useEdgePeek"
 
 /** The chat's narrowest, as a share of the page: beside the widget column, and beside the viewer's pane. */
@@ -88,7 +89,9 @@ export const WidgetsColumn = memo(function WidgetsColumn({
   // left sidebar takes 8: the transcript's scrollbar lives along this edge,
   // and reaching for it must not bring the column down over it.
   const visualRef = useRef<HTMLDivElement>(null)
-  const peeking = useEdgePeek({ side: "right", enabled: !open, panelRef: visualRef, edgePx: 2 })
+  // A setting, and off unless turned on (General).
+  const peekEnabled = useAppSettingsStore((store) => store.settings?.widgetsPeekEnabled === true)
+  const peeking = useEdgePeek({ side: "right", enabled: peekEnabled && !open, panelRef: visualRef, edgePx: 2 })
   useEffect(() => {
     onPeekChange(peeking)
     // The column can go away mid-peek (a narrower window, no project).
@@ -200,16 +203,19 @@ export const WidgetsColumn = memo(function WidgetsColumn({
         <div
           ref={visualRef}
           className={cn(
-            "absolute inset-y-0 left-0 min-h-0 overflow-hidden",
+            "group/widgets absolute inset-y-0 left-0 min-h-0 overflow-hidden",
             // The peek slides the content back in by a transform, from where
             // the closed column leaves it: just past the window's edge. Its
             // width stays 0, so the chat does not reflow. Opening from a peek
             // widens the column on the same clock and curve as this returns
             // to 0, and the two cancel: the content holds still while the
             // chat makes room for it. No surface or edge of its own: over
-            // the chat the widgets are cards floating on it.
+            // the chat the widgets are cards floating on it. `data-slideover`
+            // lifts them and puts a fade behind them (index.css), kept until
+            // a column opened from a peek has made its room.
             peeking && "-translate-x-full",
           )}
+          data-slideover={floating || undefined}
           style={{ width: widthPx, "--pane-duration": `${durationMs}ms` } as CSSProperties}
           data-right-sidebar-open={open || peeking ? "true" : "false"}
           // Closed counts as animated: the peek comes and goes from there.

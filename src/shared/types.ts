@@ -1284,6 +1284,12 @@ export interface AppSettingsSnapshot {
    * themselves are each browser's own; this is only whether to show them.
    */
   chatTabsEnabled?: boolean
+  /**
+   * Show the closed widget column over the chat while the mouse is at the
+   * window's right edge (the peek, as the collapsed sidebar has on the left).
+   * Off unless true, and absent when off.
+   */
+  widgetsPeekEnabled?: boolean
   /** Base directory where cloned and newly created projects are placed. */
   newProjectsDirectory: string
   /**
@@ -1337,6 +1343,7 @@ export interface AppSettingsPatch {
   newSidebarEnabled?: boolean
   projectIconsInChats?: boolean
   chatTabsEnabled?: boolean
+  widgetsPeekEnabled?: boolean
   newProjectsDirectory?: string
   setupShown?: boolean
   setupCompleted?: boolean

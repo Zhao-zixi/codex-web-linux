@@ -87,7 +87,9 @@ function WidgetsSidebarImpl({
       {/* Clears the chat navbar the column scrolls under on desktop. The
           phone's sheet is outside where the chat page sets the height, so
           it gets nothing. */}
-      <div className="flex flex-col px-2 pb-2 pt-[var(--chat-navbar-h,0px)]">
+      {/* The slideover's fade is drawn behind this stack and no taller than
+          it (index.css), so it ends where the cards do. */}
+      <div data-widgets-stack className="relative isolate flex flex-col px-2 pb-2 pt-[var(--chat-navbar-h,0px)]">
         <WidgetPresence show={tasks.length > 0}>
           <TasksWidget
             tasks={tasks}

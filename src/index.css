@@ -652,6 +652,29 @@
     visibility: hidden;
   }
 
+  /* Behind the cards of a slideover (the desktop peek, the phone's sheet):
+     the page's background, solid at the window's edge and gone by the
+     slideover's left. The fade is a mask, and the mask is the gradient
+     crossed with noise. A plain gradient between two near-equal colors has a
+     handful of steps to spread over the column's whole width, and they show
+     as bands; the noise breaks each step's edge up, pixel by pixel. */
+  [data-slideover] [data-widgets-stack]::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background: hsl(var(--background));
+    -webkit-mask-image:
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='128' height='128'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.3 0 0 0 0.85'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"),
+      linear-gradient(to left, #000, transparent);
+    -webkit-mask-composite: source-in;
+    mask-image:
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='128' height='128'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.3 0 0 0 0.85'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"),
+      linear-gradient(to left, #000, transparent);
+    mask-composite: intersect;
+  }
+
   /* Custom scrollbar styling */
   * {
     scrollbar-width: thin;

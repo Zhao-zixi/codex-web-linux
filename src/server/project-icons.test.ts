@@ -78,6 +78,21 @@ describe("rankIconCandidates", () => {
     ])).toBe("ios/App/Assets.xcassets/AppIcon.appiconset/Contents.json")
   })
 
+  test("finds icon sets filed in a catalog's group folders", () => {
+    expect(classifyIconPath("App/Assets.xcassets/Images/AppIcon.appiconset/Contents.json")).toMatchObject({ kind: "appiconset", score: 2.5 })
+    expect(classifyIconPath("App/Assets.xcassets/Images/Logo.imageset/Contents.json")).toBeNull()
+    expect(classifyIconPath("App/Images/AppIcon.appiconset/Contents.json")).toBeNull()
+  })
+
+  test("prefers an Icon Composer icon, and its main one over alternates", () => {
+    expect(best([
+      "App/App/Assets.xcassets/AppIcon.appiconset/Contents.json",
+      "App/IconGold.icon/icon.json",
+      "App/Icon.icon/icon.json",
+    ])).toBe("App/Icon.icon/icon.json")
+    expect(classifyIconPath("App/Icon.icon/Assets/layer.png")).toBeNull()
+  })
+
   test("picks the Android density nearest the stored size", () => {
     expect(best([
       "app/src/main/res/mipmap-mdpi/ic_launcher.png",
@@ -131,6 +146,32 @@ describe("findProjectIcon", () => {
     const again = await findProjectIcon(root, iconsDir, { ...found!, scannedAt: 0 })
     expect(again).toEqual(found)
     expect(await readdir(iconsDir)).toEqual([found!.file])
+  })
+
+  test("draws an Icon Composer icon's largest layer over its fill", async () => {
+    const glyph = new Uint8Array(200 * 200 * 4)
+    for (let index = 0; index < 200 * 200; index += 1) {
+      // A white glyph on the left half, clear on the right.
+      if (index % 200 < 100) glyph.set([255, 255, 255, 255], index * 4)
+    }
+    const root = await makeProject({
+      "App/Icon.icon/icon.json": JSON.stringify({
+        fill: { "automatic-gradient": "srgb:0.00000,0.50196,1.00000,1.00000" },
+        groups: [{ layers: [{ "image-name": "sparkle.png" }] }, { layers: [{ "image-name": "glyph.png" }] }],
+      }),
+      "App/Icon.icon/Assets/sparkle.png": png(8),
+      "App/Icon.icon/Assets/glyph.png": encodePng(200, 200, glyph),
+    })
+    const iconsDir = await makeIconsDir()
+    const found = await findProjectIcon(root, iconsDir)
+    expect(found?.source).toBe(path.join(root, "App/Icon.icon/Assets/glyph.png"))
+    expect(found?.background).toBe("0,128,255")
+    const stored = await readFile(path.join(iconsDir, found!.file))
+    // Opaque throughout, the fill showing where the layer is clear.
+    expect(await readPngHeader(path.join(iconsDir, found!.file))).toMatchObject({ width: 96, height: 96 })
+    const { inflateSync } = await import("node:zlib")
+    const raw = inflateSync(stored.subarray(41, 41 + stored.readUInt32BE(33)))
+    expect(raw.length).toBe(96 * (96 * 4 + 1))
   })
 
   test("reads the icon an Expo config names", async () => {

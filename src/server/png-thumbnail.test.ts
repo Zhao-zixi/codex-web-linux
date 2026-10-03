@@ -144,6 +144,19 @@ describe("writePngThumbnail", () => {
     expect(result.pixels).toEqual([[255, 0, 0, 128]])
   })
 
+  test("draws over a background when given one", async () => {
+    const source = path.join(dir, "over.png")
+    const target = path.join(dir, "over.out.png")
+    await writeFile(source, buildPng({ width: 64, height: 64, colorType: 6, rows: quadrantRows(64) }))
+    await writePngThumbnail(source, target, 2, [0, 100, 0])
+    expect(decodeOwn(await readFile(target)).pixels).toEqual([
+      [200, 10, 10, 255],
+      [10, 10, 200, 255],
+      [0, 100, 0, 255],
+      [0, 100, 0, 255],
+    ])
+  })
+
   test("keeps the aspect ratio and never scales up", async () => {
     const rows = Array.from({ length: 10 }, () => Buffer.alloc(40 * 3, 90))
     const wide = await thumbnail("wide", buildPng({ width: 40, height: 10, colorType: 2, rows }), 20)

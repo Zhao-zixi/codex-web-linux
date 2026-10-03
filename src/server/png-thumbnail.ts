@@ -203,7 +203,11 @@ class RowAverager extends Writable {
   /** RGBA, `outWidth * outHeight * 4`. */
   pixels: Uint8Array = new Uint8Array(0)
 
-  constructor(private readonly parts: PngParts, private readonly maxSize: number) {
+  constructor(
+    private readonly parts: PngParts,
+    private readonly maxSize: number,
+    private readonly background: Background | null
+  ) {
     super()
   }
 
@@ -336,17 +340,27 @@ class RowAverager extends Writable {
   }
 
   private flushRow() {
-    const { sums, counts, pixels } = this
+    const { sums, counts, pixels, background } = this
     const base = this.outRow * this.outWidth * 4
     for (let column = 0; column < this.outWidth; column += 1) {
       const at = column * 4
       const alphaSum = sums[at + 3]!
       const count = counts[column]!
-      if (count > 0 && alphaSum > 0) {
+      if (count === 0) continue
+      const alpha = alphaSum / count
+      if (background) {
+        // Over an opaque colour: the averaged colour weighs in by its alpha.
+        const cover = alpha / 255
+        for (let channel = 0; channel < 3; channel += 1) {
+          const color = alphaSum > 0 ? sums[at + channel]! / alphaSum : 0
+          pixels[base + at + channel] = Math.round(color * cover + background[channel]! * (1 - cover))
+        }
+        pixels[base + at + 3] = 255
+      } else if (alphaSum > 0) {
         pixels[base + at] = Math.round(sums[at]! / alphaSum)
         pixels[base + at + 1] = Math.round(sums[at + 1]! / alphaSum)
         pixels[base + at + 2] = Math.round(sums[at + 2]! / alphaSum)
-        pixels[base + at + 3] = Math.round(alphaSum / count)
+        pixels[base + at + 3] = Math.round(alpha)
       }
     }
     sums.fill(0)
@@ -410,14 +424,17 @@ export function encodePng(width: number, height: number, pixels: Uint8Array) {
   ])
 }
 
+/** An opaque colour to lay the image over, 0-255 per channel. */
+export type Background = readonly [number, number, number]
+
 /**
  * Writes `sourcePath` to `targetPath` scaled to fit `maxSize` pixels on its
- * longer side. Never scales up. Throws `UnsupportedPngError` for a PNG this
- * can't stream (interlaced, or malformed).
+ * longer side, over `background` when one is given. Never scales up. Throws
+ * `UnsupportedPngError` for a PNG this can't stream (interlaced, or malformed).
  */
-export async function writePngThumbnail(sourcePath: string, targetPath: string, maxSize: number) {
+export async function writePngThumbnail(sourcePath: string, targetPath: string, maxSize: number, background?: Background) {
   const parts: PngParts = { header: null, palette: null, paletteAlpha: null }
-  const averager = new RowAverager(parts, maxSize)
+  const averager = new RowAverager(parts, maxSize, background ?? null)
   try {
     await pipeline(Readable.from(readImageData(sourcePath, parts)), createInflate(), averager)
   } catch (error) {

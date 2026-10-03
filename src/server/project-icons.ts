@@ -3,7 +3,7 @@ import { createReadStream, createWriteStream, mkdirSync, readFileSync, readdirSy
 import { copyFile, open, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { pipeline } from "node:stream/promises"
-import { readPngHeader, writePngThumbnail } from "./png-thumbnail"
+import { readPngHeader, writePngThumbnail, type Background } from "./png-thumbnail"
 
 /**
  * A project's icon, found in its own files.
@@ -29,6 +29,12 @@ export const PROJECT_ICON_URL_PREFIX = "/api/project-icons/"
 const THUMBNAIL_SIZE = 96
 /** Bumped when stored icons would come out different, so old ones are redone. */
 const THUMBNAIL_VERSION = 1
+/**
+ * Bumped when the finder learns a convention it used to miss, so every
+ * project is searched again at the next boot instead of when its last search
+ * goes stale. 2: icon sets in a catalog's group folders, and Icon Composer.
+ */
+const FINDER_VERSION = 2
 const ICON_FILE_PATTERN = /^[a-f0-9]{16}-[a-f0-9]{12}\.(png|svg|webp|jpg|gif|ico)$/
 
 /** An image this small is stored as it is. */
@@ -52,6 +58,7 @@ const GIT_TIMEOUT_MS = 5_000
  */
 const GIT_PATHSPECS = [
   "**/*.appiconset/Contents.json",
+  "**/*.icon/icon.json",
   "**/mipmap-*/ic_launcher*",
   "**/ic_launcher-playstore.png",
   "**/app.json",
@@ -98,7 +105,7 @@ export interface IconCandidate {
    * What the path is: the image itself, or a file that names it (an asset
    * catalog's `Contents.json`, an Expo config).
    */
-  kind: "image" | "appiconset" | "expo-config"
+  kind: "image" | "appiconset" | "icon-composer" | "expo-config"
   /** Lower is better. */
   score: number
 }
@@ -140,14 +147,28 @@ export function classifyIconPath(relativePath: string): IconCandidate | null {
     score: penalty + appDirs.length * 10 + rank + detail,
   })
 
-  // iOS and macOS: <App>/<Name>.xcassets/<Set>.appiconset/Contents.json
+  // iOS and macOS: <App>/<Name>.xcassets/[<Group>/...]<Set>.appiconset/Contents.json
+  // A catalog can file its sets in group folders, so the set needn't sit
+  // directly in it.
   if (name === "Contents.json") {
-    const catalog = dirs[dirs.length - 2]
-    if (!parent?.endsWith(".appiconset") || !catalog?.endsWith(".xcassets")) return null
-    const before = dirs.slice(0, -2)
+    if (!parent?.endsWith(".appiconset")) return null
+    let catalogIndex = dirs.length - 2
+    while (catalogIndex >= 0 && !dirs[catalogIndex]!.endsWith(".xcassets")) catalogIndex -= 1
+    if (catalogIndex < 0) return null
+    const before = dirs.slice(0, catalogIndex)
     if (before.some((segment) => LESSER_TARGET.test(segment))) penalty += 30
     // The folder holding the catalog is the app's own; what counts is where that is.
-    return candidate("appiconset", before.slice(0, -1), 2, parent === "AppIcon.appiconset" ? 0 : 1)
+    // Behind an Icon Composer icon of the same app: a project that has one has moved to it.
+    return candidate("appiconset", before.slice(0, -1), 2, parent === "AppIcon.appiconset" ? 0.5 : 1)
+  }
+
+  // Xcode 26's Icon Composer: <App>/<Name>.icon/icon.json, layers in Assets/.
+  if (name === "icon.json") {
+    if (!parent?.endsWith(".icon")) return null
+    const before = dirs.slice(0, -1)
+    if (before.some((segment) => LESSER_TARGET.test(segment))) penalty += 30
+    // Alternate icons sit beside the main one under names of their own.
+    return candidate("icon-composer", before.slice(0, -1), 2, /^(App)?Icon\.icon$/.test(parent) ? 0 : 0.1)
   }
 
   // Android: <module>/src/<variant>/res/mipmap-<density>/ic_launcher.png
@@ -310,6 +331,50 @@ async function resolveAppIconSet(setDir: string): Promise<string | null> {
   return best ? path.join(setDir, best.filename) : null
 }
 
+/** A colour in Icon Composer's form, `srgb:0.07843,0.08235,0.10196,1.00000`. */
+function parseIconComposerColor(value: unknown): Background | null {
+  if (typeof value !== "string") return null
+  const match = /^(?:srgb|extended-srgb|display-p3):([\d.]+),([\d.]+),([\d.]+)/.exec(value)
+    ?? /^(?:gray|extended-gray):([\d.]+)/.exec(value)
+  if (!match) return null
+  const channels = (match.length === 4 ? match.slice(1, 4) : [match[1], match[1], match[1]]).map(Number)
+  return channels.every((channel) => Number.isFinite(channel))
+    ? channels.map((channel) => Math.round(Math.min(1, Math.max(0, channel)) * 255)) as unknown as Background
+    : null
+}
+
+/**
+ * An Icon Composer icon is layers over a fill, composed by the system at
+ * build time, so there is no finished image to read. This takes the layer
+ * image with the most to it (the largest file: the artwork, not a sparkle on
+ * top) and the fill as the colour to draw it over. A single-layer icon, the
+ * common case, comes out as it looks.
+ */
+async function resolveIconComposer(bundleDir: string): Promise<{ path: string; background: Background | null } | null> {
+  let icon: { fill?: unknown; groups?: Array<{ layers?: Array<{ "image-name"?: unknown }> }> }
+  try {
+    icon = JSON.parse(await readFile(path.join(bundleDir, "icon.json"), "utf8"))
+  } catch {
+    return null
+  }
+  let best: { path: string; size: number } | null = null
+  for (const group of icon.groups ?? []) {
+    for (const layer of group.layers ?? []) {
+      const imageName = layer["image-name"]
+      if (typeof imageName !== "string" || !IMAGE_EXTENSIONS.test(imageName)) continue
+      if (imageName.includes("/") || imageName.includes("\\")) continue
+      const layerPath = path.join(bundleDir, "Assets", imageName)
+      const info = await stat(layerPath).catch(() => null)
+      if (info?.isFile() && (!best || info.size > best.size)) best = { path: layerPath, size: info.size }
+    }
+  }
+  if (!best) return null
+  // `{ "solid": colour }`, `{ "automatic-gradient": colour }`, or a gradient's
+  // list of colours, of which the first will do at this size.
+  const fill = icon.fill && typeof icon.fill === "object" ? Object.values(icon.fill as Record<string, unknown>)[0] : null
+  return { path: best.path, background: parseIconComposerColor(Array.isArray(fill) ? fill[0] : fill) }
+}
+
 /** The icon an Expo config names, relative to the config. */
 async function resolveExpoIcon(configPath: string): Promise<string | null> {
   let text: string
@@ -339,15 +404,25 @@ async function resolveExpoIcon(configPath: string): Promise<string | null> {
   return /\bicon\s*:\s*["'`]([^"'`\n]+\.(?:png|jpe?g|webp|svg))["'`]/i.exec(text)?.[1] ?? null
 }
 
-async function resolveCandidateSource(root: string, candidate: IconCandidate): Promise<string | null> {
+interface IconSource {
+  path: string
+  /** A colour to draw the image over; for Icon Composer, whose fill is not in the image. */
+  background: Background | null
+}
+
+async function resolveCandidateSource(root: string, candidate: IconCandidate): Promise<IconSource | null> {
+  const bare = (sourcePath: string | null) => sourcePath ? { path: sourcePath, background: null } : null
   if (candidate.kind === "appiconset") {
-    return resolveAppIconSet(path.join(root, path.dirname(candidate.path)))
+    return bare(await resolveAppIconSet(path.join(root, path.dirname(candidate.path))))
+  }
+  if (candidate.kind === "icon-composer") {
+    return resolveIconComposer(path.join(root, path.dirname(candidate.path)))
   }
   if (candidate.kind === "expo-config") {
     const named = await resolveExpoIcon(path.join(root, candidate.path))
-    return named ? resolveInside(root, path.dirname(candidate.path), named) : null
+    return bare(named ? resolveInside(root, path.dirname(candidate.path), named) : null)
   }
-  return path.join(root, candidate.path)
+  return bare(path.join(root, candidate.path))
 }
 
 /**
@@ -406,7 +481,12 @@ async function resizeWithSips(sourcePath: string, targetPath: string): Promise<b
  * Writes the stored form of `sourcePath` to `<targetBase>.<ext>` and returns
  * the extension, or null when the source can't be made small.
  */
-async function writeIconFile(sourcePath: string, sourceSize: number, targetBase: string): Promise<string | null> {
+async function writeIconFile(
+  sourcePath: string,
+  sourceSize: number,
+  targetBase: string,
+  background: Background | null
+): Promise<string | null> {
   const extension = path.extname(sourcePath).slice(1).toLowerCase()
   const copyAs = async (as: string) => {
     await copyFile(sourcePath, `${targetBase}.${as}`)
@@ -438,11 +518,12 @@ async function writeIconFile(sourcePath: string, sourceSize: number, targetBase:
   if (extension === "png") {
     const header = await readPngHeader(sourcePath)
     if (!header) return null
-    if (Math.max(header.width, header.height) <= THUMBNAIL_SIZE * 2 && sourceSize <= PASS_THROUGH_MAX_BYTES) {
+    // A background has to be drawn in, so the image goes through even when small.
+    if (!background && Math.max(header.width, header.height) <= THUMBNAIL_SIZE * 2 && sourceSize <= PASS_THROUGH_MAX_BYTES) {
       return copyAs("png")
     }
     try {
-      await writePngThumbnail(sourcePath, `${targetBase}.png`, THUMBNAIL_SIZE)
+      await writePngThumbnail(sourcePath, `${targetBase}.png`, THUMBNAIL_SIZE, background ?? undefined)
       return "png"
     } catch {
       // Interlaced, or not what its header says. Falls through to sips.
@@ -468,11 +549,14 @@ interface IconRecord {
   source?: string
   mtimeMs?: number
   size?: number
+  /** The colour it was drawn over, `r,g,b`, when there was one. */
+  background?: string
   scannedAt: number
 }
 
 interface IconIndex {
   version: number
+  finder?: number
   projects: Record<string, IconRecord>
 }
 
@@ -481,6 +565,7 @@ export interface FoundProjectIcon {
   source: string
   mtimeMs: number
   size: number
+  background?: string
 }
 
 /**
@@ -493,8 +578,9 @@ export async function findProjectIcon(root: string, iconsDir: string, previous?:
   if (candidates.length === 0) candidates = rankIconCandidates(await walkForPaths(root))
   // A dozen is every plausible icon; past that they are logos in odd corners.
   for (const candidate of candidates.slice(0, 12)) {
-    const source = await resolveCandidateSource(root, candidate)
-    if (!source) continue
+    const resolved = await resolveCandidateSource(root, candidate)
+    if (!resolved) continue
+    const source = resolved.path
     let info
     try {
       info = await stat(source)
@@ -502,12 +588,21 @@ export async function findProjectIcon(root: string, iconsDir: string, previous?:
       continue
     }
     if (!info.isFile() || info.size === 0) continue
-    if (previous?.file && previous.source === source && previous.mtimeMs === info.mtimeMs && previous.size === info.size) {
-      return { file: previous.file, source, mtimeMs: info.mtimeMs, size: info.size }
+    const found = {
+      source,
+      mtimeMs: info.mtimeMs,
+      size: info.size,
+      ...(resolved.background ? { background: resolved.background.join(",") } : {}),
     }
-    const base = `${shortHash(root, 16)}-${shortHash(`${THUMBNAIL_VERSION}\0${source}\0${info.mtimeMs}\0${info.size}`, 12)}`
-    const extension = await writeIconFile(source, info.size, path.join(iconsDir, base)).catch(() => null)
-    if (extension) return { file: `${base}.${extension}`, source, mtimeMs: info.mtimeMs, size: info.size }
+    if (
+      previous?.file && previous.source === source && previous.mtimeMs === info.mtimeMs
+      && previous.size === info.size && previous.background === found.background
+    ) {
+      return { file: previous.file, ...found }
+    }
+    const base = `${shortHash(root, 16)}-${shortHash(`${THUMBNAIL_VERSION}\0${source}\0${info.mtimeMs}\0${info.size}\0${found.background ?? ""}`, 12)}`
+    const extension = await writeIconFile(source, info.size, path.join(iconsDir, base), resolved.background).catch(() => null)
+    if (extension) return { file: `${base}.${extension}`, ...found }
   }
   return null
 }
@@ -549,16 +644,19 @@ export class ProjectIcons {
     try {
       mkdirSync(this.iconsDir, { recursive: true })
       const index = JSON.parse(readFileSync(this.indexPath, "utf8")) as IconIndex
-      if (index.version !== THUMBNAIL_VERSION) return
       const present = new Set(readdirSync(this.iconsDir))
-      for (const [projectPath, record] of Object.entries(index.projects)) {
+      // Icons drawn some other way are all redone; the files go below.
+      const projects = index.version === THUMBNAIL_VERSION ? index.projects : {}
+      // Kept, so their icons show meanwhile, and due at once.
+      const stale = index.finder !== FINDER_VERSION
+      for (const [projectPath, record] of Object.entries(projects)) {
         // A stored file that has gone missing is a project to search again.
         if (record.file && !present.has(record.file)) continue
-        this.records.set(projectPath, record)
+        this.records.set(projectPath, stale ? { ...record, scannedAt: 0 } : record)
         if (record.file) present.delete(record.file)
       }
       // What is left belongs to no project: a crash between writing an icon
-      // and writing the index.
+      // and writing the index, or an index from another thumbnail version.
       for (const name of present) {
         if (ICON_FILE_PATTERN.test(name)) void rm(path.join(this.iconsDir, name), { force: true })
       }
@@ -660,7 +758,7 @@ export class ProjectIcons {
       this.sourceCheckedAt.delete(projectPath)
       if (record.file) await rm(path.join(this.iconsDir, record.file), { force: true })
     }
-    const index: IconIndex = { version: THUMBNAIL_VERSION, projects: Object.fromEntries(this.records) }
+    const index: IconIndex = { version: THUMBNAIL_VERSION, finder: FINDER_VERSION, projects: Object.fromEntries(this.records) }
     const temporaryPath = `${this.indexPath}.tmp`
     try {
       await writeFile(temporaryPath, JSON.stringify(index))

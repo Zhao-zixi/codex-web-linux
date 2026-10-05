@@ -11,6 +11,9 @@ export const UI_UPDATE_RELOAD_REQUEST_STORAGE_KEY = "kanna:last-update-reload-re
 /** localStorage: persisted sidebar width in pixels. */
 export const SIDEBAR_WIDTH_STORAGE_KEY = "kanna:sidebar-width"
 
+/** localStorage: "1" while the sidebar is collapsed, so a reload leaves it that way. */
+export const SIDEBAR_COLLAPSED_STORAGE_KEY = "kanna:sidebar-collapsed"
+
 /** localStorage: last action chosen in the open-external menu. */
 export const OPEN_EXTERNAL_SELECT_STORAGE_KEY = "kanna:last-open-external"
 

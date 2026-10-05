@@ -74,10 +74,32 @@ export function useEdgePeek({ side, enabled, panelRef, edgePx, insetPx = 0 }: Ed
         && Boolean(panelRef.current?.contains(focused))
     }
 
+    // The peek belongs to the window you are working in. Once another app
+    // (or another window) is in front, a panel left hanging over the chat is
+    // in the way of reading what is behind it, and a mouse crossing this
+    // window's edge on its way somewhere else is not asking for it. So it
+    // leaves when the window loses focus, whatever was going on in it, and
+    // stays away until the window has focus again.
+    function handleWindowBlur() {
+      hide()
+    }
+
+    // The blur event is not the whole story: a window can stop being the one
+    // in front without the page being told (focus was in another part of the
+    // app's window, or already gone when the peek came up). So while the
+    // peek is up, the question is also asked outright, a few times a second.
+    const focusWatch = window.setInterval(() => {
+      if (open && !document.hasFocus()) hide()
+    }, 200)
+
+    function handleVisibilityChange() {
+      if (document.visibilityState !== "visible") hide()
+    }
+
     function handlePointerMove(event: PointerEvent) {
       if (event.pointerType !== "mouse") return
       if (fromEdge(event) <= edgePx && besidePanel(event, 0)) {
-        if (!open && event.buttons === 0) show()
+        if (!open && event.buttons === 0 && document.hasFocus()) show()
         return
       }
       const panel = panelRef.current
@@ -91,16 +113,21 @@ export function useEdgePeek({ side, enabled, panelRef, edgePx, insetPx = 0 }: Ed
 
     function handleMouseLeave(event: MouseEvent) {
       if (fromEdge(event) <= 0 && besidePanel(event, 0)) {
-        if (!open && event.buttons === 0) show()
+        if (!open && event.buttons === 0 && document.hasFocus()) show()
       } else if (open && !isBusy(event)) {
         hide()
       }
     }
 
     window.addEventListener("pointermove", handlePointerMove)
+    window.addEventListener("blur", handleWindowBlur)
+    document.addEventListener("visibilitychange", handleVisibilityChange)
     document.documentElement.addEventListener("mouseleave", handleMouseLeave)
     return () => {
       window.removeEventListener("pointermove", handlePointerMove)
+      window.removeEventListener("blur", handleWindowBlur)
+      document.removeEventListener("visibilitychange", handleVisibilityChange)
+      window.clearInterval(focusWatch)
       document.documentElement.removeEventListener("mouseleave", handleMouseLeave)
     }
   }, [edgePx, enabled, insetPx, panelRef, side])

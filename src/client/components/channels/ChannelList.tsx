@@ -1,7 +1,7 @@
 import { Fragment, memo, useCallback, useMemo, useRef, useState, type ReactElement, type ReactNode, type RefObject } from "react"
 import { ChevronDown, SquarePen } from "lucide-react"
 import type { SidebarProjectGroup } from "../../../shared/types"
-import { computeChannelSections, getChannelPeekGroups, getPinnedChannelChats, type ChannelPeekGroup, type ChannelSection } from "../../lib/channel-sections"
+import { computeChannelSections, getChannelPeekGroups, type ChannelPeekGroup } from "../../lib/channel-sections"
 import { getThreadDetailLabel } from "../../lib/thread-detail-label"
 import type { SidebarThread } from "../../lib/thread-sections"
 import { isBackgroundOpenClick } from "../../lib/background-open"
@@ -303,13 +303,7 @@ export function ChannelList({
   renderChatHoverCard,
   renderChatMenu,
   actions,
-  threads,
-  renderPinnedChatRow,
 }: {
-  /** Every chat the sidebar holds, identity-stable (`useStableSidebarThreads`). */
-  threads: SidebarThread[]
-  /** A sidebar chat row, for the pinned chats listed above the channels. */
-  renderPinnedChatRow: (thread: SidebarThread) => ReactNode
   renderChatMenu: RenderChatMenu
   /** Must be stable (memoized): it reaches every memoized row. */
   actions: ChannelActions
@@ -353,21 +347,13 @@ export function ChannelList({
     () => computeChannelSections(projectGroups, nowMs, channelPins, draftStartTimes, pendingSends),
     [channelPins, draftStartTimes, nowMs, pendingSends, projectGroups]
   )
-  // Pinned chats lead the Pinned section, above any pinned channels: a pin
-  // is "keep this in view", and they would otherwise be out of sight inside
-  // their channels' cards. The section exists for either kind.
-  const pinnedThreads = useMemo(() => getPinnedChannelChats(threads), [threads])
-  const shownSections = useMemo<ChannelSection[]>(() => {
-    if (pinnedThreads.length === 0 || sections.some((section) => section.key === "pinned")) return sections
-    return [{ key: "pinned", label: "Pinned", collapsible: true, defaultExpanded: true, groups: [] }, ...sections]
-  }, [pinnedThreads.length, sections])
   // In a store, so the sections are as you left them when you come back from
   // a channel (which unmounts this list).
   const [expandOverrides, setSectionExpanded] = useSectionOverrides("channels")
 
   return (
     <div ref={listRef}>
-      {shownSections.map((section) => {
+      {sections.map((section) => {
         const isExpanded = !section.collapsible || (expandOverrides[section.key] ?? section.defaultExpanded)
         return (
           <div key={section.key}>
@@ -380,11 +366,6 @@ export function ChannelList({
               // No gap: the rows carry the Chats view's 2px spacing inside
               // themselves (see `ChannelRow`).
               <div className="mb-3 flex flex-col">
-                {/* Chat rows keep their own 2px gap; the pixel either side
-                    sets them off from the channel rows by the same. */}
-                {section.key === "pinned" && pinnedThreads.length > 0 ? (
-                  <div className="space-y-[2px] py-px">{pinnedThreads.map(renderPinnedChatRow)}</div>
-                ) : null}
                 {section.groups.map((group) => (
                   <ChannelRow
                     key={group.groupKey}

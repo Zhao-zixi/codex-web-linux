@@ -55,6 +55,7 @@ import {
 import { DEFAULT_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES, trimTranscriptWindow } from "../../shared/transcript-window"
 import { CLOUD_WS_ENDPOINT_PATH, type CloudWsEndpointResponse } from "../../shared/cloud-api"
 import { KannaSocket, type SocketStatus } from "./socket"
+import { SIDEBAR_COLLAPSED_STORAGE_KEY } from "../lib/storageKeys"
 import { useAppSettingsSync } from "./useAppSettingsSync"
 import { useBackgroundChatSubscriptions } from "./useBackgroundChatSubscriptions"
 import { useChatCommands } from "./useChatCommands"
@@ -285,7 +286,15 @@ export function useKannaState(activeChatId: string | null): KannaState {
   const [localProjectsReady, setLocalProjectsReady] = useState(false)
   const [chatReady, setChatReady] = useState(false)
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  // Remembered in this browser: collapsing the sidebar is how a window is
+  // arranged, and a reload should not put it back.
+  const [sidebarCollapsed, setSidebarCollapsedState] = useState(
+    () => typeof window !== "undefined" && window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "1"
+  )
+  const setSidebarCollapsed = useCallback((collapsed: boolean) => {
+    setSidebarCollapsedState(collapsed)
+    window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, collapsed ? "1" : "0")
+  }, [])
   const [commandError, setCommandError] = useState<string | null>(null)
   const [startingLocalPath, setStartingLocalPath] = useState<string | null>(null)
   const [pendingChatId, setPendingChatId] = useState<string | null>(null)
@@ -1111,8 +1120,8 @@ export function useKannaState(activeChatId: string | null): KannaState {
     if (((window.history.state as { idx?: number } | null)?.idx ?? 0) > 0) navigate(-1)
     else navigate("/")
   }, [navigate])
-  const collapseSidebar = useCallback(() => setSidebarCollapsed(true), [])
-  const expandSidebar = useCallback(() => setSidebarCollapsed(false), [])
+  const collapseSidebar = useCallback(() => setSidebarCollapsed(true), [setSidebarCollapsed])
+  const expandSidebar = useCallback(() => setSidebarCollapsed(false), [setSidebarCollapsed])
 
   return {
     socket,

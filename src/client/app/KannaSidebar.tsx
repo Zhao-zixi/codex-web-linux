@@ -53,7 +53,6 @@ import {
 } from "../stores/focusModeStore"
 import { formatActionShortcut } from "../lib/keybindings"
 import { SIDEBAR_MAX_WIDTH_PX } from "../lib/sidebarWidth"
-import type { SidebarThread } from "../lib/thread-sections"
 import { useStableSidebarThreads } from "./useStableSidebarThreads"
 import { OPEN_COMMAND_PALETTE_EVENT, openCommandPalette } from "../components/command-palette/CommandPalette"
 
@@ -563,31 +562,6 @@ function KannaSidebarImpl({
   const selectChatMessage = useCallback((chatId: string, role: ChatJumpRole) => {
     navigate(`/chat/${chatId}`, { state: buildChatJumpLocationState(role) })
   }, [navigate])
-
-  // A pinned chat, listed above the channels in the Channels view. The same
-  // row as the Chats view's, naming its project: these come from all of them.
-  const renderPinnedChatRow = useCallback((thread: SidebarThread) => (
-    <ThreadRow
-      key={thread.chatId}
-      thread={thread}
-      isActive={activeChatId === normalizeChatId(thread.chatId)}
-      editorLabel={editorLabel}
-      detailScope="cross-project"
-      nowMs={nowMs}
-      dimIdleTitles={false}
-      onSelect={selectChat}
-      onCreateChat={onCreateChat}
-      onRenameChat={onRenameChat}
-      onShareChat={onShareChat}
-      onCopyPath={onCopyPath}
-      onOpenExternalPath={onOpenExternalPath}
-      onForkChat={onForkChat}
-      onToggleChatPin={onToggleChatPin}
-      onArchiveChat={onArchiveChat}
-      onRestoreChat={handleRestoreChat}
-      onDeleteChat={onDeleteChat}
-    />
-  ), [activeChatId, editorLabel, handleRestoreChat, nowMs, onArchiveChat, onCopyPath, onCreateChat, onDeleteChat, onForkChat, onOpenExternalPath, onRenameChat, onShareChat, onToggleChatPin, selectChat])
 
   // The chat rows' own right-click menu, for the chats inside a channel's
   // card. The items that take you elsewhere or open a dialog close the card
@@ -1328,8 +1302,6 @@ function KannaSidebarImpl({
                 renderChatHoverCard={renderChannelChatHoverCard}
                 actions={channelActions}
                 renderChatMenu={renderChannelChatMenu}
-                threads={threads}
-                renderPinnedChatRow={renderPinnedChatRow}
               />
             ) : null}
 

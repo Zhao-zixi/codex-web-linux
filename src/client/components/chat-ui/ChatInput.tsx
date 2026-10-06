@@ -1337,6 +1337,7 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
             mode={chatModeFromFlags(providerPrefs.planMode, providerPrefs.autoPlan)}
             onModeChange={setEffectiveMode}
             includeMode={showModePicker}
+            hideDefaults
             className="max-w-[840px] mx-auto"
           />
           {activeContextWindow ? (

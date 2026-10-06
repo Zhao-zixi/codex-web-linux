@@ -1,6 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react"
 import { Box, Brain, Gauge, ListTodo, LockOpen, Plus, Search, Sparkles, SquareMenu, SquareMinus } from "lucide-react"
 import {
+  DEFAULT_CLAUDE_MODEL_OPTIONS,
   resolveModelLabel,
   type AgentProvider,
   type ChatMode,
@@ -207,6 +208,15 @@ interface ChatPreferenceControlsProps {
   mode?: ChatMode
   onModeChange?: (mode: ChatMode) => void
   includeMode?: boolean
+  /**
+   * Retires the context-window and mode pills from the chat composer: each one
+   * renders only while its value is off the factory default (1M, Full Access).
+   * A pill that shows is still the full picker, so the way back to the default
+   * is one click on the thing that says you left it. The way in is the command
+   * palette (and Shift+Tab for modes). Settings leaves this off, since a
+   * default has to be settable from somewhere.
+   */
+  hideDefaults?: boolean
   className?: string
 }
 
@@ -231,6 +241,7 @@ export function ChatPreferenceControls({
   mode = "full-access",
   onModeChange,
   includeMode = true,
+  hideDefaults = false,
   className,
 }: ChatPreferenceControlsProps) {
   const providerConfig = availableProviders.find((provider) => provider.id === selectedProvider) ?? availableProviders[0]
@@ -264,7 +275,13 @@ export function ChatPreferenceControls({
     } as ComposerState,
     providerConfig
   )
-  const modeControl = includeMode && onModeChange ? controls.mode : null
+  const modeControl = includeMode && onModeChange && !(hideDefaults && controls.mode?.selected === "full-access")
+    ? controls.mode
+    : null
+  const contextWindowControl =
+    hideDefaults && controls.contextWindow?.selectedId === DEFAULT_CLAUDE_MODEL_OPTIONS.contextWindow
+      ? null
+      : controls.contextWindow
   const ContextWindowIcon = controls.contextWindow?.selectedId === "1m" ? SquareMenu : SquareMinus
 
   const reasoningChangeFor = (effortId: string): ModelOptionChange =>
@@ -381,26 +398,26 @@ export function ChatPreferenceControls({
         </InputPopover>
       ) : null}
 
-      {controls.contextWindow ? (
+      {contextWindowControl ? (
         <InputPopover
           trigger={(
             <>
               <ContextWindowIcon className="h-3.5 w-3.5" />
               <span>{
-                controls.contextWindow.options.find((option) => option.id === controls.contextWindow?.selectedId)?.label
-                  ?? controls.contextWindow.selectedId
+                contextWindowControl.options.find((option) => option.id === contextWindowControl.selectedId)?.label
+                  ?? contextWindowControl.selectedId
               }</span>
             </>
           )}
         >
-          {(close) => controls.contextWindow?.options.map((option) => (
+          {(close) => contextWindowControl.options.map((option) => (
             <PopoverMenuItem
               key={option.id}
                 onClick={() => {
                   onModelOptionChange({ type: "contextWindow", contextWindow: option.id as ClaudeContextWindow })
                   close()
                 }}
-                selected={controls.contextWindow?.selectedId === option.id}
+                selected={contextWindowControl.selectedId === option.id}
                 icon={option.id === "1m"
                   ? <SquareMenu className="h-4 w-4 text-muted-foreground" />
                   : <SquareMinus className="h-4 w-4 text-muted-foreground" />}

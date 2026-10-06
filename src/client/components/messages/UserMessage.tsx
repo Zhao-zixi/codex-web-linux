@@ -2,7 +2,7 @@ import { useMemo, useRef } from "react"
 import type { ChatAttachment } from "../../../shared/types"
 import { stripSystemMessages } from "../../../shared/message-preview"
 import { CornerUpLeft } from "lucide-react"
-import { ClampedMessageText } from "./ClampedMessageText"
+import { CLAMP_LINES, ClampedMessageText, FOLD_SURFACE_ATTRIBUTE } from "./ClampedMessageText"
 import { classifyAttachmentPreview } from "./attachmentPreview"
 import { AttachmentFileCard, AttachmentImageCard } from "./AttachmentCard"
 import { openViewer, viewerAttachmentFromChat } from "../../stores/viewerStore"
@@ -132,12 +132,12 @@ export function UserMessage({ content, attachments = [], steered = false, flash 
                 sibling of the text's first block displaces the `:first-child`
                 margin reset onto itself, which grew the bubble by a
                 paragraph's top margin for the length of the flash. */}
-            <div ref={bubbleRef} className={cn(
+            <div ref={bubbleRef} {...{ [FOLD_SURFACE_ATTRIBUTE]: "" }} className={cn(
               USER_BUBBLE_CLASS,
               "flex-1 px-3.5 py-1.5",
               flash && "kanna-jump-flash",
             )}>
-              <ClampedMessageText text={parsedContent.body} scopeRef={bubbleRef} />
+              <ClampedMessageText text={parsedContent.body} lines={CLAMP_LINES.typed} scopeRef={bubbleRef} />
             </div>
           </div>
         ) : null}

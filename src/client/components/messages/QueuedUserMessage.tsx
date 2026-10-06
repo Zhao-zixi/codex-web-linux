@@ -4,7 +4,7 @@ import type { ReportSection } from "../../../shared/report-sections"
 import { stripSystemMessages } from "../../../shared/message-preview"
 import { cn } from "../../lib/utils"
 import { Button } from "../ui/button"
-import { ClampedMessageText } from "./ClampedMessageText"
+import { CLAMP_LINES, ClampedMessageText, FOLD_SURFACE_ATTRIBUTE } from "./ClampedMessageText"
 import { AdoptionNotice, isAdoptionNotice, ReplyQuoteRow, SectionQuote, sourcedSections, type PromptDelegation } from "./SourcedMessage"
 import { UserMessageAttachments } from "./UserMessage"
 import { ArrowUp, X } from "lucide-react"
@@ -125,10 +125,10 @@ function QueuedTypedMessage({ message, busy, onRemove, onSendNow }: QueuedFormPr
               min-content by default, so an unbreakable token (a long URL)
               widens the bubble past the column instead of wrapping the way it
               does in UserMessage. */}
-          <div className={cn(QUEUED_BUBBLE_CLASS, "grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-end gap-2.5 pl-3.5 pr-1.5 py-1.5")}>
+          <div {...{ [FOLD_SURFACE_ATTRIBUTE]: "" }} className={cn(QUEUED_BUBBLE_CLASS, "grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-end gap-2.5 pl-3.5 pr-1.5 py-1.5")}>
             <div className="min-w-0">
               {content ? (
-                <ClampedMessageText text={content} />
+                <ClampedMessageText text={content} lines={CLAMP_LINES.typed} />
               ) : (
                 <p className="text-muted-foreground">Queued</p>
               )}
@@ -178,7 +178,7 @@ function QueuedSourcedMessage({ message, source, delegations, busy, onRemove, on
         const text = notice
           ? <AdoptionNotice section={section} />
           : section.body
-            ? <ClampedMessageText text={section.body} />
+            ? <ClampedMessageText text={section.body} lines={CLAMP_LINES.sent} />
             : <p className="text-muted-foreground">Queued</p>
         return (
           <div key={index} className="flex min-w-0 max-w-[85%] flex-col items-start sm:max-w-[80%]">
@@ -189,7 +189,7 @@ function QueuedSourcedMessage({ message, source, delegations, busy, onRemove, on
               </ReplyQuoteRow>
             )}
             <div className="relative group min-w-0 max-w-full">
-              <div className={cn(
+              <div {...{ [FOLD_SURFACE_ATTRIBUTE]: "" }} className={cn(
                 QUEUED_BUBBLE_CLASS,
                 "min-w-0 py-1.5",
                 last ? "grid grid-cols-[auto_minmax(0,1fr)] items-end gap-2.5 pl-1.5 pr-3.5" : "px-3.5",

@@ -364,10 +364,11 @@ Please check the latest error first.`,
       expect(html).not.toContain("items-end")
       expect(html).toContain(bubble)
       // Held to five lines until asked for.
-      expect(html.split("max-h-[5lh]").length - 1).toBe(1)
+      expect(html.split("max-height:5lh").length - 1).toBe(1)
     }
-    // The same rule for what the user typed.
-    expect(typed.split("max-h-[5lh]").length - 1).toBe(1)
+    // The same clamp for what the user typed, with room for 25.
+    expect(typed.split("max-height:25lh").length - 1).toBe(1)
+    expect(typed).not.toContain("max-height:5lh")
   })
 
   test("what the agent says is never clamped", () => {
@@ -375,7 +376,7 @@ Please check the latest error first.`,
       { id: "text-1", kind: "assistant_text", text: Array.from({ length: 40 }, (_, line) => `line ${line}`).join("\n\n"), timestamp: new Date().toISOString() },
     ])
     expect(html).toContain("line 39")
-    expect(html).not.toContain("max-h-[5lh]")
+    expect(html).not.toContain("max-height:")
     expect(html).not.toContain("Show more")
   })
 
@@ -441,7 +442,7 @@ Please check the latest error first.`,
       },
     ])
     const report = html.slice(html.indexOf('id="msg-user-1"'))
-    expect(report.split("max-h-[5lh]").length - 1).toBe(2)
+    expect(report.split("max-height:5lh").length - 1).toBe(2)
     // The rule that divided them in one bubble has nothing to divide in two.
     expect(report).not.toContain("<hr")
     // In order: the first sub-chat's call, its words, then the second with no call to quote.

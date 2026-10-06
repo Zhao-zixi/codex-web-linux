@@ -91,9 +91,12 @@ describe("QueuedUserMessage", () => {
 
     // What it will show once delivered: its sender quoted.
     expect(sent).toContain(">Replied to<")
-    // Both wait with their text held to five lines, as both are once sent.
-    expect(sent).toContain("max-h-[5lh]")
-    expect(typed).toContain("max-h-[5lh]")
+    // Each waits at the limit it will have once sent, so neither changes
+    // height on the way in: 5 lines for this one, 25 for the user's own.
+    expect(sent).toContain("max-height:5lh")
+    expect(sent).not.toContain("max-height:25lh")
+    expect(typed).toContain("max-height:25lh")
+    expect(typed).not.toContain("max-height:5lh")
     expect(sent).not.toContain("chat id")
   })
 

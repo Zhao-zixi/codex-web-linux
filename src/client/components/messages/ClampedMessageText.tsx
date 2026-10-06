@@ -1,13 +1,13 @@
-import { useId, useLayoutEffect, useRef, useState, type MouseEvent, type RefObject } from "react"
+import { useEffect, useId, useLayoutEffect, useRef, useState, type MouseEvent, type RefObject } from "react"
 import { ChevronDown } from "lucide-react"
 import { cn } from "../../lib/utils"
 import { TranscriptMarkdown } from "./shared"
 
 /**
- * The text of a message sent to the agent, held to five lines until asked
- * for. Every such message uses this: what the user typed, what another agent,
- * a sub-chat or a schedule sent, and each of those while it waits in the
- * queue. A long prompt is a wall between one answer and the next, and the
+ * The text of a message sent to the agent, held to a number of lines until
+ * asked for. Every such message uses this: what the user typed, what another
+ * agent, a sub-chat or a schedule sent, and each of those while it waits in
+ * the queue. A long prompt is a wall between one answer and the next, and the
  * reader of a transcript is there for the answers. Those are never clamped.
  *
  * The limit is a height, not a line clamp: the text is markdown, and a clamp
@@ -18,8 +18,18 @@ import { TranscriptMarkdown } from "./shared"
  * whatever is behind: a filled bubble, a dashed outline, either theme.
  */
 
-/** Also written into `max-h-[5lh]` below, which Tailwind has to read as a literal. */
-export const CLAMP_LINES = 5
+/**
+ * How many lines of a message show before Show more, by who sent it. The two
+ * numbers live here and nowhere else.
+ *
+ * What the user typed gets room: they wrote it, they may be checking it, and
+ * most of what they write fits. What was sent to the chat for the agent (a
+ * report, another agent's message, an automation) gets a glance: it runs
+ * long, and the reader did not write it and was not waiting on its words. A
+ * message waiting in the queue has the limit it will have once sent, so it
+ * does not change height on the way in.
+ */
+export const CLAMP_LINES = { typed: 25, sent: 5 } as const
 
 /** A prompt keeps the line breaks it was typed with. */
 const TEXT_CLASS = "[&_p]:whitespace-pre-line"
@@ -86,13 +96,65 @@ function startsAboveView(element: HTMLElement): boolean {
   return element.getBoundingClientRect().top < viewTop
 }
 
+/**
+ * Marks the element a folded message can be opened by clicking: its bubble,
+ * padding included. Without one, the text itself is the surface.
+ */
+export const FOLD_SURFACE_ATTRIBUTE = "data-fold-surface"
+
+/** Things inside a message that have a click of their own. */
+const OWN_CLICK_SELECTOR = "a, button, input, textarea, select, summary, label, img, video, audio, [role='button'], [role='link'], [contenteditable='true']"
+/** A press that travels further than this before it lifts is a drag. */
+const CLICK_SLOP_PX = 4
+
+/**
+ * Whether a click on a folded message's bubble is the reader asking to open
+ * it, as a press on Show more is.
+ *
+ * It is unless it was something else. A drag is a selection being made. A
+ * click with text selected, now or when the press began, is a selection
+ * being finished or let go, and opening the message under it would be a
+ * second thing the reader did not ask for. A second or third click in a row
+ * is a word or a paragraph being selected. A right click or a modified one
+ * belongs to the menu or the browser. And a link, a copy button, an image or
+ * a queued message's controls answer their own click.
+ */
+export function isFoldClick({ button, clicks, modified, movedPx, selecting, onOwnClick, handled }: {
+  /** `MouseEvent.button`: 0 is the main one. */
+  button: number
+  /** `MouseEvent.detail`: 1 for a single click. */
+  clicks: number
+  /** Any of ctrl, meta, shift or alt was held. */
+  modified: boolean
+  /** How far the pointer moved between going down and coming up. */
+  movedPx: number
+  /** Text was selected when the press began, or is now. */
+  selecting: boolean
+  /** The click landed on something with a click of its own. */
+  onOwnClick: boolean
+  /** Something inside already took the click (`defaultPrevented`). */
+  handled: boolean
+}): boolean {
+  if (button !== 0 || modified || handled || onOwnClick) return false
+  if (clicks > 1) return false
+  if (movedPx > CLICK_SLOP_PX) return false
+  return !selecting
+}
+
+function hasSelectedText(): boolean {
+  const selection = typeof window !== "undefined" ? window.getSelection() : null
+  return Boolean(selection && !selection.isCollapsed && selection.toString().trim())
+}
+
 function prefersReducedMotion(): boolean {
   return typeof window !== "undefined" && typeof window.matchMedia === "function"
     && window.matchMedia("(prefers-reduced-motion: reduce)").matches
 }
 
-export function ClampedMessageText({ text, scopeRef }: {
+export function ClampedMessageText({ text, lines, scopeRef }: {
   text: string
+  /** The most lines to show while collapsed: one of `CLAMP_LINES`. */
+  lines: number
   /** What to keep on screen when the text collapses: the bubble, where it holds more than the text. */
   scopeRef?: RefObject<HTMLElement | null>
 }) {
@@ -111,19 +173,19 @@ export function ClampedMessageText({ text, scopeRef }: {
     const content = contentRef.current
     if (!clip || !content || typeof ResizeObserver === "undefined") return
     const measure = () => {
-      // The text's own height against five lines of its own type. Its own,
-      // not the clipped box's: a box held at five lines does not change size
-      // when what is inside it does, and would never report a late font, a
-      // loaded image or new text.
+      // The text's own height against the limit in lines of its own type.
+      // Its own, not the clipped box's: a box held at the limit does not
+      // change size when what is inside it does, and would never report a
+      // late font, a loaded image or new text.
       const lineHeight = Number.parseFloat(getComputedStyle(clip).lineHeight)
-      const limit = Number.isFinite(lineHeight) ? lineHeight * CLAMP_LINES : clip.clientHeight
+      const limit = Number.isFinite(lineHeight) ? lineHeight * lines : clip.clientHeight
       setOverflows(content.offsetHeight > limit + 1)
     }
     measure()
     const observer = new ResizeObserver(measure)
     observer.observe(content)
     return () => observer.disconnect()
-  }, [])
+  }, [lines])
 
   useLayoutEffect(() => {
     const clip = clipRef.current
@@ -136,7 +198,7 @@ export function ClampedMessageText({ text, scopeRef }: {
     animationRef.current = null
 
     const scope = scopeRef?.current ?? clip
-    const to = expanded ? content.offsetHeight : Number.parseFloat(getComputedStyle(clip).lineHeight) * CLAMP_LINES
+    const to = expanded ? content.offsetHeight : Number.parseFloat(getComputedStyle(clip).lineHeight) * lines
     const ms = clampTransitionMs({
       expanding: expanded,
       from: press.from,
@@ -147,7 +209,10 @@ export function ClampedMessageText({ text, scopeRef }: {
     })
     if (ms === null || typeof clip.animate !== "function") {
       // Collapsing from the foot of a long message takes the message out
-      // from under the reader. Bring what is left of it back into view.
+      // from under the reader. Bring what is left of it back into view. If
+      // what is left is taller than the view, as a typed message's 25 lines
+      // can be in a small window, `nearest` brings its foot: the last lines
+      // and the control just pressed, with the next row under them.
       if (!expanded) scope.scrollIntoView({ block: "nearest" })
       return
     }
@@ -161,15 +226,68 @@ export function ClampedMessageText({ text, scopeRef }: {
       ],
       { duration: ms, easing: EASE_OUT },
     )
-  }, [expanded, scopeRef])
+  }, [expanded, lines, scopeRef])
 
-  const toggle = (event: MouseEvent<HTMLButtonElement>) => {
+  // The one way the text opens or closes, whatever was pressed.
+  const toggle = (pressed: HTMLElement, byKeyboard: boolean) => {
     const clip = clipRef.current
-    // `detail` counts clicks, and a click made by Enter or Space has none.
-    pressRef.current = clip ? { from: clip.getBoundingClientRect().height, byKeyboard: event.detail === 0 } : null
-    if (!expanded) releaseFollow(event.currentTarget)
+    pressRef.current = clip ? { from: clip.getBoundingClientRect().height, byKeyboard } : null
+    if (!expanded) releaseFollow(pressed)
     setExpanded(!expanded)
   }
+  // `detail` counts clicks, and a click made by Enter or Space has none.
+  const onControlClick = (event: MouseEvent<HTMLButtonElement>) => toggle(event.currentTarget, event.detail === 0)
+
+  // While folded, a click anywhere on the bubble opens it: the text that is
+  // cut off is the thing asking to be opened, and the control under it is a
+  // small target for that. Only while folded. Open, the bubble is text to
+  // read and select, and Show less is how it closes.
+  //
+  // The control stays the only thing in the tab order and the only thing a
+  // screen reader is told about. This is a shortcut to it for a pointer, so
+  // the bubble gets a pointer's cursor and no role.
+  const foldedOpen = overflows && !expanded
+  const toggleRef = useRef(toggle)
+  toggleRef.current = toggle
+  useEffect(() => {
+    const clip = clipRef.current
+    const surface = clip?.closest<HTMLElement>(`[${FOLD_SURFACE_ATTRIBUTE}]`) ?? clip
+    if (!foldedOpen || !surface) return
+    let press: { x: number; y: number; selecting: boolean } | null = null
+    // Before the browser's own mousedown, which is what clears a selection:
+    // the only moment that still knows there was one.
+    const onPointerDown = (event: PointerEvent) => {
+      press = { x: event.clientX, y: event.clientY, selecting: hasSelectedText() }
+    }
+    const onClick = (event: globalThis.MouseEvent) => {
+      const began = press
+      press = null
+      const own = event.target instanceof Element ? event.target.closest(OWN_CLICK_SELECTOR) : null
+      const open = isFoldClick({
+        button: event.button,
+        clicks: event.detail,
+        modified: event.ctrlKey || event.metaKey || event.shiftKey || event.altKey,
+        movedPx: began ? Math.hypot(event.clientX - began.x, event.clientY - began.y) : 0,
+        selecting: Boolean(began?.selecting) || hasSelectedText(),
+        // Inside the bubble, not around it: the bubble may itself sit in something pressable.
+        onOwnClick: own !== null && surface.contains(own),
+        handled: event.defaultPrevented,
+      })
+      if (open) toggleRef.current(surface, false)
+    }
+    // The whole bubble, text included, says it can be pressed. A text cursor
+    // over the text would say "select", which still works by dragging but is
+    // not what a press here does.
+    const cursor = surface.style.cursor
+    surface.style.cursor = "pointer"
+    surface.addEventListener("pointerdown", onPointerDown)
+    surface.addEventListener("click", onClick)
+    return () => {
+      surface.style.cursor = cursor
+      surface.removeEventListener("pointerdown", onPointerDown)
+      surface.removeEventListener("click", onClick)
+    }
+  }, [foldedOpen])
 
   const clamped = !expanded
   return (
@@ -178,9 +296,12 @@ export function ClampedMessageText({ text, scopeRef }: {
         ref={clipRef}
         id={textId}
         className={cn(
-          clamped && "max-h-[5lh] overflow-hidden",
+          clamped && "overflow-hidden",
           clamped && overflows && "[mask-image:linear-gradient(to_bottom,black_calc(100%_-_1lh),transparent)]",
         )}
+        // In lines of the text's own type. A style, not a class: the number
+        // is the caller's, and a class has to be spelled out to exist.
+        style={clamped ? { maxHeight: `${lines}lh` } : undefined}
       >
         <div ref={contentRef} className={TEXT_CLASS}>
           <TranscriptMarkdown text={text} />
@@ -191,7 +312,7 @@ export function ClampedMessageText({ text, scopeRef }: {
           type="button"
           aria-expanded={expanded}
           aria-controls={textId}
-          onClick={toggle}
+          onClick={onControlClick}
           // 28px tall and flush under the text: the room is inside the button,
           // so the whole strip is the target. Under a finger it is 44px, the
           // extra reaching over the text's last line and the bubble's padding.

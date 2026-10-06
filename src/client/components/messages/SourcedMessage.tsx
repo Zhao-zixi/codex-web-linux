@@ -6,7 +6,7 @@ import { ADOPTED_REPORT_STATUS, isInterimReportStatus, splitReportSections, type
 import { cn } from "../../lib/utils"
 import { useChatReferenceActions, useChatSchedules, useSidebarThread } from "../chat-ui/chat-reference"
 import { formatScheduleTrigger } from "../chat-ui/widgets/SchedulesWidget"
-import { ClampedMessageText } from "./ClampedMessageText"
+import { CLAMP_LINES, ClampedMessageText, FOLD_SURFACE_ATTRIBUTE } from "./ClampedMessageText"
 import { ChatReplyQuote, inlineChatToolExcerpt, inlineChatToolTarget, isChatToolCall, type ChatToolCall } from "./ChatToolMessage"
 import { ScheduleCardBox } from "./ScheduleToolMessage"
 import { TOOL_QUOTE_CLASS } from "./tool-card"
@@ -228,8 +228,8 @@ function SourcedPart({ section, source, delegations, steered, flash }: {
         <SectionQuote section={section} source={source} delegations={delegations} />
       </ReplyQuoteRow>
       <div className="flex min-w-0 max-w-full items-center gap-2">
-        <div className={cn(USER_BUBBLE_CLASS, "px-3.5 py-1.5", flash && "kanna-jump-flash")}>
-          <ClampedMessageText text={section.body} scopeRef={partRef} />
+        <div {...{ [FOLD_SURFACE_ATTRIBUTE]: "" }} className={cn(USER_BUBBLE_CLASS, "px-3.5 py-1.5", flash && "kanna-jump-flash")}>
+          <ClampedMessageText text={section.body} lines={CLAMP_LINES.sent} scopeRef={partRef} />
         </div>
         {/* After the bubble and turned around, where a typed prompt has it
             before: on the side that faces the middle of the column. */}

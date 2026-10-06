@@ -1098,3 +1098,129 @@
 @keyframes wizard-fade-out {
   to { opacity: 0; }
 }
+
+/*
+ * Dialogs (components/ui/dialog.tsx). Opened now and then, so the modal
+ * arrives: 250ms from 0.96, out of its own centre since nothing on screen
+ * anchors it, with the backdrop fading on the same clock so the two read as
+ * one surface. Closing is instant. Most closes are Escape or the button that
+ * finished the job, and an exit animation would keep focus in the dialog
+ * until it ended.
+ */
+.dialog-surface[data-state="open"] {
+  animation: dialog-surface-in 250ms var(--ease-snappy);
+}
+
+.dialog-overlay[data-state="open"] {
+  animation: floating-surface-fade-in 250ms var(--ease-snappy);
+}
+
+@keyframes dialog-surface-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dialog-surface[data-state="open"] {
+    animation-name: floating-surface-fade-in;
+  }
+}
+
+/*
+ * Kanna Cloud pairing (components/cloud/CloudPairPanel.tsx). A machine is
+ * paired once, so this is where a little motion is spent.
+ *
+ * The panel swaps whole views: the link, paired, a retry, the manual steps.
+ * The old view fades out in 120ms, laid over the new one, whose rows come in
+ * 60ms apart behind it. A touch of blur on both makes the swap read as one
+ * thing changing rather than two things crossing.
+ *
+ * The views differ in height and the dialog is centred, so without help both
+ * of its edges jump when the view changes. The panel glides between heights
+ * instead. That is the one layout property animated here, on a box of three
+ * rows, and there is no transform that resizes a box around its content.
+ *
+ * Paired is the payoff. The badge grows in, the check draws itself, and one
+ * ring goes out from it: the machine just went live.
+ */
+.cloud-pair-stage {
+  transition: height 300ms var(--ease-glide);
+}
+
+.cloud-pair-view-out {
+  animation: cloud-pair-out 120ms var(--ease-snappy) forwards;
+}
+
+.cloud-pair-view-in .cloud-pair-rows > * {
+  animation: cloud-pair-in 300ms var(--ease-snappy) backwards;
+  animation-delay: calc(90ms + var(--pair-row, 0) * 60ms);
+}
+.cloud-pair-view-in .cloud-pair-rows > :nth-child(2) { --pair-row: 1; }
+.cloud-pair-view-in .cloud-pair-rows > :nth-child(3) { --pair-row: 2; }
+
+.cloud-pair-view-in .cloud-pair-rows > .cloud-pair-badge {
+  animation-name: cloud-pair-badge-in;
+}
+
+/* Glide, not snappy: snappy would have the stroke nearly drawn in its first
+   frames, and the drawing is the point. */
+.cloud-pair-view-in .cloud-pair-check path {
+  stroke-dasharray: 1;
+  animation: cloud-pair-check-draw 350ms var(--ease-glide) 220ms backwards;
+}
+
+/* Out of sight except while it travels. Glide again, so the ring is still
+   visible for most of its way out. */
+.cloud-pair-ring {
+  opacity: 0;
+}
+.cloud-pair-view-in .cloud-pair-ring {
+  animation: cloud-pair-ring 600ms var(--ease-glide) 300ms;
+}
+
+@keyframes cloud-pair-in {
+  from { opacity: 0; transform: translateY(8px); filter: blur(2px); }
+}
+@keyframes cloud-pair-out {
+  to { opacity: 0; filter: blur(2px); }
+}
+@keyframes cloud-pair-badge-in {
+  from { opacity: 0; transform: scale(0.9); }
+}
+/* The opacity keeps the round line cap from showing as a dot before the
+   stroke has any length. */
+@keyframes cloud-pair-check-draw {
+  from { stroke-dashoffset: 1; opacity: 0; }
+  25% { opacity: 1; }
+}
+@keyframes cloud-pair-ring {
+  from { opacity: 0.5; transform: scale(1); }
+  to { opacity: 0; transform: scale(1.7); }
+}
+@keyframes cloud-pair-fade-in {
+  from { opacity: 0; }
+}
+@keyframes cloud-pair-fade-out {
+  to { opacity: 0; }
+}
+
+/* Reduced motion keeps the fades, which say the view changed, and drops what
+   travels: the rise, the glide, the drawn check and the ring. */
+@media (prefers-reduced-motion: reduce) {
+  .cloud-pair-stage {
+    transition-duration: 0ms;
+  }
+  .cloud-pair-view-out {
+    animation-name: cloud-pair-fade-out;
+  }
+  .cloud-pair-view-in .cloud-pair-rows > *,
+  .cloud-pair-view-in .cloud-pair-rows > .cloud-pair-badge {
+    animation-name: cloud-pair-fade-in;
+  }
+  .cloud-pair-view-in .cloud-pair-check path,
+  .cloud-pair-view-in .cloud-pair-ring {
+    animation: none;
+  }
+}

@@ -47,7 +47,7 @@ function StepHeading({ title, description }: { title: string; description?: stri
  * passes `link`: until the step is done, that link takes Continue's place,
  * so the step never shows a dead Continue next to the thing to do.
  */
-const FOOTER_PRESS = "transition-[transform,background-color,color,border-color] duration-150 ease-out active:scale-[0.97]"
+const FOOTER_PRESS = "transition-[scale,background-color,color,border-color] duration-150 ease-snappy active:scale-[0.97]"
 /** Back, Continue and the link that stands in for it: one height, so the row reads as one control. */
 const FOOTER_HEIGHT = "h-11 min-h-11"
 

@@ -27,6 +27,7 @@ const SettingsPage = lazy(() => import("./SettingsPage").then((m) => ({ default:
 const WorkflowsGalleryPage = lazy(() => import("./WorkflowsGalleryPage").then((m) => ({ default: m.WorkflowsGalleryPage })))
 import { TerminalPage } from "./TerminalPage"
 import { useKannaState } from "./useKannaState"
+import { useMigrateChannelPins } from "./useMigrateChannelPins"
 import { useSidebarStore } from "../stores/sidebarStore"
 import type { AppSettingsSnapshot } from "../../shared/types"
 
@@ -322,6 +323,12 @@ function KannaLayout() {
   const handleSidebarReorderProjectGroups = useCallback((projectIds: string[]) => {
     void state.handleReorderProjectGroups(projectIds)
   }, [state.handleReorderProjectGroups])
+  // Straight to the socket, like the other one-line commands here: the pin
+  // comes back on the sidebar snapshot, and nothing else has to hear of it.
+  const handleSetProjectPinned = useCallback((projectId: string, pinned: boolean) => {
+    void state.socket.command({ type: "project.setPinned", projectId, pinned }).catch(() => {})
+  }, [state.socket])
+  useMigrateChannelPins(state.socket, state.sidebarReady)
   const handleOpenChangelog = useCallback(() => {
     navigate("/settings/changelog")
   }, [navigate])
@@ -358,6 +365,7 @@ function KannaLayout() {
       onRenameProject={handleSidebarRenameProject}
       onHideProject={handleSidebarHideProject}
       onReorderProjectGroups={handleSidebarReorderProjectGroups}
+      onSetProjectPinned={handleSetProjectPinned}
       editorLabel={state.editorLabel}
       updateSnapshot={state.updateSnapshot}
       onOpenChangelog={handleOpenChangelog}

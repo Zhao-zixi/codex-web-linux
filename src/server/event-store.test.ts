@@ -489,6 +489,31 @@ describe("EventStore", () => {
     expect(reloaded.getProject(project.id)?.localPath).toBe("/tmp/project")
   })
 
+  test("pins and unpins a project, and keeps a carried-over pin's own time", async () => {
+    const dataDir = await createTempDataDir()
+    const store = new EventStore(dataDir)
+    await store.initialize()
+
+    const project = await store.openProject("/tmp/project")
+    const other = await store.openProject("/tmp/other")
+    await store.setProjectPinned(project.id, true)
+    await store.setProjectPinned(other.id, true, 1234)
+    expect(store.getProject(project.id)?.pinnedAt).toBeGreaterThan(1234)
+    expect(store.getProject(other.id)?.pinnedAt).toBe(1234)
+
+    // A second pin of a pinned project changes nothing, its time included.
+    await store.setProjectPinned(other.id, true, 9999)
+    expect(store.getProject(other.id)?.pinnedAt).toBe(1234)
+
+    const reloaded = new EventStore(dataDir)
+    await reloaded.initialize()
+    expect(reloaded.getProject(other.id)?.pinnedAt).toBe(1234)
+
+    await reloaded.setProjectPinned(other.id, false)
+    expect(reloaded.getProject(other.id)?.pinnedAt).toBeUndefined()
+    expect(reloaded.getProject(project.id)?.pinnedAt).toBeDefined()
+  })
+
   test("migrates legacy sidebar project order from existing snapshots and project logs", async () => {
     const dataDir = await createTempDataDir()
     const snapshotPath = join(dataDir, "snapshot.json")

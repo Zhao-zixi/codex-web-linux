@@ -92,6 +92,7 @@ function sameGroupFields(left: SidebarProjectGroup, right: SidebarProjectGroup):
     && left.title === right.title
     && left.realTitle === right.realTitle
     && left.sidebarTitle === right.sidebarTitle
+    && left.pinnedAt === right.pinnedAt
     && left.repoName === right.repoName
     && left.hasGitRepo === right.hasGitRepo
     && left.branchName === right.branchName

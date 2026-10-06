@@ -244,6 +244,7 @@ interface ParsedReplayEvent {
 function getReplayEventPriority(event: StoreEvent) {
   switch (event.type) {
     case "project_opened":
+    case "project_pin_set":
     case "project_sidebar_renamed":
     case "project_removed":
       return 0
@@ -738,6 +739,14 @@ export class EventStore {
         } else {
           delete project.sidebarTitle
         }
+        project.updatedAt = event.timestamp
+        break
+      }
+      case "project_pin_set": {
+        const project = this.state.projectsById.get(event.projectId)
+        if (!project) break
+        if (event.pinned) project.pinnedAt = event.pinnedAt ?? event.timestamp
+        else delete project.pinnedAt
         project.updatedAt = event.timestamp
         break
       }
@@ -1345,6 +1354,28 @@ export class EventStore {
       timestamp: Date.now(),
       projectId,
       title: nextTitle,
+    }
+    await this.append(this.projectsLogPath, event)
+  }
+
+  /**
+   * Pins a project in the Channels view, or unpins it. `pinnedAt` back-dates
+   * the pin, for one carried over from a device that kept its own.
+   */
+  async setProjectPinned(projectId: string, pinned: boolean, pinnedAt?: number) {
+    const project = this.getProject(projectId)
+    if (!project) {
+      throw new Error("Project not found")
+    }
+    if (Boolean(project.pinnedAt) === pinned) return
+
+    const event: ProjectEvent = {
+      v: STORE_VERSION,
+      type: "project_pin_set",
+      timestamp: Date.now(),
+      projectId,
+      pinned,
+      ...(pinned && pinnedAt !== undefined ? { pinnedAt } : {}),
     }
     await this.append(this.projectsLogPath, event)
   }

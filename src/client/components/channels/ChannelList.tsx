@@ -7,7 +7,6 @@ import type { SidebarThread } from "../../lib/thread-sections"
 import { isBackgroundOpenClick } from "../../lib/background-open"
 import { getPathBasename } from "../../lib/formatters"
 import { cn, normalizeChatId } from "../../lib/utils"
-import { useChannelPinStore } from "../../stores/channelPinStore"
 import { useChatHasDraft, useDraftStartTimes } from "../../stores/chatInputStore"
 import { usePendingSendTimes } from "../../stores/pendingSendStore"
 import { useSectionOverrides } from "../../stores/sidebarSectionStore"
@@ -196,6 +195,8 @@ export interface ChannelActions {
   onOpenExternalPath: (action: "open_finder" | "open_editor", localPath: string) => void
   onShowArchivedProject: (projectId: string) => void
   onHideProject: (projectId: string) => void
+  /** Pins or unpins the project. The server keeps it, so every device agrees. */
+  onSetProjectPinned: (projectId: string, pinned: boolean) => void
 }
 
 interface ChannelRowProps {
@@ -206,7 +207,6 @@ interface ChannelRowProps {
   pinned: boolean
   actions: ChannelActions
   onSelect: (projectId: string) => void
-  onTogglePin: (projectId: string) => void
 }
 
 /**
@@ -219,7 +219,7 @@ interface ChannelRowProps {
  * The row has no hover card of its own: the list keeps one for all of them
  * and finds the row under the pointer by `CHANNEL_ROW_ATTRIBUTE`.
  */
-const ChannelRow = memo(function ChannelRow({ group, active, menuPinned, pinned, actions, onSelect, onTogglePin }: ChannelRowProps) {
+const ChannelRow = memo(function ChannelRow({ group, active, menuPinned, pinned, actions, onSelect }: ChannelRowProps) {
   // A sub-chat finishing is its parent's news, not the channel's, so its
   // unread mark is not counted. One that stops to ask you something still is.
   const unread = group.chats.some((chat) => chat.unread && !chat.parentChatId)
@@ -239,7 +239,7 @@ const ChannelRow = memo(function ChannelRow({ group, active, menuPinned, pinned,
       editorLabel={actions.editorLabel}
       repoUrl={group.repoUrl}
       pinned={pinned}
-      onTogglePin={() => onTogglePin(group.groupKey)}
+      onTogglePin={() => actions.onSetProjectPinned(group.groupKey, !pinned)}
       onNewChat={() => actions.onCreateChat(group.groupKey)}
       onRename={() => actions.onRenameProject(group.groupKey, group.sidebarTitle, group.realTitle || getPathBasename(group.localPath))}
       onCopyPath={() => actions.onCopyPath(group.localPath)}
@@ -343,14 +343,12 @@ export function ChannelList({
   // Without hover there is no menu to pin, so a tap opens the channel itself
   // (`onSelect`): the only way to its chats on touch.
   const handleSelect = opensAsPage ? onSelect : togglePinnedChannel
-  const channelPins = useChannelPinStore((state) => state.pins)
-  const togglePin = useChannelPinStore((state) => state.toggle)
   // Browser-local inputs to the sections; see `ThreadSections`.
   const draftStartTimes = useDraftStartTimes()
   const pendingSends = usePendingSendTimes()
   const sections = useMemo(
-    () => computeChannelSections(projectGroups, nowMs, channelPins, draftStartTimes, pendingSends),
-    [channelPins, draftStartTimes, nowMs, pendingSends, projectGroups]
+    () => computeChannelSections(projectGroups, nowMs, draftStartTimes, pendingSends),
+    [draftStartTimes, nowMs, pendingSends, projectGroups]
   )
   // In a store, so the sections are as you left them when you come back from
   // a channel (which unmounts this list).
@@ -377,10 +375,10 @@ export function ChannelList({
                     group={group}
                     active={group.groupKey === activeProjectId}
                     menuPinned={group.groupKey === pinnedChannelId}
-                    pinned={channelPins[group.groupKey] != null}
+                    pinned={group.pinnedAt != null}
                     actions={actions}
                     onSelect={handleSelect}
-                    onTogglePin={togglePin}
+
                   />
                 ))}
               </div>

@@ -1536,6 +1536,15 @@ export function createWsRouter({
           await broadcastFilteredSnapshots({ includeSidebar: true, includeLocalProjects: true })
           return
         }
+        case "project.setPinned": {
+          const pinnedAt = typeof command.pinnedAt === "number" && Number.isFinite(command.pinnedAt)
+            ? command.pinnedAt
+            : undefined
+          await store.setProjectPinned(command.projectId, command.pinned, pinnedAt)
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
+          await broadcastFilteredSnapshots({ includeSidebar: true })
+          return
+        }
         case "project.clone": {
           const cloneDest = await resolveClonePath(command.localPath, command.fallbackPath)
           await cloneRepository(command.cloneUrl, cloneDest)

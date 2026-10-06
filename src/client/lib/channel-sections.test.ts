@@ -25,7 +25,10 @@ function project(groupKey: string, chats: SidebarChatRow[]): SidebarProjectGroup
 }
 
 function sectionsOf(groups: SidebarProjectGroup[], pins: Record<string, number> = {}) {
-  return computeChannelSections(groups, NOW, pins)
+  const pinned = groups.map((group) => (
+    pins[group.groupKey] === undefined ? group : { ...group, pinnedAt: pins[group.groupKey] }
+  ))
+  return computeChannelSections(pinned, NOW)
     .map((section) => [section.label, section.groups.map((group) => group.groupKey)])
 }
 
@@ -67,9 +70,6 @@ describe("computeChannelSections", () => {
     ])
   })
 
-  test("ignores a pin for a project that is gone", () => {
-    expect(sectionsOf([project("active", [chat("a", NOW)])], { gone: 1 })).toEqual([["Today", ["active"]]])
-  })
 })
 
 describe("getChannelPeekGroups", () => {

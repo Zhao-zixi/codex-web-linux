@@ -24,9 +24,6 @@ export interface ChannelSection {
   groups: SidebarProjectGroup[]
 }
 
-/** Project id → when the channel was pinned. */
-export type ChannelPins = Readonly<Record<string, number>>
-
 /**
  * Each project goes to the section of its highest-priority chat: the sections
  * are walked in display order, and a project lands where it is first met. So
@@ -34,7 +31,8 @@ export type ChannelPins = Readonly<Record<string, number>>
  * and one with a chat from today and a relevant one sits under Relevant.
  * Within a section projects keep the order of the chats that put them there.
  *
- * Pinned holds the channels pinned in their own right and nothing else. A
+ * Pinned holds the channels pinned in their own right (`pinnedAt`, kept by
+ * the server with the project) and nothing else. A
  * pinned chat is not a pinned project: its pin is set aside here, and the chat
  * counts toward its project by status and age like any other.
  *
@@ -45,7 +43,6 @@ export type ChannelPins = Readonly<Record<string, number>>
 export function computeChannelSections(
   projectGroups: readonly SidebarProjectGroup[],
   nowMs: number,
-  channelPins: ChannelPins,
   draftStartTimes?: DraftStartTimes,
   pendingSends?: PendingSendTimes,
 ): ChannelSection[] {
@@ -71,8 +68,11 @@ export function computeChannelSections(
   }
   const projectIdsOf = (threads: readonly SidebarThread[]) => threads.map((thread) => thread.projectId)
 
-  const pinnedChannelIds = Object.keys(channelPins)
-    .sort((left, right) => channelPins[left]! - channelPins[right]! || left.localeCompare(right))
+  // In the order they were pinned, which the server records with the project.
+  const pinnedChannelIds = projectGroups
+    .filter((group) => group.pinnedAt != null)
+    .sort((left, right) => left.pinnedAt! - right.pinnedAt! || left.groupKey.localeCompare(right.groupKey))
+    .map((group) => group.groupKey)
 
   const result: ChannelSection[] = [
     {

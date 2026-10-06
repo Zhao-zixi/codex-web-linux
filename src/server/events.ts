@@ -2,6 +2,12 @@ import type { AgentProvider, ChatSchedule, ProjectSummary, QueuedChatMessage, Tr
 
 export interface ProjectRecord extends ProjectSummary {
   sidebarTitle?: string
+  /**
+   * When the project was pinned in the Channels view. Here, with the project,
+   * so a pin made in one browser or in the iOS app is there in the others;
+   * each used to keep its own.
+   */
+  pinnedAt?: number
   deletedAt?: number
 }
 
@@ -214,6 +220,19 @@ export type ProjectEvent = {
   timestamp: number
   projectId: string
   title: string | null
+} | {
+  v: 2
+  type: "project_pin_set"
+  timestamp: number
+  projectId: string
+  pinned: boolean
+  /**
+   * When it was pinned, where that is not when this was recorded: a pin
+   * carried over from a device that had been keeping its own. Pinned
+   * projects are listed in the order they were pinned, so the original time
+   * is what puts it back in its place.
+   */
+  pinnedAt?: number
 } | {
   v: 2
   type: "project_removed"

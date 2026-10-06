@@ -110,6 +110,8 @@ interface KannaSidebarProps {
   onRenameProject: (projectId: string, sidebarTitle: string | undefined, realTitle: string) => void
   onHideProject: (projectId: string) => void
   onReorderProjectGroups: (projectIds: string[]) => void
+  /** Pins or unpins a project in the Channels view. */
+  onSetProjectPinned: (projectId: string, pinned: boolean) => void
   editorLabel: string
   updateSnapshot: UpdateSnapshot | null
   onOpenChangelog: () => void
@@ -348,6 +350,7 @@ function KannaSidebarImpl({
   onRenameProject,
   onHideProject,
   onReorderProjectGroups,
+  onSetProjectPinned,
   editorLabel,
   updateSnapshot,
   onOpenChangelog,
@@ -596,7 +599,8 @@ function KannaSidebarImpl({
     onOpenExternalPath,
     onShowArchivedProject: setArchivedProjectId,
     onHideProject,
-  }), [editorLabel, onCopyPath, onCreateChat, onHideProject, onOpenExternalPath, onRenameProject])
+    onSetProjectPinned,
+  }), [editorLabel, onCopyPath, onCreateChat, onHideProject, onOpenExternalPath, onRenameProject, onSetProjectPinned])
 
   // The chat hover card again, for the chats inside a channel's card. Stable,
   // so the memoized channel rows are not re-rendered by it.

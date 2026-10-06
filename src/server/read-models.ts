@@ -305,6 +305,7 @@ export function deriveSidebarData(
       title: project.sidebarTitle ?? project.title,
       realTitle: project.title,
       ...(project.sidebarTitle ? { sidebarTitle: project.sidebarTitle } : {}),
+      ...(project.pinnedAt ? { pinnedAt: project.pinnedAt } : {}),
       ...(repoLabel ? { repoName: repoLabel.repoName } : {}),
       // Only ever stated when known. A label answers it outright; otherwise the
       // probe has to have looked and come back empty-handed.

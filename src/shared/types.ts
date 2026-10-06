@@ -1188,6 +1188,11 @@ export interface SidebarProjectGroup {
   realTitle: string
   sidebarTitle?: string
   /**
+   * When the project was pinned in the Channels view (epoch ms). Absent when
+   * it isn't. Pinned projects are listed in the order they were pinned.
+   */
+  pinnedAt?: number
+  /**
    * Basename of the git repo root, absent when the project isn't in a repo.
    * Not always the project's folder name — a project can be a subdirectory of
    * its repo. Together with `branchName` this is the New Sidebar's `repo/branch`

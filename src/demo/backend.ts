@@ -68,6 +68,8 @@ export const browserClock: DemoClock = {
 
 interface ProjectState {
   seed: DemoProjectSeed
+  /** Pinned in the Channels view, and when. */
+  pinnedAt?: number
   /** The working tree. */
   files: Map<string, string>
   /** The last commit. The diff panel shows `files` against this. */
@@ -556,6 +558,12 @@ export class DemoBackend {
         }
         return { ok: true, mode: command.mode, pushed: command.mode === "commit_and_push", snapshotChanged: true }
       }
+      case "project.setPinned": {
+        const project = this.projects.get(command.projectId)
+        if (!project) throw new Error("Project not found")
+        project.pinnedAt = command.pinned ? command.pinnedAt ?? this.clock.now() : undefined
+        return null
+      }
       case "project.open": {
         const project = [...this.projects.values()].find((candidate) => candidate.seed.localPath === command.localPath)
         if (!project) throw new Error(DEMO_UNAVAILABLE_MESSAGE)
@@ -847,6 +855,7 @@ export class DemoBackend {
           groupKey: project.seed.id,
           title: project.seed.title,
           realTitle: project.seed.title,
+          ...(project.pinnedAt ? { pinnedAt: project.pinnedAt } : {}),
           repoName: project.seed.title,
           hasGitRepo: true,
           branchName: project.seed.branchName,

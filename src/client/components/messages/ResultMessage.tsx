@@ -1,3 +1,4 @@
+import type { MessageSource } from "../../../shared/types"
 import type { ProcessedResultMessage } from "./types"
 import { MetaRow, MetaLabel } from "./shared"
 
@@ -5,6 +6,40 @@ interface Props {
   message: ProcessedResultMessage
   /** Timestamp of the user prompt that follows this turn, when one exists. */
   nextPromptTimestamp?: string
+  /** Who sent that prompt, when it was not the user. See `promptOriginLabel`. */
+  nextPromptOrigin?: string
+}
+
+/**
+ * Who a prompt came from when the user did not type it, as the time boundary
+ * above it says: "3:42 PM from an automation". Undefined for the user's own.
+ */
+export function promptOriginLabel(source: MessageSource | undefined): string | undefined {
+  if (!source) return undefined
+  if (source.kind === "schedule") return "from an automation"
+  if (source.kind === "report") return "from a sub-chat"
+  return "from another agent"
+}
+
+/** "3:42 PM", or "3:42 PM from another agent". */
+export function formatPromptBoundary(timestamp: string, origin?: string): string {
+  const time = formatPromptTimestamp(timestamp)
+  return origin ? `${time} ${origin}` : time
+}
+
+/**
+ * The rule between turns, with the time on it. It closes one turn and dates
+ * the prompt that opens the next, so a prompt nobody typed is attributed
+ * here, on the line that introduces it.
+ */
+export function TimeBoundary({ label }: { label: string }) {
+  return (
+    <MetaRow className="px-0.5 text-xs tracking-wide">
+      <div className="w-full h-[1px] bg-border/70"></div>
+      <MetaLabel className="whitespace-nowrap text-[12px] tracking-wide text-muted-foreground/60 flex-shrink-0">{label}</MetaLabel>
+      <div className="w-full h-[1px] bg-border/70"></div>
+    </MetaRow>
+  )
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -61,7 +96,7 @@ export function formatDuration(ms: number): string {
   return `${seconds}s`
 }
 
-export function ResultMessage({ message, nextPromptTimestamp }: Props) {
+export function ResultMessage({ message, nextPromptTimestamp, nextPromptOrigin }: Props) {
   if (!message.success) {
     return (
       <div className="px-4 py-3 mx-2 my-1 rounded-lg bg-destructive/10 border border-destructive/20 text-destructive text-sm">
@@ -71,14 +106,8 @@ export function ResultMessage({ message, nextPromptTimestamp }: Props) {
   }
 
   const label = nextPromptTimestamp
-    ? formatPromptTimestamp(nextPromptTimestamp)
+    ? formatPromptBoundary(nextPromptTimestamp, nextPromptOrigin)
     : `${formatPromptTimestamp(message.timestamp)} · Worked for ${formatDuration(message.durationMs)}`
 
-  return (
-    <MetaRow className="px-0.5 text-xs tracking-wide">
-      <div className="w-full h-[1px] bg-border/70"></div>
-      <MetaLabel className="whitespace-nowrap text-[12px] tracking-wide text-muted-foreground/60 flex-shrink-0">{label}</MetaLabel>
-      <div className="w-full h-[1px] bg-border/70"></div>
-    </MetaRow>
-  )
+  return <TimeBoundary label={label} />
 }

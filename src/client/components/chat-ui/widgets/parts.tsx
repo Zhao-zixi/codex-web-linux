@@ -187,6 +187,12 @@ export interface WidgetRowProps {
    */
   menuIdle?: ReactNode
   menuLabel?: string
+  /**
+   * For a row whose menu is not its own to build: a chat's row gets the chat's
+   * menu, the one every list of chats uses. Wraps the row in that menu in
+   * place of this row's `ContextMenu`, and the kebab opens it all the same.
+   */
+  wrapMenu?: (row: ReactNode) => ReactNode
   /** Makes the row pressable (Enter and Space too). Without it the row is static. */
   onActivate?: () => void
   /**
@@ -230,6 +236,7 @@ export function WidgetRow({
   menu,
   menuIdle,
   menuLabel = "More actions",
+  wrapMenu,
   onActivate,
   highlightClassName,
   active = false,
@@ -244,6 +251,7 @@ export function WidgetRow({
   ...aria
 }: WidgetRowProps) {
   const interactive = Boolean(onActivate) && !disabled
+  const hasMenu = Boolean(menu) || Boolean(wrapMenu)
   const row = (
     <div
       id={id}
@@ -261,7 +269,7 @@ export function WidgetRow({
         interactive && "cursor-pointer",
         disabled && "opacity-60",
         muted && "text-muted-foreground",
-        highlightClassName ?? (active ? ROW_HIGHLIGHT_CLASS : interactive || menu ? ROW_HOVER_CLASS : undefined),
+        highlightClassName ?? (active ? ROW_HIGHLIGHT_CLASS : interactive || hasMenu ? ROW_HOVER_CLASS : undefined),
         className,
       )}
       {...aria}
@@ -279,7 +287,7 @@ export function WidgetRow({
           {subMeta ? <div className="flex h-4 items-center gap-1.5">{subMeta}</div> : null}
         </div>
       ) : null}
-      {menu ? (
+      {hasMenu ? (
         menuIdle ? (
           // One slot, two occupants: the idle glyph at rest, the kebab when
           // the row is hovered or focused. They cross-fade in place (shrink
@@ -303,6 +311,7 @@ export function WidgetRow({
       ) : null}
     </div>
   )
+  if (wrapMenu) return wrapMenu(row)
   if (!menu) return row
   return (
     <ContextMenu>

@@ -7,6 +7,8 @@ import { stripWorkspacePath } from "../../lib/pathUtils"
 import { AnimatedShinyText } from "../ui/animated-shiny-text"
 import { formatBashCommandTitle, toTitleCase } from "../../lib/formatters"
 import { ToolCallExpandedContent } from "./ToolCallExpandedContent"
+import { ChatToolMessage, isChatToolCall } from "./ChatToolMessage"
+import { isScheduleToolCall, ScheduleToolMessage } from "./ScheduleToolMessage"
 import { DisplayToolMessage } from "./DisplayToolMessage"
 import { useToolPayloadPrefetch } from "./tool-payload-context"
 
@@ -96,6 +98,8 @@ export function ToolCallMessage({ message, isLoading = false, localPath }: Props
   }
 
   if (message.toolKind === "display") return <DisplayToolMessage message={message} />
+  if (isChatToolCall(message)) return <ChatToolMessage message={message} />
+  if (isScheduleToolCall(message)) return <ScheduleToolMessage message={message} />
 
   return (
     <MetaRow className="w-full" onPointerEnter={prefetchOwnPayloads}>

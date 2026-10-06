@@ -88,7 +88,26 @@ export function carryProjectSidebarLabel(
   if (cached) projectLabelCache.set(to, cached)
 }
 
-/** Flattens the sidebar snapshot into one searchable thread list (active + archived). */
+/**
+ * A chat another chat's agent started. It is shown with its parent (the Tasks
+ * widget, the card where it was started), so the lists of chats leave it out.
+ */
+export function isSubChat(row: Pick<SidebarChatRow, "parentChatId">): boolean {
+  return row.parentChatId != null
+}
+
+/** The threads a list of chats shows: everything but sub-chats. */
+export function listedThreads(threads: SidebarThread[]): SidebarThread[] {
+  return threads.some((thread) => isSubChat(thread.row))
+    ? threads.filter((thread) => !isSubChat(thread.row))
+    : threads
+}
+
+/**
+ * Flattens the sidebar snapshot into one searchable thread list (active +
+ * archived). Sub-chats included: this is also what a chat is looked up in.
+ * A caller that lists chats passes the result through `listedThreads`.
+ */
 export function flattenSidebarThreads(data: SidebarData): SidebarThread[] {
   const threads: SidebarThread[] = []
   for (const group of data.projectGroups) {

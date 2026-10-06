@@ -81,7 +81,8 @@ export function getNewestRemainingChatId(projectGroups: SidebarData["projectGrou
   const projectGroup = projectGroups.find((group) => group.chats.some((chat) => chat.chatId === activeChatId))
   if (!projectGroup) return null
 
-  return projectGroup.chats.find((chat) => chat.chatId !== activeChatId)?.chatId ?? null
+  // A chat the project's list shows, not a sub-chat the user never opened.
+  return projectGroup.chats.find((chat) => chat.chatId !== activeChatId && !chat.parentChatId)?.chatId ?? null
 }
 
 export function applySidebarProjectOrder(

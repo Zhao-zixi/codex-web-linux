@@ -1,5 +1,6 @@
 import { useMemo } from "react"
 import type { ChatAttachment } from "../../../shared/types"
+import { stripSystemMessages } from "../../../shared/message-preview"
 import { CornerUpLeft } from "lucide-react"
 import { TranscriptMarkdown } from "./shared"
 import { classifyAttachmentPreview } from "./attachmentPreview"
@@ -23,22 +24,17 @@ interface Props {
 }
 
 /**
- * Legacy compatibility: steered prompts used to persist the injected
- * <system-message> block inside the transcript content, hidden here at render
- * time. Injections are now wire-only (applied at the harness boundary in
- * startTurnForChat and never stored), so this strip only matters for
- * transcripts written before that change.
+ * Split a prompt into what is shown and whether anything was held back.
+ *
+ * A `<system-message>` block is for the agent, not the reader (see
+ * `stripSystemMessages`). Most of what Kanna tells an agent is wire-only and
+ * never stored. Two kinds are stored and so reach here: the header on a
+ * sub-chat's report, which the report has to carry, and the steer notice in
+ * transcripts written before that became wire-only.
  */
 function parseSystemMessage(content: string) {
-  const match = content.match(/^<system-message>\s*([\s\S]*?)\s*<\/system-message>\s*([\s\S]*)$/)
-  if (!match) {
-    return { systemMessage: null, body: content }
-  }
-
-  return {
-    systemMessage: match[1]?.trim() || null,
-    body: match[2] ?? "",
-  }
+  const body = stripSystemMessages(content)
+  return { systemMessage: body === content ? null : true, body }
 }
 
 /**

@@ -22,6 +22,24 @@ function toolResult(toolId: string, content: unknown, isError = false): Transcri
 const file = (name: string, kind: "image" | "file" = "image") =>
   ({ type: "attachment", url: `/api/chats/c1/media/${name}`, name, kind, mimeType: kind === "image" ? "image/png" : "text/plain", size: 1 })
 
+describe("sub-chat rows", () => {
+  test("a sub-chat's row finds the card where it was started, not one that only messaged it", () => {
+    const entries = [
+      toolCall("create_chat", "t1", { message: "audit" }),
+      toolResult("t1", { chatId: "child-1", title: "Audit" }),
+      toolCall("send_message", "t2", { chatId: "child-1", message: "also check auth" }),
+      toolResult("t2", { chatId: "child-1", started: true }),
+      toolCall("fork_chat", "t3", { message: "try the other way" }),
+      toolResult("t3", { chatId: "child-2" }),
+      toolCall("create_chat", "t4", { message: "broken" }),
+      toolResult("t4", [{ type: "text", text: "Project not found" }], true),
+    ]
+    const chat = (chatId: string): SubagentActivity => ({ id: `chat:${chatId}`, type: "chat", label: chatId, status: "running", startedAt: 0, chatId })
+    const toolIds = deriveSubagentToolIds(entries, [chat("child-1"), chat("child-2"), chat("elsewhere")])
+    expect(Object.fromEntries(toolIds)).toEqual({ "chat:child-1": "t1", "chat:child-2": "t3" })
+  })
+})
+
 describe("deriveSentAttachments", () => {
   test("collects send_attachments and generate_images results, newest first", () => {
     const entries = [

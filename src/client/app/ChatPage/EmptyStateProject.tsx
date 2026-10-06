@@ -10,7 +10,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../../components/ui/too
 import { getPathBasename } from "../../lib/formatters"
 import { formatPathWithTilde } from "../../lib/pathUtils"
 import { getThreadDetailLabel } from "../../lib/thread-detail-label"
-import { flattenSidebarThreads, type SidebarThread } from "../../lib/thread-sections"
+import { flattenSidebarThreads, listedThreads, type SidebarThread } from "../../lib/thread-sections"
 import { cn } from "../../lib/utils"
 import { useChatHasDraft } from "../../stores/chatInputStore"
 import { useSidebarStore } from "../../stores/sidebarStore"
@@ -116,7 +116,7 @@ export function EmptyStateProjectChats({ projectId, activeChatId, cascadeIn = fa
   const cascading = cascadeIn && !cascadeDone
 
   const threads = useMemo(
-    () => (group ? flattenSidebarThreads({ projectGroups: [group] }).filter((thread) => thread.chatId !== activeChatId) : []),
+    () => (group ? listedThreads(flattenSidebarThreads({ projectGroups: [group] })).filter((thread) => thread.chatId !== activeChatId) : []),
     [activeChatId, group],
   )
 

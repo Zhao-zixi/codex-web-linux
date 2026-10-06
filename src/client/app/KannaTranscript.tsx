@@ -10,7 +10,10 @@ import { AskUserQuestionMessage } from "../components/messages/AskUserQuestionMe
 import { ExitPlanModeMessage } from "../components/messages/ExitPlanModeMessage"
 import { TodoWriteMessage } from "../components/messages/TodoWriteMessage"
 import { ToolCallMessage } from "../components/messages/ToolCallMessage"
-import { ResultMessage } from "../components/messages/ResultMessage"
+import { formatPromptBoundary, promptOriginLabel, ResultMessage, TimeBoundary } from "../components/messages/ResultMessage"
+import { isChatToolCall } from "../components/messages/ChatToolMessage"
+import { isScheduleToolCall } from "../components/messages/ScheduleToolMessage"
+import { stripSystemMessages } from "../../shared/message-preview"
 import { InterruptedMessage } from "../components/messages/InterruptedMessage"
 import { CompactBoundaryMessage, ContextClearedMessage } from "../components/messages/CompactBoundaryMessage"
 import { CompactSummaryMessage } from "../components/messages/CompactSummaryMessage"
@@ -45,6 +48,10 @@ export interface ResolvedSingleTranscriptRow {
   hideResult: boolean
   isFinalStatus: boolean
   nextPromptTimestamp?: string
+  /** On a result: who sent the prompt that follows, when not the user. */
+  nextPromptOrigin?: string
+  /** On a prompt nobody typed that no result's boundary introduces: it draws its own. */
+  showsOwnBoundary?: boolean
 }
 
 export interface ResolvedToolGroupTranscriptRow {
@@ -73,6 +80,10 @@ interface TranscriptMessageRenderState {
   hideResult: boolean
   isFinalStatus: boolean
   nextPromptTimestamp?: string
+  /** On a result: who sent the prompt that follows, when not the user. */
+  nextPromptOrigin?: string
+  /** On a prompt nobody typed that no result's boundary introduces: it draws its own. */
+  showsOwnBoundary?: boolean
   shouldRender: boolean
 }
 
@@ -86,7 +97,10 @@ function sameRestore(left: SessionRestore | undefined, right: SessionRestore | u
 
 function isCollapsibleToolCall(message: HydratedTranscriptMessage) {
   if (message.kind !== "tool") return false
+  // A chat's card or a schedule's stands on its own like a chart does: folded
+  // into "3 tool calls" it would hide the one thing it is there to show.
   if (message.toolKind === "ask_user_question" || message.toolKind === "display") return false
+  if (isChatToolCall(message) || isScheduleToolCall(message)) return false
   const toolName = (message as ProcessedToolCall).toolName
   return !SPECIAL_TOOL_NAME_SET.has(toolName)
 }
@@ -103,6 +117,8 @@ function getTranscriptMessageRenderState(
     hideResult,
     isFinalStatus,
     nextPromptTimestamp,
+    nextPromptOrigin,
+    showsOwnBoundary,
   }: Omit<TranscriptMessageRenderState, "shouldRender">
 ): TranscriptMessageRenderState {
   let shouldRender = !message.hidden
@@ -153,6 +169,8 @@ function getTranscriptMessageRenderState(
     hideResult,
     isFinalStatus,
     nextPromptTimestamp,
+    nextPromptOrigin,
+    showsOwnBoundary,
     shouldRender,
   }
 }
@@ -168,12 +186,17 @@ function buildTranscriptMessageRenderStates(
 
   // Timestamp of the next visible user prompt after each message (undefined when none follows).
   const nextPromptTimestamps = new Array<string | undefined>(messages.length)
+  // And who sent it, when the user did not: the boundary above it says so.
+  const nextPromptOrigins = new Array<string | undefined>(messages.length)
   let upcomingPromptTimestamp: string | undefined
+  let upcomingPromptOrigin: string | undefined
   for (let index = messages.length - 1; index >= 0; index--) {
     nextPromptTimestamps[index] = upcomingPromptTimestamp
+    nextPromptOrigins[index] = upcomingPromptOrigin
     const message = messages[index]!
     if (message.kind === "user_prompt" && !message.hidden) {
       upcomingPromptTimestamp = message.timestamp
+      upcomingPromptOrigin = promptOriginLabel(message.source)
     }
   }
 
@@ -191,6 +214,28 @@ function buildTranscriptMessageRenderStates(
     } else if (message.kind === "result") {
       emptyTurnResults[index] = message.success && !turnHasContent
       turnHasContent = false
+    }
+  }
+
+  // A prompt's time boundary is the divider that closed the turn before it, so
+  // a prompt with no such divider has none: the chat's first message, or one
+  // after a turn that was stopped or failed. That is fine for a prompt the
+  // user typed. One an agent or a schedule sent has to say so, so it draws a
+  // boundary of its own.
+  const ownBoundaries = new Array<boolean>(messages.length).fill(false)
+  let boundaryAhead = false
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index]!
+    if (message.kind === "result") {
+      const hidden = message.hidden
+        || emptyTurnResults[index]
+        || messages[index + 1]?.kind === "context_cleared"
+        || messages[index - 1]?.kind === "context_cleared"
+      // A failed result draws an error, not a time.
+      if (!hidden && message.success) boundaryAhead = true
+    } else if (message.kind === "user_prompt" && !message.hidden) {
+      ownBoundaries[index] = message.source !== undefined && !boundaryAhead
+      boundaryAhead = false
     }
   }
 
@@ -248,6 +293,8 @@ function buildTranscriptMessageRenderStates(
         || previousMessage?.kind === "context_cleared",
       isFinalStatus: index === messages.length - 1,
       nextPromptTimestamp: message.kind === "result" ? nextPromptTimestamps[index] : undefined,
+      nextPromptOrigin: message.kind === "result" ? nextPromptOrigins[index] : undefined,
+      showsOwnBoundary: ownBoundaries[index] || undefined,
     })
   })
 }
@@ -437,6 +484,8 @@ function isResolvedTranscriptRowUnchanged(left: ResolvedTranscriptRow, right: Re
       && left.hideResult === right.hideResult
       && left.isFinalStatus === right.isFinalStatus
       && left.nextPromptTimestamp === right.nextPromptTimestamp
+      && left.nextPromptOrigin === right.nextPromptOrigin
+      && left.showsOwnBoundary === right.showsOwnBoundary
       && sameMessage(left.message, right.message)
     )
   }
@@ -503,6 +552,10 @@ interface TranscriptSingleRowProps {
   hideResult: boolean
   isFinalStatus: boolean
   nextPromptTimestamp?: string
+  /** On a result: who sent the prompt that follows, when not the user. */
+  nextPromptOrigin?: string
+  /** On a prompt nobody typed that no result's boundary introduces: it draws its own. */
+  showsOwnBoundary?: boolean
   onAskUserQuestionSubmit: (
     toolUseId: string,
     questions: AskUserQuestionItem[],
@@ -528,13 +581,28 @@ const TranscriptSingleRow = memo(function TranscriptSingleRow({
   hideResult,
   isFinalStatus,
   nextPromptTimestamp,
+  nextPromptOrigin,
+  showsOwnBoundary,
   onAskUserQuestionSubmit,
   onExitPlanModeConfirm,
 }: TranscriptSingleRowProps) {
   let rendered: React.ReactNode = null
 
   if (message.kind === "user_prompt") {
-    rendered = <UserMessage key={message.id} content={message.content} attachments={message.attachments} steered={message.steered} flash={flash} />
+    // A message that is all `<system-message>` has nothing for a reader: a
+    // report on a sub-chat that was stopped before it said anything.
+    const hasBody = stripSystemMessages(message.content).length > 0 || (message.attachments?.length ?? 0) > 0
+    const bubble = hasBody
+      ? <UserMessage key={message.id} content={message.content} attachments={message.attachments} steered={message.steered} flash={flash} />
+      : null
+    rendered = showsOwnBoundary ? (
+      // 20px apart, the gap two transcript rows sit at (see the row's padding
+      // in ChatTranscriptViewport), so the boundary reads as the row above.
+      <div className="flex flex-col gap-5">
+        <TimeBoundary label={formatPromptBoundary(message.timestamp, promptOriginLabel(message.source))} />
+        {bubble}
+      </div>
+    ) : bubble
   } else {
     switch (message.kind) {
       case "unknown":
@@ -590,7 +658,7 @@ const TranscriptSingleRow = memo(function TranscriptSingleRow({
         rendered = <ToolCallMessage key={message.id} message={message} isLoading={isLoading} localPath={localPath} />
         break
       case "result":
-        rendered = hideResult ? null : <ResultMessage key={message.id} message={message} nextPromptTimestamp={nextPromptTimestamp} />
+        rendered = hideResult ? null : <ResultMessage key={message.id} message={message} nextPromptTimestamp={nextPromptTimestamp} nextPromptOrigin={nextPromptOrigin} />
         break
       case "context_window_updated":
         rendered = null
@@ -642,6 +710,8 @@ const TranscriptSingleRow = memo(function TranscriptSingleRow({
   && prev.hideResult === next.hideResult
   && prev.isFinalStatus === next.isFinalStatus
   && prev.nextPromptTimestamp === next.nextPromptTimestamp
+  && prev.nextPromptOrigin === next.nextPromptOrigin
+  && prev.showsOwnBoundary === next.showsOwnBoundary
   && prev.onAskUserQuestionSubmit === next.onAskUserQuestionSubmit
   && prev.onExitPlanModeConfirm === next.onExitPlanModeConfirm
   && sameMessage(prev.message, next.message)
@@ -740,6 +810,8 @@ export function buildResolvedTranscriptRows(
       hideResult: renderState.hideResult,
       isFinalStatus: renderState.isFinalStatus,
       nextPromptTimestamp: renderState.nextPromptTimestamp,
+      nextPromptOrigin: renderState.nextPromptOrigin,
+      showsOwnBoundary: renderState.showsOwnBoundary,
     }
 
     if (renderState.shouldRender) {
@@ -810,6 +882,8 @@ export const KannaTranscriptRow = memo(function KannaTranscriptRow({
       hideResult={row.hideResult}
       isFinalStatus={row.isFinalStatus}
       nextPromptTimestamp={row.nextPromptTimestamp}
+      nextPromptOrigin={row.nextPromptOrigin}
+      showsOwnBoundary={row.showsOwnBoundary}
       onAskUserQuestionSubmit={onAskUserQuestionSubmit}
       onExitPlanModeConfirm={onExitPlanModeConfirm}
     />
@@ -850,6 +924,8 @@ export const KannaTranscriptRow = memo(function KannaTranscriptRow({
       && prev.row.hideResult === next.row.hideResult
       && prev.row.isFinalStatus === next.row.isFinalStatus
       && prev.row.nextPromptTimestamp === next.row.nextPromptTimestamp
+      && prev.row.nextPromptOrigin === next.row.nextPromptOrigin
+      && prev.row.showsOwnBoundary === next.row.showsOwnBoundary
       && sameMessage(prev.row.message, next.row.message)
   }
 

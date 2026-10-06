@@ -2,6 +2,7 @@ import type { SidebarProjectGroup } from "../../shared/types"
 import {
   computeSidebarThreadSections,
   flattenSidebarThreads,
+  listedThreads,
   mergeRelevantThreads,
   type DraftStartTimes,
   type PendingSendTimes,
@@ -48,7 +49,7 @@ export function computeChannelSections(
   draftStartTimes?: DraftStartTimes,
   pendingSends?: PendingSendTimes,
 ): ChannelSection[] {
-  const threads = flattenSidebarThreads({ projectGroups: [...projectGroups] }).map((thread) => (
+  const threads = listedThreads(flattenSidebarThreads({ projectGroups: [...projectGroups] })).map((thread) => (
     thread.row.pinnedAt == null ? thread : { ...thread, row: { ...thread.row, pinnedAt: undefined } }
   ))
   const sections = computeSidebarThreadSections(threads, nowMs, draftStartTimes, pendingSends)
@@ -136,7 +137,7 @@ export function getChannelPeekGroups(
   pendingSends?: PendingSendTimes,
   all = false,
 ): ChannelPeekGroup[] {
-  const threads = flattenSidebarThreads({ projectGroups: [group] })
+  const threads = listedThreads(flattenSidebarThreads({ projectGroups: [group] }))
   const sections = computeSidebarThreadSections(threads, nowMs, draftStartTimes, pendingSends)
   const buckets = all ? sections.buckets : sections.buckets.slice(0, 1)
   return [

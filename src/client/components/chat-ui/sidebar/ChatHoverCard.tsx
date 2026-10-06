@@ -486,8 +486,12 @@ function SidebarChatHoverCardImpl({
 }: {
   /** See `ListHoverCard`. */
   holdRowUnderPointerOnMount?: boolean
-  /** Beside a list down the sidebar; beneath for chats along a bar (the tabs). */
-  side?: "right" | "bottom"
+  /**
+   * Beside a list down the sidebar; beneath for chats along a bar (the tabs)
+   * and for a chat's card in the transcript; to the left of the widget
+   * column, which sits at the window's right edge.
+   */
+  side?: "right" | "bottom" | "left"
   /** The list's element; every chat row is somewhere beneath it. */
   containerRef: RefObject<HTMLDivElement | null>
   /** Every row the list can show, from `useStableSidebarThreads`. */
@@ -514,7 +518,7 @@ function SidebarChatHoverCardImpl({
   )
 }
 
-interface SidebarChatCardActions {
+export interface SidebarChatCardActions {
   /** Opens the chat plainly: the draft's action, and the row's. */
   onSelectChat: (chatId: string) => void
   /** Opens a chat at one end of its last exchange: the clickable previews. */
@@ -538,7 +542,7 @@ interface SidebarChatCardActions {
  * dismisses first: each takes you somewhere, and a card left standing would
  * hang over wherever that is.
  */
-function SidebarChatCard({
+export function SidebarChatCard({
   thread,
   dismiss,
   onSelectChat,

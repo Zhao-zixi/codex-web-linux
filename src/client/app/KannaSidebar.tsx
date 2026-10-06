@@ -54,6 +54,7 @@ import {
 import { formatActionShortcut } from "../lib/keybindings"
 import { SIDEBAR_MAX_WIDTH_PX } from "../lib/sidebarWidth"
 import { useStableSidebarThreads } from "./useStableSidebarThreads"
+import { listedThreads } from "../lib/thread-sections"
 import { OPEN_COMMAND_PALETTE_EVENT, openCommandPalette } from "../components/command-palette/CommandPalette"
 
 export const DEFAULT_SIDEBAR_WIDTH = 275
@@ -474,7 +475,8 @@ function KannaSidebarImpl({
   // a SidebarThread. Flattened once here and shared with the Chats tab so
   // projectId/projectTitle/archived stay correct in one place — and so both tabs
   // hand their rows the same identity-stable thread objects.
-  const threads = useStableSidebarThreads(data)
+  const everyThread = useStableSidebarThreads(data)
+  const threads = useMemo(() => listedThreads(everyThread), [everyThread])
   const threadByChatId = useMemo(
     () => new Map(threads.map((thread) => [thread.chatId, thread])),
     [threads]

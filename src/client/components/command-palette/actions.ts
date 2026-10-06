@@ -97,6 +97,8 @@ export function flattenVisibleProjectGroups(groups: SidebarProjectGroup[]): Pale
     let mostRecentChatId: string | null = null
     let lastActivityAt = 0
     for (const chat of group.chats) {
+      // Opening a project lands on a chat its list shows.
+      if (chat.parentChatId) continue
       const activityAt = chat.lastMessageAt ?? chat._creationTime
       if (activityAt >= lastActivityAt) {
         lastActivityAt = activityAt

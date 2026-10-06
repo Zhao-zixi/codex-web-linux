@@ -1,4 +1,5 @@
 import type { QueuedChatMessage } from "../../../shared/types"
+import { stripSystemMessages } from "../../../shared/message-preview"
 import { Button } from "../ui/button"
 import { TranscriptMarkdown } from "./shared"
 import { UserMessageAttachments } from "./UserMessage"
@@ -11,6 +12,8 @@ interface QueuedUserMessageProps {
 }
 
 export function QueuedUserMessage({ message, onRemove, onSendNow }: QueuedUserMessageProps) {
+  // What the sent message will show: without the parts meant for the agent.
+  const content = stripSystemMessages(message.content)
   return (
     <div className="flex flex-col items-end gap-2 py-2">
       <UserMessageAttachments attachments={message.attachments} />
@@ -25,8 +28,8 @@ export function QueuedUserMessage({ message, onRemove, onSendNow }: QueuedUserMe
               does in UserMessage. */}
           <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-end gap-2.5 rounded-2xl border border-dashed border-border bg-transparent pl-3.5 pr-1.5 py-1.5 prose prose-sm prose-invert text-left text-primary [&_p]:whitespace-pre-line">
             <div className="min-w-0">
-              {message.content ? (
-                <TranscriptMarkdown text={message.content} />
+              {content ? (
+                <TranscriptMarkdown text={content} />
               ) : (
                 <p className="text-muted-foreground">Queued</p>
               )}

@@ -208,6 +208,16 @@ interface Props {
 
 export interface ChatInputHandle {
   enqueueFiles: (files: File[]) => void
+  /**
+   * Puts text in the composer and the caret at its end, for something
+   * outside it that starts a message for you to finish (a schedule's Edit).
+   * Text already there is kept, with the new text on a line of its own after
+   * it: a draft is not something a click elsewhere should throw away.
+   *
+   * A method because the composer owns its text. Writing to the draft store
+   * from outside changes nothing here.
+   */
+  prefill: (text: string) => void
 }
 
 const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
@@ -745,9 +755,25 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
     processUploadQueue()
   }, [processUploadQueue, projectId])
 
+  const prefill = useCallback((text: string) => {
+    const existing = (textareaRef.current?.value ?? "").trimEnd()
+    const next = existing ? `${existing}\n\n${text}` : text
+    setValue(next)
+    if (chatId) setDraft(chatId, next)
+    setCaretPosition(next.length)
+    requestAnimationFrame(() => {
+      const element = textareaRef.current
+      if (!element) return
+      element.focus()
+      element.selectionStart = next.length
+      element.selectionEnd = next.length
+    })
+  }, [chatId, setDraft])
+
   useImperativeHandle(forwardedRef, () => ({
     enqueueFiles,
-  }), [enqueueFiles])
+    prefill,
+  }), [enqueueFiles, prefill])
 
   // The command palette's "Attach Files" action opens the hidden picker.
   useEffect(() => {

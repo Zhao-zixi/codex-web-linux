@@ -220,15 +220,17 @@ interface ChannelRowProps {
  * and finds the row under the pointer by `CHANNEL_ROW_ATTRIBUTE`.
  */
 const ChannelRow = memo(function ChannelRow({ group, active, menuPinned, pinned, actions, onSelect, onTogglePin }: ChannelRowProps) {
-  const unread = group.chats.some((chat) => chat.unread)
+  // A sub-chat finishing is its parent's news, not the channel's, so its
+  // unread mark is not counted. One that stops to ask you something still is.
+  const unread = group.chats.some((chat) => chat.unread && !chat.parentChatId)
   // Chats that want you: unread, or waiting on an answer. One chat counts
   // once even when it is both.
-  const attentionCount = group.chats.filter((chat) => chat.unread || chat.status === "waiting_for_user").length
+  const attentionCount = group.chats.filter((chat) => (chat.unread && !chat.parentChatId) || chat.status === "waiting_for_user").length
   // The mark is the status of the channel's most pressing chat, drawn as that
   // chat's own row draws it: running, then waiting on you, then unread.
   const leadChat = group.chats.find((chat) => chat.status === "running" || chat.status === "starting")
     ?? group.chats.find((chat) => chat.status === "waiting_for_user")
-    ?? group.chats.find((chat) => chat.unread)
+    ?? group.chats.find((chat) => chat.unread && !chat.parentChatId)
   const statusMark = leadChat ? renderChatStatusDot(leadChat) : null
 
   return (

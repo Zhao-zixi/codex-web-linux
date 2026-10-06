@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Check, Loader2, MessageSquare, Network, Radar, Square, X, type LucideIcon } from "lucide-react"
-import type { SubagentActivity, TranscriptEntry } from "../../../../shared/types"
+import { PROVIDERS, type SubagentActivity, type TranscriptEntry } from "../../../../shared/types"
 import { cn } from "../../../lib/utils"
+import { useChatReferenceActions, useSidebarThread } from "../chat-reference"
+import { SidebarChatCard } from "../sidebar/ChatHoverCard"
+import { ThreadRowMenu } from "../sidebar/ThreadRow"
 import { formatPromptTimestamp } from "../../messages/ResultMessage"
 import { formatToolCallTitle } from "../../messages/ToolCallMessage"
 import { useToolPayload } from "../../messages/tool-payload-context"
@@ -263,6 +266,90 @@ export function TaskHoverCardContent({ task, now, canJump }: { task: SubagentAct
   )
 }
 
+/** Harness names, from the catalog the provider picker reads. */
+const PROVIDER_LABELS = new Map(PROVIDERS.map((provider) => [provider.id, provider.label]))
+
+/**
+ * A sub-chat's row: a chat this one's agent started, listed with the
+ * subagents because it is one, only run by Kanna and on any harness.
+ *
+ * It reads like a subagent's row and behaves like a chat's. A click opens the
+ * chat, the menu is the chat's own menu with Stop ahead of it, and the hover
+ * card is the sidebar's card for that chat. The line under the title names the
+ * harness, which is the one thing a subagent row never has to say.
+ */
+function ChatTaskRow({ task, now, isStopping, onStop, onJump, className }: {
+  task: SubagentActivity
+  now: number
+  isStopping: boolean
+  onStop: () => void
+  /** Scrolls to the card where the chat was started, when that is in the loaded transcript. */
+  onJump?: () => void
+  className?: string
+}) {
+  const thread = useSidebarThread(task.chatId)
+  const actions = useChatReferenceActions()
+  const { Icon, className: iconClassName, label } = statusIcon(task, isStopping)
+  const canStop = task.status === "running" && task.stoppable && !isStopping
+  const harness = thread?.row.provider ? PROVIDER_LABELS.get(thread.row.provider) : undefined
+  const chatId = task.chatId
+  const items = (
+    <>
+      {onJump ? (
+        <ContextMenuItem onSelect={onJump}>
+          <MessageSquare className="size-3.5" />
+          <span className="text-xs font-medium">Show in Chat</span>
+        </ContextMenuItem>
+      ) : null}
+      {canStop ? (
+        <ContextMenuItem onSelect={onStop} className="text-destructive focus:text-destructive">
+          <Square className="size-3.5" />
+          <span className="text-xs font-medium">Stop Chat</span>
+        </ContextMenuItem>
+      ) : null}
+    </>
+  )
+  const hasItems = Boolean(onJump) || canStop
+  return (
+    <WidgetRow
+      rowKey={task.id}
+      className={className}
+      icon={(
+        <SwapIn swapKey={isStopping ? "stopping" : task.status}>
+          <Icon role="img" className={iconClassName} aria-label={label} />
+        </SwapIn>
+      )}
+      title={thread?.title ?? task.label}
+      subtitle={[harness, task.summary].filter(Boolean).join(" · ") || undefined}
+      meta={isStopping ? "Stopping…" : formatElapsed((task.endedAt ?? now) - task.startedAt)}
+      onActivate={actions && chatId ? () => actions.onOpenChat(chatId) : undefined}
+      menuLabel="Chat actions"
+      // The chat's own menu when the chat is known; without it, only what
+      // this row can do by itself.
+      wrapMenu={thread && actions ? (row) => (
+        <ThreadRowMenu
+          thread={thread}
+          archived={thread.archived}
+          editorLabel={actions.editorLabel}
+          {...actions.menu}
+          leadingItems={hasItems ? items : undefined}
+        >
+          {row}
+        </ThreadRowMenu>
+      ) : undefined}
+      menu={!(thread && actions) && hasItems ? items : undefined}
+    />
+  )
+}
+
+/** The sidebar's chat card, for a sub-chat's row. Falls back to the task card until the chat is known. */
+function ChatTaskCard({ task, now, canJump, dismiss }: { task: SubagentActivity; now: number; canJump: boolean; dismiss: () => void }) {
+  const thread = useSidebarThread(task.chatId)
+  const actions = useChatReferenceActions()
+  if (!thread || !actions) return <TaskHoverCardContent task={task} now={now} canJump={canJump} />
+  return <SidebarChatCard thread={thread} dismiss={dismiss} {...actions.card} />
+}
+
 export function TasksWidget({
   tasks,
   toolIds,
@@ -300,6 +387,20 @@ export function TasksWidget({
         {error ? <WidgetError>{error}</WidgetError> : null}
         {shown.map((task, index) => {
           const isStopping = stopping.has(task.id)
+          if (task.chatId) {
+            const spawnToolId = toolIds.get(task.id)
+            return (
+              <ChatTaskRow
+                key={task.id}
+                task={task}
+                now={now}
+                isStopping={isStopping}
+                onStop={() => stop(task.id)}
+                onJump={spawnToolId ? () => onJumpToToolCall(spawnToolId) : undefined}
+                className={index >= collapsedCount ? WIDGET_ROW_REVEAL_CLASS : undefined}
+              />
+            )
+          }
           const { Icon, className, label } = statusIcon(task, isStopping)
           const toolId = toolIds.get(task.id)
           const taskDetails = task.type === "subagent" ? details.get(task.id) : undefined
@@ -352,10 +453,11 @@ export function TasksWidget({
         ) : null}
       </WidgetList>
       <WidgetHoverCard containerRef={listRef}>
-        {(taskId) => {
+        {(taskId, dismiss) => {
           const task = tasks.find((candidate) => candidate.id === taskId)
           if (!task) return null
           const canJump = toolIds.has(taskId)
+          if (task.chatId) return <ChatTaskCard task={task} now={now} canJump={canJump} dismiss={dismiss} />
           const taskDetails = task.type === "subagent" ? details.get(taskId) : undefined
           if (taskDetails) return <AgentHoverCardBody agent={task} details={taskDetails} now={now} canJump={canJump} />
           return <TaskHoverCardContent task={task} now={now} canJump={canJump} />

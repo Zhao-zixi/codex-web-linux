@@ -79,6 +79,7 @@ import {
   CommandItem,
   CommandList,
 } from "../ui/command"
+import { listedThreads } from "../../lib/thread-sections"
 import {
   computeSidebarThreadSections,
   computeThreadSections,
@@ -285,7 +286,7 @@ export function CommandPalette({ state }: { state: KannaState }) {
   const currentChatRow = currentChat?.row ?? null
   const currentChatGroup = currentChat?.group ?? null
 
-  const threads = useMemo(() => flattenSidebarThreads(sidebarData), [sidebarData])
+  const threads = useMemo(() => listedThreads(flattenSidebarThreads(sidebarData)), [sidebarData])
   const paletteProjects = useMemo(
     () => flattenVisibleProjectGroups(sidebarData.projectGroups),
     [sidebarData]

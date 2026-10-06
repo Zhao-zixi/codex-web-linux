@@ -77,6 +77,22 @@ export function deriveSubagentToolIds(
   }
 
   const toolIds = new Map<string, string>()
+  // A sub-chat's row jumps to the card where it was started: the `create_chat`
+  // or `fork_chat` call whose result names it.
+  const spawnCallByChatId = new Map<string, string>()
+  const chatCallIds = new Set<string>()
+  for (const entry of entries) {
+    if (entry.kind === "tool_call" && entry.tool.toolKind === "chat" && entry.tool.toolName !== "send_message") {
+      chatCallIds.add(entry.tool.toolId)
+    } else if (entry.kind === "tool_result" && chatCallIds.has(entry.toolId)) {
+      const chatId = (entry.content as { chatId?: unknown } | null)?.chatId
+      if (typeof chatId === "string") spawnCallByChatId.set(chatId, entry.toolId)
+    }
+  }
+  for (const agent of subagents) {
+    const spawnCall = agent.chatId ? spawnCallByChatId.get(agent.chatId) : undefined
+    if (spawnCall) toolIds.set(agent.id, spawnCall)
+  }
   const unmatchedByLabel = new Map<string, SubagentActivity[]>()
   const claimed = new Set<string>()
   for (const agent of subagents) {

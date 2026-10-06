@@ -6,10 +6,19 @@ function getSidebarGroupChats(group: SidebarProjectGroup): SidebarChatRow[] {
   return [...group.chats, ...(group.archivedChats ?? [])]
 }
 
+/**
+ * Whether a chat's unread mark is the user's to hear about. A sub-chat's is
+ * not: it finished for its parent, which reports the result in its own turn.
+ * A sub-chat that stops to ask something still counts as waiting, below.
+ */
+function countsAsUnread(chat: SidebarChatRow) {
+  return chat.unread && !chat.parentChatId
+}
+
 export function getNotificationTitleCount(sidebarData: SidebarData) {
   return sidebarData.projectGroups.reduce((count, group) => (
     count + group.chats.reduce((chatCount, chat) => (
-      chatCount + (chat.unread ? 1 : 0) + (chat.status === "waiting_for_user" ? 1 : 0)
+      chatCount + (countsAsUnread(chat) ? 1 : 0) + (chat.status === "waiting_for_user" ? 1 : 0)
     ), 0)
   ), 0)
 }
@@ -68,7 +77,7 @@ export function getChatNotificationSnapshot(sidebarData: SidebarData): ChatNotif
 
   for (const group of sidebarData.projectGroups) {
     for (const chat of group.chats) {
-      if (chat.unread) unreadCount += 1
+      if (countsAsUnread(chat)) unreadCount += 1
       if (chat.status === "waiting_for_user") {
         waitingChatIds.add(chat.chatId)
       }
@@ -106,7 +115,7 @@ export function getChatNotificationEvents(previous: SidebarData | null, next: Si
   for (const group of previous.projectGroups) {
     for (const chat of group.chats) {
       previousChats.set(chat.chatId, {
-        unread: chat.unread,
+        unread: countsAsUnread(chat),
         waiting: chat.status === "waiting_for_user",
       })
     }
@@ -117,7 +126,7 @@ export function getChatNotificationEvents(previous: SidebarData | null, next: Si
     for (const chat of group.chats) {
       const previousChat = previousChats.get(chat.chatId) ?? { unread: false, waiting: false }
 
-      const becameUnread = chat.unread && !previousChat.unread
+      const becameUnread = countsAsUnread(chat) && !previousChat.unread
       const becameWaiting = chat.status === "waiting_for_user" && !previousChat.waiting
       if (!becameUnread && !becameWaiting) continue
 

@@ -81,6 +81,7 @@ function hydrateEntry(entry: Exclude<TranscriptEntry, { kind: "tool_result" }>):
         content: entry.content,
         attachments: entry.attachments ?? [],
         steered: entry.steered,
+        ...(entry.source ? { source: entry.source } : {}),
       }
     case "system_init":
       return {

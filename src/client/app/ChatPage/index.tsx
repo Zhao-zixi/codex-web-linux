@@ -10,6 +10,8 @@ import { SidebarChatHoverCard } from "../../components/chat-ui/sidebar/ChatHover
 import type { SidebarThread } from "../../lib/thread-sections"
 import type { ThreadRowMenuActions } from "../../components/chat-ui/sidebar/ThreadRow"
 import { WidgetsSidebar } from "../../components/chat-ui/widgets/WidgetsSidebar"
+import { scheduleEditPrompt } from "../../components/chat-ui/widgets/SchedulesWidget"
+import { ChatReferenceProvider, ChatSchedulesProvider, type ChatReferenceActions, type ChatSchedulesValue } from "../../components/chat-ui/chat-reference"
 // Code-split: GitWidgets pulls @pierre/diffs, which pulls shiki core and ~300
 // language grammars. The widget column is not first paint, so none of that
 // belongs in the entry chunk. Type-only import keeps the prop types.
@@ -41,7 +43,7 @@ import { shouldCloseTerminalPane } from "../terminalLayoutResize"
 import { interpolateLayout, PANE_CLOSE_MS, PANE_EASING, PANE_OPEN_MS, paneDurationMs, prefersReducedMotion } from "../paneAnimation"
 import { useStickyChatFocus } from "../useStickyChatFocus"
 import { useTerminalToggleAnimation } from "../useTerminalToggleAnimation"
-import type { AgentProvider, ChatPreview, ChatSkillsSnapshot, ChatTouchedFilesResult, SubagentActivity, TranscriptEntry } from "../../../shared/types"
+import type { AgentProvider, ChatPreview, ChatSkillsSnapshot, ChatTouchedFilesResult, ChatSchedule, SubagentActivity, TranscriptEntry } from "../../../shared/types"
 import type { KannaState } from "../useKannaState"
 import { getNextMeasuredInputHeight, getTranscriptPaddingBottom } from "../useKannaState"
 import { ChatInputDock } from "./ChatInputDock"
@@ -70,6 +72,7 @@ export {
 /** Stable identity so a chat without a snapshot does not re-derive per render. */
 const EMPTY_TRANSCRIPT_ENTRIES: TranscriptEntry[] = []
 const EMPTY_SUBAGENTS: readonly SubagentActivity[] = []
+const EMPTY_SCHEDULES: readonly ChatSchedule[] = []
 
 /**
  * Types the empty-state line once each time the empty state appears. Not per
@@ -643,6 +646,31 @@ export function ChatPage() {
       onOpenExternalPath={(action, path) => { void state.handleOpenExternalPath(action, path) }}
     />
   ), [handleSelectChatTab, navigate, state.handleOpenArchivedChat, state.handleOpenExternalPath, state.handleSetupGit, state.socket])
+  // What a chat shown inside this one needs to behave like its sidebar row:
+  // the card where an agent started it, and its row in the Tasks widget.
+  const chatReferenceActions = useMemo<ChatReferenceActions>(() => ({
+    editorLabel: state.editorLabel,
+    menu: navbarTitleActions,
+    card: {
+      onSelectChat: handleSelectChatTab,
+      onSelectMessage: (chatId, role) => navigate(`/chat/${chatId}`, { state: buildChatJumpLocationState(role) }),
+      onOpenArchivedChat: (chatId) => { void state.handleOpenArchivedChat(chatId) },
+      onSetupGit: (chatId) => { void state.handleSetupGit(chatId) },
+      onLoadTouchedFiles: (chatId) => state.socket.command<ChatTouchedFilesResult>({ type: "chat.touchedFiles", chatId }),
+      onLoadPreview: (chatId) => state.socket.command<ChatPreview>({ type: "chat.getPreview", chatId }),
+      onOpenExternalPath: (action, path) => { void state.handleOpenExternalPath(action, path) },
+    },
+    onOpenChat: handleSelectChatTab,
+  }), [handleSelectChatTab, navbarTitleActions, navigate, state.editorLabel, state.handleOpenArchivedChat, state.handleOpenExternalPath, state.handleSetupGit, state.socket])
+  // A schedule is changed by asking the agent, so Edit starts that sentence.
+  const handleEditSchedule = useCallback((schedule: ChatSchedule) => {
+    chatInputRef.current?.prefill(scheduleEditPrompt(schedule))
+  }, [])
+  const chatSchedules = useMemo<ChatSchedulesValue>(() => ({
+    chatId: state.activeChatId,
+    schedules: state.runtime?.schedules ?? EMPTY_SCHEDULES,
+    onEdit: handleEditSchedule,
+  }), [handleEditSchedule, state.activeChatId, state.runtime?.schedules])
   const handleRenameActiveChat = useCallback((title: string) => {
     if (state.activeChatId) handleRenameChatTab(state.activeChatId, title)
   }, [handleRenameChatTab, state.activeChatId])
@@ -1478,6 +1506,8 @@ export function ChatPage() {
       active={showRightSidebar || widgetsPeeking}
       entries={state.chatSnapshot?.messages ?? EMPTY_TRANSCRIPT_ENTRIES}
       subagents={state.runtime?.subagents ?? EMPTY_SUBAGENTS}
+      schedules={state.runtime?.schedules ?? EMPTY_SCHEDULES}
+      onEditSchedule={handleEditSchedule}
       onRunQuickAction={handleRunQuickAction}
       onJumpToToolCall={handleJumpToToolCall}
       gitWidgets={gitWidgetsProps ? <GitWidgetsContent {...gitWidgetsProps} /> : null}
@@ -1585,16 +1615,20 @@ export function ChatPage() {
   )
 
   return (
-    <div ref={layoutRootRef} className="flex-1 flex flex-col min-w-0 relative">
-      {chatWorkspace}
-      {isMobileViewport ? (
-        <MobileSidebarPane
-          projectId={projectId}
-          showRightSidebar={showRightSidebar}
-          onClose={handleCloseRightSidebar}
-          content={rightPanelContent}
-        />
-      ) : null}
-    </div>
+    <ChatReferenceProvider value={chatReferenceActions}>
+      <ChatSchedulesProvider value={chatSchedules}>
+      <div ref={layoutRootRef} className="flex-1 flex flex-col min-w-0 relative">
+        {chatWorkspace}
+        {isMobileViewport ? (
+          <MobileSidebarPane
+            projectId={projectId}
+            showRightSidebar={showRightSidebar}
+            onClose={handleCloseRightSidebar}
+            content={rightPanelContent}
+          />
+        ) : null}
+      </div>
+      </ChatSchedulesProvider>
+    </ChatReferenceProvider>
   )
 }

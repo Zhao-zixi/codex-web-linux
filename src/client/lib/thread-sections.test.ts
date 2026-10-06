@@ -10,6 +10,8 @@ import {
   getRecentThreads,
   getRelevantThreads,
   getReviewThreads,
+  isSubChat,
+  listedThreads,
   mergeRelevantThreads,
   RECENT_THREADS_LIMIT,
   stabilizeSidebarThreads,
@@ -29,6 +31,20 @@ function makeChatRow(overrides: Partial<SidebarChatRow> & Pick<SidebarChatRow, "
     ...overrides,
   }
 }
+
+describe("sub-chats", () => {
+  test("stay findable in the flattened threads but are left out of what a list shows", () => {
+    const data = makeSidebarData()
+    data.projectGroups[0]!.chats.push(makeChatRow({ chatId: "child", title: "Parser audit", parentChatId: "chat-1", lastMessageAt: 950 }))
+    const threads = flattenSidebarThreads(data)
+    expect(threads.some((thread) => thread.chatId === "child")).toBe(true)
+    expect(listedThreads(threads).some((thread) => thread.chatId === "child")).toBe(false)
+    expect(isSubChat(threads.find((thread) => thread.chatId === "child")!.row)).toBe(true)
+    // With none to drop, the same array comes back, so nothing downstream re-derives.
+    const plain = flattenSidebarThreads(makeSidebarData())
+    expect(listedThreads(plain)).toBe(plain)
+  })
+})
 
 function makeSidebarData(): SidebarData {
   return {

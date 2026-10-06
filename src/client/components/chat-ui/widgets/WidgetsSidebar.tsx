@@ -1,11 +1,12 @@
 import { memo, useCallback, useMemo, useState, type ReactNode } from "react"
-import type { AgentProvider, ProviderCatalogEntry, SubagentActivity, TranscriptEntry } from "../../../../shared/types"
+import type { AgentProvider, ChatSchedule, ProviderCatalogEntry, SubagentActivity, TranscriptEntry } from "../../../../shared/types"
 import type { KannaSocket } from "../../../app/socket"
 import { useComposer } from "../../../hooks/useComposer"
 import { AttachmentsWidget } from "./AttachmentsWidget"
 import { deriveSentAttachments, deriveSubagentToolIds, latestWorkflows, orderTaskLog } from "./derive"
 import { PortsWidget } from "./PortsWidget"
 import { QuickActionsWidget } from "./QuickActionsWidget"
+import { SchedulesWidget } from "./SchedulesWidget"
 import { TasksWidget } from "./TasksWidget"
 import { UsageWidgets } from "./UsageWidget"
 import { useStopTask } from "./useStopTask"
@@ -22,6 +23,7 @@ import { WorkflowWidget } from "./WorkflowWidget"
  *
  * Order runs from what the agent is doing right now to what it has left
  * behind: what is running on its behalf (tasks, then any workflow opened up),
+ * what is set to run later (schedules),
  * then git (branch, working tree, history),
  * the files it sent, the servers it started and the commands that start
  * them. Usage limits close the column: the selected harness's, or on a new
@@ -39,6 +41,8 @@ function WidgetsSidebarImpl({
   active,
   entries,
   subagents,
+  schedules,
+  onEditSchedule,
   onRunQuickAction,
   onJumpToToolCall,
   gitWidgets,
@@ -60,6 +64,9 @@ function WidgetsSidebarImpl({
   /** The loaded transcript window, for the agent and attachment widgets. */
   entries: readonly TranscriptEntry[]
   subagents: readonly SubagentActivity[]
+  /** The schedules to do with this chat. See `ChatRuntime.schedules`. */
+  schedules: readonly ChatSchedule[]
+  onEditSchedule: (schedule: ChatSchedule) => void
   onRunQuickAction: (command: string) => void
   /** Scrolls the chat to a tool call (the call that started a Tasks row). */
   onJumpToToolCall: (toolId: string) => void
@@ -101,6 +108,9 @@ function WidgetsSidebarImpl({
         </WidgetPresence>
         <WidgetPresence show={workflows.length > 0}>
           <WorkflowWidget workflows={workflows} stopControl={stopControl} />
+        </WidgetPresence>
+        <WidgetPresence show={schedules.length > 0}>
+          <SchedulesWidget schedules={schedules} chatId={chatId} onEdit={onEditSchedule} />
         </WidgetPresence>
         {gitWidgets}
         <WidgetPresence show={attachments.length > 0}>

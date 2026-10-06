@@ -11,6 +11,7 @@ import { useChatHasDraft } from "../../stores/chatInputStore"
 import { useChatTabsStore } from "../../stores/chatTabsStore"
 import { useSidebarData, useSidebarReady } from "../../stores/sidebarStore"
 import { openContextMenuFromButton } from "../open-external-menu"
+import { ContextMenuItem } from "../ui/context-menu"
 import { ProjectIcon } from "../ui/project-icon"
 import { EditableTitle } from "./ChatNavbarTitle"
 import { ThreadRowMenu, type ThreadRowMenuActions } from "./sidebar/ThreadRow"
@@ -33,6 +34,11 @@ interface TabProps {
   actions: ThreadRowMenuActions
   onSelect: (chatId: string) => void
   onClose: (chatId: string) => void
+  onCloseOthers: (chatId: string) => void
+  onCloseToRight: (chatId: string) => void
+  /** There are other tabs, and tabs after this one, for those two to close. */
+  hasOthers: boolean
+  hasTabsToRight: boolean
   onRename: (chatId: string, title: string) => void
 }
 
@@ -51,7 +57,7 @@ interface TabProps {
  * give way together and their titles truncate, down to a least width; past
  * that the bar scrolls.
  */
-const Tab = memo(function Tab({ tab, thread, active, isNew, editorLabel, actions, onSelect, onClose, onRename }: TabProps) {
+const Tab = memo(function Tab({ tab, thread, active, isNew, editorLabel, actions, onSelect, onClose, onCloseOthers, onCloseToRight, hasOthers, hasTabsToRight, onRename }: TabProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: tab.chatId,
     transition: TAB_MOVE_TRANSITION,
@@ -167,7 +173,13 @@ const Tab = memo(function Tab({ tab, thread, active, isNew, editorLabel, actions
       className={cn(
         // As wide as its title, up to a cap, and giving way evenly with the
         // others (down to a floor) once the bar is full.
-        "group/tabhost pointer-events-auto min-w-[72px] max-w-[240px] shrink cursor-default outline-none",
+        //
+        // The 2px between tabs is 1px of padding inside each one, not a gap
+        // in the list: this element is what the pointer is over, for the
+        // hover card and for a press, and with tabs that touch it is never
+        // over none of them on its way along the bar. The widths carry
+        // those 2px.
+        "group/tabhost pointer-events-auto min-w-[74px] max-w-[242px] shrink cursor-default px-px outline-none",
         // A tab opened while the bar is up arrives with a short fade and a
         // slight grow, from 95%, never from nothing. On this element, which
         // lives as long as the tab does: on the box inside, it replayed
@@ -178,7 +190,28 @@ const Tab = memo(function Tab({ tab, thread, active, isNew, editorLabel, actions
       )}
     >
       {thread ? (
-        <ThreadRowMenu thread={thread} archived={thread.archived} editorLabel={editorLabel} {...actions}>
+        <ThreadRowMenu
+          thread={thread}
+          archived={thread.archived}
+          editorLabel={editorLabel}
+          {...actions}
+          // A tab's own items, ahead of the chat's: what a browser's tab menu
+          // offers. The two that close several are greyed where there is
+          // nothing for them to close.
+          leadingItems={(
+            <>
+              <ContextMenuItem onSelect={() => onClose(tab.chatId)}>
+                <span className="text-xs font-medium">Close</span>
+              </ContextMenuItem>
+              <ContextMenuItem disabled={!hasOthers} onSelect={() => onCloseOthers(tab.chatId)}>
+                <span className="text-xs font-medium">Close Others</span>
+              </ContextMenuItem>
+              <ContextMenuItem disabled={!hasTabsToRight} onSelect={() => onCloseToRight(tab.chatId)}>
+                <span className="text-xs font-medium">Close to the Right</span>
+              </ContextMenuItem>
+            </>
+          )}
+        >
           {body}
         </ThreadRowMenu>
       ) : body}
@@ -233,7 +266,7 @@ export const ChatTabs = memo(function ChatTabs({
   renderHoverCard: (containerRef: RefObject<HTMLDivElement | null>, threads: SidebarThread[]) => ReactNode
 }) {
   const tabs = useChatTabsStore((state) => state.tabs)
-  const { open, close, reorder, prune, visit } = useChatTabsStore.getState()
+  const { open, close, closeOthers, closeToRight, reorder, prune, visit } = useChatTabsStore.getState()
   const data = useSidebarData()
   const sidebarReady = useSidebarReady()
   const listRef = useRef<HTMLDivElement>(null)
@@ -340,6 +373,20 @@ export const ChatTabs = memo(function ChatTabs({
     else onCloseLast()
   }, [activeChatId, close, onCloseLast, onSelect])
 
+  // Closing several from a tab's menu. If the open tab is among those
+  // closed, the tab the menu was opened on is what's left to show.
+  const handleCloseOthers = useCallback((chatId: string) => {
+    closeOthers(chatId)
+    if (activeChatId !== chatId) onSelect(chatId)
+  }, [activeChatId, closeOthers, onSelect])
+  const handleCloseToRight = useCallback((chatId: string) => {
+    const current = useChatTabsStore.getState().tabs
+    const index = current.findIndex((tab) => tab.chatId === chatId)
+    const activeIndex = current.findIndex((tab) => tab.chatId === activeChatId)
+    closeToRight(chatId)
+    if (activeIndex > index) onSelect(chatId)
+  }, [activeChatId, closeToRight, onSelect])
+
   // Close the open tab: Option+W on the web, where Cmd+W is the browser's
   // own and closes its tab instead, and Cmd+W in the Mac app, where it is
   // what closes a tab everywhere else. By the key's position, not its
@@ -393,9 +440,11 @@ export const ChatTabs = memo(function ChatTabs({
             ref={listRef}
             role="tablist"
             aria-label="Open chats"
-            className="flex w-full min-w-0 items-center gap-1 overflow-x-auto scrollbar-hide"
+            // No gap: the tabs space themselves (see `Tab`). Pulled 1px left,
+            // so the first tab's box still starts where the bar does.
+            className="-ml-px flex w-[calc(100%+1px)] min-w-0 items-center overflow-x-auto scrollbar-hide"
           >
-            {tabs.map((tab) => (
+            {tabs.map((tab, index) => (
               <Tab
                 key={tab.chatId}
                 tab={tab}
@@ -406,6 +455,10 @@ export const ChatTabs = memo(function ChatTabs({
                 actions={actions}
                 onSelect={onSelect}
                 onClose={handleClose}
+                onCloseOthers={handleCloseOthers}
+                onCloseToRight={handleCloseToRight}
+                hasOthers={tabs.length > 1}
+                hasTabsToRight={index < tabs.length - 1}
                 onRename={onRename}
               />
             ))}

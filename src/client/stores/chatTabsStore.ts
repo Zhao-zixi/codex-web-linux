@@ -1,6 +1,8 @@
 import { create } from "zustand"
 import {
   closeChatTab,
+  closeChatTabsToRight,
+  closeOtherChatTabs,
   openChatTab,
   pruneChatTabs,
   reorderChatTabs,
@@ -31,6 +33,8 @@ interface ChatTabsState {
   visit: (chatId: string) => void
   open: (chatId: string, afterChatId?: string | null) => void
   close: (chatId: string) => void
+  closeOthers: (chatId: string) => void
+  closeToRight: (chatId: string) => void
   reorder: (orderedChatIds: string[]) => void
   prune: (keep: (chatId: string) => boolean) => void
 }
@@ -70,6 +74,8 @@ export const useChatTabsStore = create<ChatTabsState>()((set) => {
     )),
     open: (chatId, afterChatId) => update((tabs) => openChatTab(tabs, chatId, afterChatId)),
     close: (chatId) => update((tabs) => closeChatTab(tabs, chatId)),
+    closeOthers: (chatId) => update((tabs) => closeOtherChatTabs(tabs, chatId)),
+    closeToRight: (chatId) => update((tabs) => closeChatTabsToRight(tabs, chatId)),
     reorder: (orderedChatIds) => update((tabs) => reorderChatTabs(tabs, orderedChatIds)),
     prune: (keep) => update((tabs) => pruneChatTabs(tabs, keep)),
   }

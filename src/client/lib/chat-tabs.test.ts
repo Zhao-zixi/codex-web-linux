@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import {
   closeChatTab,
+  closeChatTabsToRight,
+  closeOtherChatTabs,
   getAdjacentChatTab,
   getChatTabAfterClose,
   openChatTab,
@@ -32,6 +34,20 @@ describe("closing", () => {
     expect(getChatTabAfterClose(tabs, "c")).toBe("b")
     expect(getChatTabAfterClose([tab("a")], "a")).toBeNull()
     expect(ids(closeChatTab(tabs, "b"))).toEqual(["a", "c"])
+  })
+})
+
+describe("closing several", () => {
+  const tabs = [tab("a"), tab("b"), tab("c")]
+
+  test("closes every tab but one", () => {
+    expect(ids(closeOtherChatTabs(tabs, "b"))).toEqual(["b"])
+    expect(closeOtherChatTabs([tab("a")], "a")).toEqual([tab("a")])
+  })
+
+  test("closes the tabs to the right of one", () => {
+    expect(ids(closeChatTabsToRight(tabs, "a"))).toEqual(["a"])
+    expect(closeChatTabsToRight(tabs, "c")).toBe(tabs)
   })
 })
 

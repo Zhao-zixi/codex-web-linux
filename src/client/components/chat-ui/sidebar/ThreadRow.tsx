@@ -217,13 +217,19 @@ export function ThreadRowMenu({
   onArchiveChat,
   onRestoreChat,
   onDeleteChat,
+  leadingItems,
   children,
-}: Pick<ThreadRowProps, "thread" | "archived" | "editorLabel"> & ThreadRowMenuActions & { children: ReactNode }) {
+}: Pick<ThreadRowProps, "thread" | "archived" | "editorLabel"> & ThreadRowMenuActions & {
+  /** See `ChatRowMenu`. */
+  leadingItems?: ReactNode
+  children: ReactNode
+}) {
   const hasDraft = useChatHasDraft(thread.row.chatId)
   const clearDraft = useChatInputStore((state) => state.clearDraft)
 
   return (
     <ChatRowMenu
+      leadingItems={leadingItems}
       canFork={thread.row.canFork}
       archived={archived}
       pinned={Boolean(thread.row.pinnedAt)}

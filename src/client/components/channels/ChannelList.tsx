@@ -133,9 +133,12 @@ function ChannelPeek({
       >
         {peekGroups.map((peekGroup) => (
           <div key={peekGroup.key}>
-            {/* Every group is named, the first included: its label is what
-                sets the chats apart from New Chat above them. */}
-            <div className="px-1.5 pb-1 pt-1.5 text-[11px] font-medium text-muted-foreground">{peekGroup.label}</div>
+            {/* Groups are named to tell them apart. One group alone has
+                nothing to be told apart from, and its name is only a line
+                between New Chat and the chats. */}
+            {peekGroups.length > 1 ? (
+              <div className="px-1.5 pb-1 pt-1.5 text-[11px] font-medium text-muted-foreground">{peekGroup.label}</div>
+            ) : null}
             {peekGroup.threads.map((thread) => (
               <Fragment key={thread.chatId}>{renderChatMenu(thread, (
               <button

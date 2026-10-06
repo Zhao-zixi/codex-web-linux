@@ -30,6 +30,18 @@ export function closeChatTab(tabs: readonly ChatTab[], chatId: string): ChatTab[
   return tabs.filter((tab) => tab.chatId !== chatId)
 }
 
+/** Every tab but this one. */
+export function closeOtherChatTabs(tabs: readonly ChatTab[], chatId: string): ChatTab[] {
+  const kept = tabs.filter((tab) => tab.chatId === chatId)
+  return kept.length === tabs.length || kept.length === 0 ? (tabs as ChatTab[]) : kept
+}
+
+/** The tabs after this one in the bar. */
+export function closeChatTabsToRight(tabs: readonly ChatTab[], chatId: string): ChatTab[] {
+  const index = tabs.findIndex((tab) => tab.chatId === chatId)
+  return index === -1 || index === tabs.length - 1 ? (tabs as ChatTab[]) : tabs.slice(0, index + 1)
+}
+
 /**
  * The tab that takes over when one closes: the one to its right, or to its
  * left for the last tab. Null when it was the only one.

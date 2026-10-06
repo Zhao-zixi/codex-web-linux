@@ -150,6 +150,38 @@ describe("applyModelToComposerState", () => {
     // Effort is clamped/normalized for the selected model rather than kept blindly.
     expect(typeof (next.modelOptions as { reasoningEffort: string }).reasoningEffort).toBe("string")
   })
+
+  test("codex model change clamps effort to a runtime-discovered model's own list", () => {
+    const state: ComposerState = {
+      provider: "codex",
+      model: providerDefaults.codex.model,
+      modelOptions: { ...providerDefaults.codex.modelOptions, reasoningEffort: "ultra" },
+      planMode: false,
+      autoPlan: false,
+    }
+    const staticCodex = PROVIDERS.find((provider) => provider.id === "codex")!
+    // A model the static catalog has no row for, as the app-server reports it.
+    const liveCodex = {
+      ...staticCodex,
+      models: [
+        ...staticCodex.models,
+        {
+          id: "gpt-6-luna",
+          label: "GPT-6 Luna",
+          supportsEffort: true,
+          supportedReasoningEfforts: [
+            { id: "low", label: "Low" },
+            { id: "max", label: "Max" },
+          ],
+          defaultReasoningEffort: "low",
+        },
+      ],
+    }
+
+    // Without the live entry the static fallback list lets "ultra" through.
+    expect(applyModelToComposerState(state, "gpt-6-luna").modelOptions).toMatchObject({ reasoningEffort: "ultra" })
+    expect(applyModelToComposerState(state, "gpt-6-luna", liveCodex).modelOptions).toMatchObject({ reasoningEffort: "max" })
+  })
 })
 
 describe("deriveComposerOptionControls", () => {

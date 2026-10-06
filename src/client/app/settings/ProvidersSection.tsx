@@ -19,8 +19,9 @@ import { Button } from "../../components/ui/button"
 import { Dialog, DialogBody, DialogContent, DialogFooter, DialogTitle } from "../../components/ui/dialog"
 import { Input } from "../../components/ui/input"
 import { SelectItem } from "../../components/ui/select"
+import { applyModelToComposerState } from "../../lib/composer"
 import { cn } from "../../lib/utils"
-import { useChatPreferencesStore } from "../../stores/chatPreferencesStore"
+import { useChatPreferencesStore, type ComposerState } from "../../stores/chatPreferencesStore"
 import { useProviderAuthStore } from "../../stores/providerAuthStore"
 import type { KannaState } from "../useKannaState"
 import {
@@ -118,8 +119,21 @@ export function ProvidersSection({
   }
 
   function handleProviderDefaultModelChange(provider: AgentProvider, model: string) {
-    setProviderDefaultModel(provider, model)
-    void handleWriteAppSettings({ providerDefaults: { [provider]: { model } } }).catch((error) => {
+    // The step the chat composer takes when a model is picked: options that
+    // depend on the model are checked against the live catalog entry, so a
+    // Codex effort the new model does not offer moves to one it does. The
+    // store's own normalizer knows only the static list, which has no row for
+    // a model the account gained at runtime.
+    const next = applyModelToComposerState(
+      { provider, ...providerDefaults[provider] } as ComposerState,
+      model,
+      state.availableProviders.find((entry) => entry.id === provider),
+    )
+    setProviderDefaultModel(provider, next.model)
+    setProviderDefaultModelOptions(provider, next.modelOptions)
+    void handleWriteAppSettings({
+      providerDefaults: { [provider]: { model: next.model, modelOptions: next.modelOptions } },
+    }).catch((error) => {
       setProvidersError(error instanceof Error ? error.message : "Unable to save provider settings.")
     })
   }

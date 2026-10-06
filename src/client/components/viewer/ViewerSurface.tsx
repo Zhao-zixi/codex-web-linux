@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronUp, Maximize2, Minimize2, X } from "lucide-react"
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react"
 import { FOCUS_FALLBACK_IGNORE_ATTRIBUTE } from "../../app/chatFocusPolicy"
+import { isEscapeClaimed, resolveEscapePress, VIEWER_FIELDS_KEEP_ESCAPE_ATTRIBUTE } from "../../lib/escape-key"
 import { cn } from "../../lib/utils"
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip"
 
@@ -15,12 +16,16 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip"
  * view's own controls, then stepping between items when there are several,
  * then expand and close. The body scrolls; the header stays.
  *
- * Keys: Esc closes; j/k (or ]/[) step when there's more than one item, but
- * never while you're typing in a field. In a pane beside the chat they're
- * the viewer's only while focus is in it: the chat is live then, and Esc or
- * a j typed there is the chat's. Over the chat they're the viewer's from
- * anywhere but a field, since the terminal below stays live: Esc in vim
- * there is vim's.
+ * Keys. Esc closes, from wherever focus is, the chat's composer included:
+ * while the pane is open that is what Escape means on the page, ahead of
+ * stopping a turn (`lib/escape-key` has the whole order). It stands down
+ * only for what is nearer the key: an open menu or dialog, and a field that
+ * is not a composer, so Esc in vim in the terminal below is still vim's.
+ *
+ * j/k (or ]/[) step when there's more than one item, but never while you're
+ * typing in a field. In a pane beside the chat they're the viewer's only
+ * while focus is in it: the chat is live then, and a j typed there is the
+ * chat's. Over the chat they're the viewer's from anywhere but a field.
  */
 
 /** The page gave the viewer a pane beside the chat, which it can widen over the chat. */
@@ -31,14 +36,6 @@ export interface ViewerPlacement {
 
 const ViewerPlacementContext = createContext<ViewerPlacement | null>(null)
 export const ViewerPlacementProvider = ViewerPlacementContext.Provider
-
-/**
- * A menu, select or dialog open over the page: Escape is theirs to close
- * first. Tooltips don't count; they close with the viewer.
- */
-function hasOpenLayer() {
-  return Boolean(document.querySelector("[role='menu'][data-state='open'], [role='listbox'][data-state='open'], [role='dialog'][data-state='open'], [role='alertdialog'][data-state='open']"))
-}
 
 function isTypingTarget(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false
@@ -71,7 +68,9 @@ export function ViewerSurface({
   leading?: ReactNode
   /**
    * Escape pressed in a field inside is the field's, not a close. For a view
-   * with a composer in it, where Escape stops the turn and closes its menus.
+   * with a transcript in it, whose fields have their own use for the key (a
+   * plan's edit box closes on it). Its composer is not one of those: Escape
+   * there closes the pane, like Escape anywhere else on the page.
    */
   fieldsKeepEscape?: boolean
   icon?: ReactNode
@@ -116,24 +115,33 @@ export function ViewerSurface({
     surfaceRef.current?.focus({ preventScroll: true })
   }, [])
 
-  // Escape always closes, from wherever focus is. It's heard first (window,
-  // capture phase), because on its way things swallow it: the composer's
-  // focus keeper takes it to refocus the chat input, and an open tooltip
-  // (the close button's own "Close (Esc)") takes it to close itself. Only a
-  // menu, select or dialog open over the viewer gets it first.
+  // Escape closes, from wherever focus is. It's heard first (window, capture
+  // phase), because on its way things would take it: the composer, to stop
+  // a turn; its focus keeper, to refocus the chat input; an open tooltip
+  // (the close button's own "Close (Esc)"), to close itself. What it does
+  // is `resolveEscapePress`'s to say. The event is stopped here either way
+  // it is ours, so the press that closes the pane starts nothing else, and
+  // neither does the key repeating if it is held on.
   useEffect(() => {
     function handleEscape(event: KeyboardEvent) {
-      if (event.key !== "Escape" || event.metaKey || event.ctrlKey || event.altKey) return
-      if (hasOpenLayer() || !ownsKeys()) return
-      const active = document.activeElement
-      if (fieldsKeepEscape && isTypingTarget(active) && surfaceRef.current?.contains(active)) return
+      if (event.key !== "Escape") return
+      // A card on its way out, or under another (the graph, under the chat
+      // picked from it), is not the pane any more.
+      if (!surfaceRef.current || surfaceRef.current.closest("[inert]")) return
+      const action = resolveEscapePress({
+        repeat: event.repeat,
+        claimed: isEscapeClaimed(event),
+        paneOpen: true,
+        canInterrupt: false,
+      })
+      if (action === "pass") return
       event.preventDefault()
       event.stopImmediatePropagation()
-      onClose()
+      if (action === "close-pane") onClose()
     }
     window.addEventListener("keydown", handleEscape, true)
     return () => window.removeEventListener("keydown", handleEscape, true)
-  }, [fieldsKeepEscape, onClose])
+  }, [onClose])
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -165,6 +173,7 @@ export function ViewerSurface({
       {...{ [FOCUS_FALLBACK_IGNORE_ATTRIBUTE]: "" }}
       data-state={docked ? undefined : "open"}
       data-viewer-surface
+      {...(fieldsKeepEscape ? { [VIEWER_FIELDS_KEEP_ESCAPE_ATTRIBUTE]: "" } : {})}
       className={cn(
         "flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-border outline-none",
         // The card says once what colour it is, and is painted from that. A

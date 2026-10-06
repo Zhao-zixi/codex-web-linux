@@ -739,8 +739,8 @@ function KannaSidebarImpl({
   // Escape leaves focus mode, but only when nothing nearer has a use for it.
   // It is last in line, heard as the event finishes bubbling, and it stands
   // down for:
-  //   - anything that already answered it (`defaultPrevented`): stopping a
-  //     running turn, closing the composer's skill or project menu, the first
+  //   - anything that already answered it (`defaultPrevented`): the hold that
+  //     stops a running turn, closing the composer's skill or project menu, the first
   //     Escape that returns focus to the composer, the phone's widget sheet;
   //   - anything that kept it for itself: the viewer and the branch picker
   //     stop it before it gets here;

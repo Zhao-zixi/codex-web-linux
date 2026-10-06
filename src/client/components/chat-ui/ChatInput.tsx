@@ -23,6 +23,8 @@ import { useShallow } from "zustand/react/shallow"
 import { useChatInputStore } from "../../stores/chatInputStore"
 import { NEW_CHAT_COMPOSER_ID, type ComposerState, useChatPreferencesStore } from "../../stores/chatPreferencesStore"
 import { CHAT_INPUT_ATTRIBUTE, focusNextChatInput, REQUEST_ATTACH_FILES_EVENT } from "../../app/chatFocusPolicy"
+import { isEscapeClaimed, isViewerPaneOpen, resolveEscapePress } from "../../lib/escape-key"
+import { HoldToStopHint, HoldToStopRing, useHoldToStop } from "./HoldToStop"
 import { abbreviatePathHead, formatPathWithTilde } from "../../lib/pathUtils"
 import { copyTextToClipboard } from "../../lib/clipboard"
 import { buildUploadErrorReport, simpleUploadError, type UploadErrorReport } from "../../lib/uploadError"
@@ -471,6 +473,27 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
   const uploadedAttachments = attachments.filter((attachment) => attachment.status === "uploaded")
   const hasPendingUploads = attachments.some((attachment) => attachment.status === "uploading")
   const canSubmit = value.trim().length > 0 || uploadedAttachments.length > 0
+  // Escape, held, stops the turn. See HoldToStop.
+  const holdToStop = useHoldToStop({ enabled: Boolean(canCancel), onConfirm: () => onCancel?.() })
+  // The round button is Send while there is something to send and Stop
+  // otherwise. Under a hold it is Stop either way: the ring is drawn round
+  // it, and it has to say what the ring is counting down to.
+  const showStop = Boolean(canCancel) && (!canSubmit || holdToStop.engaged)
+  /** What the round button does. Stop is immediate here; only the key is held. */
+  function runPrimaryAction(withModifier: boolean) {
+    // Under a hold the button reads Stop, so that is what a click on it does.
+    if (holdToStop.engaged && canCancel) {
+      onCancel?.()
+      return
+    }
+    // Anything sendable (text or attachments alone) wins over cancel, so a
+    // file-only message queues instead of stopping the running turn.
+    if (!disabled && canSubmit && !hasPendingUploads) {
+      void handleSubmit({ withModifier })
+    } else if (canCancel) {
+      onCancel?.()
+    }
+  }
   const recorder = useVoiceRecorder()
   const [transcribing, setTranscribing] = useState(false)
   const recording = recorder.isRecording
@@ -961,10 +984,28 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
       return
     }
 
-    if (event.key === "Escape" && canCancel) {
-      event.preventDefault()
-      onCancel?.()
-      return
+    // Escape stops the turn only when held, and only once nothing nearer has
+    // a use for the key (`resolveEscapePress`). With the viewer's pane open
+    // the key never gets here: the pane hears it first and closes. A repeat
+    // is swallowed, so a key still down from closing the pane, from the hold
+    // running, or from a hold whose turn has just stopped, neither starts
+    // one nor leaks to what is behind.
+    if (event.key === "Escape") {
+      const action = resolveEscapePress({
+        repeat: event.repeat,
+        claimed: isEscapeClaimed(event.nativeEvent),
+        paneOpen: isViewerPaneOpen(),
+        canInterrupt: Boolean(canCancel),
+      })
+      if (action === "hold-to-interrupt") {
+        event.preventDefault()
+        holdToStop.press(event.currentTarget as HTMLElement)
+        return
+      }
+      if (action === "ignore") {
+        event.preventDefault()
+        return
+      }
     }
 
     if (event.key === "ArrowUp" && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey && value.length === 0 && previousPrompt) {
@@ -1057,6 +1098,9 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
               className="absolute bottom-full left-0 right-0 mb-2 z-30 max-h-64 overflow-y-auto rounded-2xl border border-border bg-popover/95 backdrop-blur-lg shadow-lg py-1"
               role="listbox"
               aria-label="Skills"
+              // Counted as an open layer by everything that asks whether
+              // Escape is spoken for (`hasOpenLayer`): it closes this first.
+              data-state="open"
             >
               {skillMenuItems.map((skill, index) => (
                 <button
@@ -1092,6 +1136,7 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
               className="absolute bottom-full left-0 right-0 mb-2 z-30 max-h-64 overflow-y-auto rounded-2xl border border-border bg-popover/95 backdrop-blur-lg shadow-lg py-1"
               role="listbox"
               aria-label="Projects"
+              data-state="open"
             >
               {projectMenuItems.map((project, index) => (
                 <button
@@ -1229,31 +1274,36 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
               </Button>
             ) : null}
             {recording || transcribing || (showMic && !canCancel) ? null : (
+            // A box that hugs the button and carries its margins, for the
+            // hold's ring and hint to be placed against.
+            <span className="relative flex flex-shrink-0 mb-1 -mr-0.5 md:mr-0 md:mb-1.5">
             <Button
               type="button"
+              aria-label={showStop ? "Stop" : "Send message"}
+              title={showStop ? "Stop (hold Esc)" : undefined}
               onPointerDown={(event) => {
                 event.preventDefault()
-                // Anything sendable (text or attachments alone) wins over
-                // cancel, so a file-only message queues instead of stopping
-                // the running turn.
-                if (!disabled && canSubmit && !hasPendingUploads) {
-                  void handleSubmit({ withModifier: event.metaKey || event.ctrlKey })
-                } else if (canCancel) {
-                  onCancel?.()
-                }
+                runPrimaryAction(event.metaKey || event.ctrlKey)
+              }}
+              // The pointer acts on the way down, above. This is for a click
+              // that no pointer made: Enter or Space on the button, and a
+              // screen reader's activation. Stop stays one press there.
+              onClick={(event) => {
+                if (event.detail === 0) runPrimaryAction(event.metaKey || event.ctrlKey)
               }}
               disabled={disabled || (!canCancel && !canSubmit) || hasPendingUploads}
               size="icon"
-              className="flex-shrink-0 bg-slate-600 text-white dark:bg-white dark:text-slate-900 rounded-full cursor-pointer h-10 w-10 md:h-11 md:w-11 mb-1 -mr-0.5 md:mr-0 md:mb-1.5 touch-manipulation disabled:bg-white/60 disabled:text-slate-700"
+              className="flex-shrink-0 bg-slate-600 text-white dark:bg-white dark:text-slate-900 rounded-full cursor-pointer h-10 w-10 md:h-11 md:w-11 touch-manipulation disabled:bg-white/60 disabled:text-slate-700"
             >
-              {canSubmit ? (
-                <ArrowUp className="h-5 w-5 md:h-6 md:w-6" />
-              ) : canCancel ? (
+              {showStop ? (
                 <div className="w-3 h-3 md:w-4 md:h-4 rounded-xs bg-current" />
               ) : (
                 <ArrowUp className="h-5 w-5 md:h-6 md:w-6" />
               )}
             </Button>
+            <HoldToStopRing arcRef={holdToStop.arcRef} shown={holdToStop.ringShown} />
+            <HoldToStopHint shown={holdToStop.hintShown} />
+            </span>
             )}
           </div>
         </div>

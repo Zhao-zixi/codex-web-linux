@@ -31,6 +31,7 @@ import type { UpdateManager } from "./update-manager"
 import type { UsageLimitsManager } from "./usage-limits"
 import { deriveChatSnapshot, deriveChatTouchedFiles, deriveLocalProjectsSnapshot, deriveSidebarData } from "./read-models"
 import type {
+  AppSettingsSnapshot,
   ChatSnapshot,
   LlmProviderSnapshot,
   LlmProviderValidationResult,
@@ -442,6 +443,18 @@ export function createWsRouter({
   }
 
   /**
+   * The live provider catalog rides every app-settings payload so pickers
+   * outside a chat (new-chat composer, settings defaults) see
+   * runtime-discovered models; chat snapshots carry the same list. That
+   * includes the acks of the settings commands, not only the subscription
+   * push: the client replaces its whole snapshot with an ack, so one without
+   * the catalog put those pickers back on the static list after any write.
+   */
+  function withProviderCatalog(snapshot: AppSettingsSnapshot): AppSettingsSnapshot {
+    return { ...snapshot, availableProviders: [...SERVER_PROVIDERS] }
+  }
+
+  /**
    * Answer a patch subscription with what changed since the snapshot it holds
    * (see shared/sidebar-patch.ts). False when this snapshot can't be patched,
    * and the caller sends it whole; the base is dropped so the next patch is a
@@ -529,10 +542,7 @@ export function createWsRouter({
         id,
         snapshot: {
           type: "app-settings",
-          // The live provider catalog rides along so pickers outside a chat
-          // (new-chat composer, settings defaults) see runtime-discovered
-          // models; chat snapshots carry the same list.
-          data: { ...appSettings.getSnapshot(), availableProviders: [...SERVER_PROVIDERS] },
+          data: withProviderCatalog(appSettings.getSnapshot()),
         },
       }
     }
@@ -1335,7 +1345,7 @@ export function createWsRouter({
           return
         }
         case "settings.readAppSettings": {
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: appSettings.getSnapshot() })
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: withProviderCatalog(appSettings.getSnapshot()) })
           return
         }
         case "usage.refresh": {
@@ -1406,7 +1416,7 @@ export function createWsRouter({
             resolvedAnalytics.track("analytics_disabled")
           }
           const snapshot = await appSettings.write({ analyticsEnabled: command.analyticsEnabled })
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot })
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: withProviderCatalog(snapshot) })
           if (!previousAnalyticsEnabled && command.analyticsEnabled) {
             resolvedAnalytics.track("analytics_enabled")
           }
@@ -1415,7 +1425,7 @@ export function createWsRouter({
         case "settings.writeAppSettingsPatch": {
           const previousAnalyticsEnabled = appSettings.getSnapshot().analyticsEnabled
           const snapshot = await appSettings.writePatch(command.patch)
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot })
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: withProviderCatalog(snapshot) })
           if (command.patch.analyticsEnabled !== undefined && previousAnalyticsEnabled && !snapshot.analyticsEnabled) {
             resolvedAnalytics.track("analytics_disabled")
           }

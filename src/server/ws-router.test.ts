@@ -657,7 +657,9 @@ describe("ws-router", () => {
         v: PROTOCOL_VERSION,
         type: "ack",
         id: "settings-read-1",
-        result: DEFAULT_APP_SETTINGS_SNAPSHOT,
+        // Acks carry the live provider catalog too: the client replaces its
+        // snapshot with them.
+        result: { ...DEFAULT_APP_SETTINGS_SNAPSHOT, availableProviders: SERVER_PROVIDERS },
       },
       {
         v: PROTOCOL_VERSION,
@@ -665,6 +667,7 @@ describe("ws-router", () => {
         id: "settings-write-1",
         result: {
           ...DEFAULT_APP_SETTINGS_SNAPSHOT,
+          availableProviders: SERVER_PROVIDERS,
           analyticsEnabled: false,
         },
       },
@@ -770,6 +773,7 @@ describe("ws-router", () => {
         id: "settings-patch-1",
         result: {
           ...DEFAULT_APP_SETTINGS_SNAPSHOT,
+          availableProviders: SERVER_PROVIDERS,
           theme: "dark",
           terminal: {
             ...DEFAULT_APP_SETTINGS_SNAPSHOT.terminal,

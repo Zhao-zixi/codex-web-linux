@@ -10,6 +10,12 @@ import type {
   TodoItem,
 } from "./types"
 
+/** The Kanna tools whose call is drawn as a card for the chat they started or messaged. */
+export const CHAT_TOOL_NAMES: readonly string[] = ["create_chat", "fork_chat", "send_message"]
+
+/** The Kanna tools whose call is drawn as a card for the schedule they set, changed or deleted. */
+export const SCHEDULE_TOOL_NAMES: readonly string[] = ["set_schedule", "delete_schedule"]
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null
   return value as Record<string, unknown>
@@ -28,6 +34,13 @@ export function normalizeToolCall(args: {
       ? resolveChartKeys(input as unknown as ChartToolPayload) : undefined
     const payload = chartKeys ? { ...input, xAxisKey: chartKeys.xKey, dataKeys: chartKeys.keys } : input
     return { kind: "tool", toolKind: "display", toolName, toolId, input: { payload }, rawInput: payload }
+  }
+
+  if (CHAT_TOOL_NAMES.includes(toolName)) {
+    return { kind: "tool", toolKind: "chat", toolName, toolId, input: { payload: input }, rawInput: input }
+  }
+  if (SCHEDULE_TOOL_NAMES.includes(toolName)) {
+    return { kind: "tool", toolKind: "schedule", toolName, toolId, input: { payload: input }, rawInput: input }
   }
 
   switch (toolName) {

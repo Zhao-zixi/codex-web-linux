@@ -55,7 +55,11 @@ describe("shared Kanna display tools", () => {
     ])
   })
   test("replaces demo tools and keeps chart data available in transcript headers", async () => {
-    expect(KANNA_TOOL_NAMES).toEqual(["show_chart", "send_attachments", "generate_images"])
+    expect(KANNA_TOOL_NAMES).toEqual([
+      "show_chart", "send_attachments", "generate_images",
+      "get_context", "list_chats", "read_chat", "create_chat", "fork_chat", "send_message", "wait_for_chats",
+      "cancel_chat", "update_chat", "update_queued_message", "set_schedule", "list_schedules", "delete_schedule",
+    ])
     const { runtime, entries } = setup()
     expect(await runtime.execute("show_chart", chart)).toMatchObject({ structuredContent: { displayed: true } })
     expect(entries.map(entry => entry.kind)).toEqual(["tool_call", "tool_result"])
@@ -176,6 +180,20 @@ describe("shared Kanna display tools", () => {
     expect(() => validateToolArguments(tool, { type: "toolCall", id: "invalid", name: tool.name,
       arguments: { ...input, data: [{ n: "001", value: { nested: 1 } }] },
     })).toThrow("Validation failed")
+  })
+  test("Pi validation keeps the chat tools' optional fields and number types", async () => {
+    const { runtime } = setup()
+    const tools = createPiKannaTools(runtime)
+    const validate = (name: string, input: Record<string, unknown>) =>
+      validateToolArguments(tools.find(tool => tool.name === name)!, { type: "toolCall", id: "pi-1", name, arguments: input })
+    expect(validate("wait_for_chats", { chatIds: ["a", "b"], mode: "any", timeoutSeconds: 30 }))
+      .toEqual({ chatIds: ["a", "b"], mode: "any", timeoutSeconds: 30 })
+    expect(validate("set_schedule", { message: "ping", dailyAt: "09:00", weekdays: [1, 3], planMode: true }))
+      .toEqual({ message: "ping", dailyAt: "09:00", weekdays: [1, 3], planMode: true })
+    expect(validate("create_chat", { message: "go" })).toEqual({ message: "go" })
+    expect(() => validate("create_chat", {})).toThrow("Validation failed")
+    // Without a server behind the runtime the tools say so instead of failing oddly.
+    expect(await runtime.execute("list_chats", {})).toMatchObject({ isError: true, content: [{ text: expect.stringContaining("not available") }] })
   })
   test("HTTP MCP authenticates requests and isolates chats", async () => {
     const first = setup(), second = setup()

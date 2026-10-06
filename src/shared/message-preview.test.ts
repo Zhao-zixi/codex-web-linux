@@ -1,5 +1,28 @@
 import { describe, expect, test } from "bun:test"
-import { toMessagePreview } from "./message-preview"
+import { toMessagePreview, stripSystemMessages } from "./message-preview"
+
+describe("stripSystemMessages", () => {
+  test("takes out every block meant for the agent, wherever it sits", () => {
+    const report = [
+      "<system-message>\nSub-chat completed: [A](/chat/a) (chat id a)\n</system-message>",
+      "first reply",
+      "<system-message>\nSub-chat failed: [B](/chat/b) (chat id b)\n</system-message>",
+      "---\n\nsecond reply",
+    ].join("\n\n")
+    expect(stripSystemMessages(report)).toBe("first reply\n\n---\n\nsecond reply")
+    expect(stripSystemMessages("<system-message>only for the agent</system-message>")).toBe("")
+  })
+
+  test("returns text without a block exactly as it came", () => {
+    const text = "  keep my   spacing\n\n"
+    expect(stripSystemMessages(text)).toBe(text)
+  })
+
+  test("previews leave the blocks out too", () => {
+    expect(toMessagePreview("<system-message>\nSub-chat completed: [A](/chat/a) (chat id a)\n</system-message>\n\nWhy did the scarecrow win?"))
+      .toBe("Why did the scarecrow win?")
+  })
+})
 
 describe("toMessagePreview", () => {
   test("leaves plain prose alone but for its whitespace", () => {

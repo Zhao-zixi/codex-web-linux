@@ -7,13 +7,14 @@ import { getDataDir, LOG_PREFIX } from "../shared/branding"
 import { toMessagePreview } from "../shared/message-preview"
 import { buildTranscriptOutline, findTranscriptWindowStart } from "../shared/transcript-window"
 import type { TranscriptOutlineEntry } from "../shared/types"
-import type { AgentProvider, QueuedChatMessage, ResolvedChatReadAnchor, TranscriptEntry } from "../shared/types"
+import type { AgentProvider, ChatSchedule, QueuedChatMessage, ResolvedChatReadAnchor, TranscriptEntry } from "../shared/types"
 import { STORE_VERSION } from "../shared/types"
 import {
   type ChatEvent,
   type ChatRecord,
   type ProjectEvent,
   type QueuedMessageEvent,
+  type ScheduleEvent,
   type SnapshotFile,
   type StoreEvent,
   type StoreState,
@@ -275,12 +276,16 @@ function getReplayEventPriority(event: StoreEvent) {
     case "chat_read_anchor_set":
     case "chat_files_touched":
     case "chat_last_message_at_set":
+    case "chat_report_owed_set":
       return 9
     case "chat_pin_set":
     case "chat_deleted":
     case "chat_archived":
     case "chat_unarchived":
       return 10
+    case "schedule_set":
+    case "schedule_deleted":
+      return 11
   }
 }
 
@@ -311,6 +316,7 @@ export class EventStore {
   private readonly messagesLogPath: string
   private readonly queuedMessagesLogPath: string
   private readonly turnsLogPath: string
+  private readonly schedulesLogPath: string
   private readonly transcriptsDir: string
   /** Written once `slimTranscripts` has swept this data dir. */
   private readonly slimMarkerPath: string
@@ -351,6 +357,7 @@ export class EventStore {
     this.messagesLogPath = path.join(this.dataDir, "messages.jsonl")
     this.queuedMessagesLogPath = path.join(this.dataDir, "queued-messages.jsonl")
     this.turnsLogPath = path.join(this.dataDir, "turns.jsonl")
+    this.schedulesLogPath = path.join(this.dataDir, "schedules.jsonl")
     this.transcriptsDir = path.join(this.dataDir, "transcripts")
     this.slimMarkerPath = path.join(this.dataDir, "transcripts-slim.json")
     this.sidebarProjectOrderPath = path.join(this.dataDir, SIDEBAR_PROJECT_ORDER_FILE)
@@ -372,6 +379,7 @@ export class EventStore {
     await this.ensureFile(this.messagesLogPath)
     await this.ensureFile(this.queuedMessagesLogPath)
     await this.ensureFile(this.turnsLogPath)
+    await this.ensureFile(this.schedulesLogPath)
     await this.loadSnapshot()
     await this.replayLogs()
     await this.hydrateChatMetadataFromTranscripts()
@@ -455,6 +463,7 @@ export class EventStore {
       Bun.write(this.messagesLogPath, ""),
       Bun.write(this.queuedMessagesLogPath, ""),
       Bun.write(this.turnsLogPath, ""),
+      Bun.write(this.schedulesLogPath, ""),
     ])
   }
 
@@ -502,6 +511,9 @@ export class EventStore {
           })))
         }
       }
+      for (const schedule of parsed.schedules ?? []) {
+        this.state.schedulesById.set(schedule.id, { ...schedule })
+      }
       if (parsed.messages?.length) {
         this.snapshotHasLegacyMessages = true
         for (const messageSet of parsed.messages) {
@@ -520,6 +532,7 @@ export class EventStore {
     this.state.projectIdsByPath.clear()
     this.state.chatsById.clear()
     this.state.queuedMessagesByChatId.clear()
+    this.state.schedulesById.clear()
     this.sidebarProjectOrder = []
     this.legacySidebarProjectOrder = []
     this.transcriptCache.clear()
@@ -620,6 +633,7 @@ export class EventStore {
       ...await this.loadReplayEvents(this.messagesLogPath, 2),
       ...await this.loadReplayEvents(this.queuedMessagesLogPath, 3),
       ...await this.loadReplayEvents(this.turnsLogPath, 4),
+      ...await this.loadReplayEvents(this.schedulesLogPath, 5),
     ]
     if (this.storageReset) return
 
@@ -745,8 +759,28 @@ export class EventStore {
           // Forks carry the source's turn-end timestamp on the create event
           // (they have no turn events of their own to replay).
           ...(event.lastTurnEndedAt != null ? { lastTurnEndedAt: event.lastTurnEndedAt } : {}),
+          ...(event.parentChatId ? { parentChatId: event.parentChatId } : {}),
+          ...(event.forkedFromChatId ? { forkedFromChatId: event.forkedFromChatId } : {}),
+          ...(event.createdByChatId ? { createdByChatId: event.createdByChatId } : {}),
         }
         this.state.chatsById.set(chat.id, chat)
+        break
+      }
+      case "chat_report_owed_set": {
+        const chat = this.state.chatsById.get(event.chatId)
+        if (!chat) break
+        // Bookkeeping between two chats, not activity in this one: `updatedAt`
+        // stays put so the sidebar does not reorder.
+        if (event.owed) chat.reportOwed = true
+        else delete chat.reportOwed
+        break
+      }
+      case "schedule_set": {
+        this.state.schedulesById.set(event.schedule.id, { ...event.schedule })
+        break
+      }
+      case "schedule_deleted": {
+        this.state.schedulesById.delete(event.scheduleId)
         break
       }
       case "chat_pin_set": {
@@ -1338,7 +1372,7 @@ export class EventStore {
     return write
   }
 
-  async createChat(projectId: string) {
+  async createChat(projectId: string, lineage?: { parentChatId?: string; createdByChatId?: string }) {
     const project = this.state.projectsById.get(projectId)
     if (!project || project.deletedAt) {
       throw new Error("Project not found")
@@ -1351,6 +1385,8 @@ export class EventStore {
       chatId,
       projectId,
       title: "New Chat",
+      ...(lineage?.parentChatId ? { parentChatId: lineage.parentChatId } : {}),
+      ...(lineage?.createdByChatId ? { createdByChatId: lineage.createdByChatId } : {}),
     }
     await this.append(this.chatsLogPath, event)
     return this.state.chatsById.get(chatId)!
@@ -1364,7 +1400,10 @@ export class EventStore {
    * conversation whose tool calls all have their results, and the source keeps
    * running undisturbed.
    */
-  async forkChat(sourceChatId: string, options?: { atLastCompletedTurn?: boolean }) {
+  async forkChat(
+    sourceChatId: string,
+    options?: { atLastCompletedTurn?: boolean; parentChatId?: string; createdByChatId?: string },
+  ) {
     const sourceChat = this.requireChat(sourceChatId)
     const sourceSessionToken = sourceChat.sessionToken ?? sourceChat.pendingForkSessionToken ?? null
     if (!sourceChat.provider || !sourceSessionToken) {
@@ -1412,6 +1451,9 @@ export class EventStore {
       // no turn events of its own it would otherwise read as brand new and sort
       // by creation time alone.
       ...(sourceChat.lastTurnEndedAt != null ? { lastTurnEndedAt: sourceChat.lastTurnEndedAt } : {}),
+      forkedFromChatId: sourceChatId,
+      ...(options?.parentChatId ? { parentChatId: options.parentChatId } : {}),
+      ...(options?.createdByChatId ? { createdByChatId: options.createdByChatId } : {}),
     }
     await this.append(this.chatsLogPath, createEvent)
     // The fork carries the same conversation, so it carries the same claim on
@@ -1750,6 +1792,56 @@ export class EventStore {
     await this.append(this.chatsLogPath, event)
   }
 
+  /** Marks whether a sub-chat still owes its parent a report. See `ChatRecord.reportOwed`. */
+  async setReportOwed(chatId: string, owed: boolean) {
+    const chat = this.requireChat(chatId)
+    if (Boolean(chat.reportOwed) === owed) return
+    const event: ChatEvent = {
+      v: STORE_VERSION,
+      type: "chat_report_owed_set",
+      timestamp: Date.now(),
+      chatId,
+      owed,
+    }
+    await this.append(this.chatsLogPath, event)
+  }
+
+  /** Creates the schedule, or replaces the one with the same id. */
+  async setSchedule(schedule: ChatSchedule) {
+    const event: ScheduleEvent = {
+      v: STORE_VERSION,
+      type: "schedule_set",
+      timestamp: Date.now(),
+      schedule,
+    }
+    await this.append(this.schedulesLogPath, event)
+    return this.state.schedulesById.get(schedule.id)!
+  }
+
+  async deleteSchedule(scheduleId: string) {
+    if (!this.state.schedulesById.has(scheduleId)) {
+      throw new Error("Schedule not found")
+    }
+    const event: ScheduleEvent = {
+      v: STORE_VERSION,
+      type: "schedule_deleted",
+      timestamp: Date.now(),
+      scheduleId,
+    }
+    await this.append(this.schedulesLogPath, event)
+  }
+
+  getSchedule(scheduleId: string) {
+    const schedule = this.state.schedulesById.get(scheduleId)
+    return schedule ? { ...schedule } : null
+  }
+
+  listSchedules() {
+    return [...this.state.schedulesById.values()]
+      .map((schedule) => ({ ...schedule }))
+      .sort((a, b) => a.createdAt - b.createdAt)
+  }
+
   /**
    * Persist where the user left off reading. Called on a throttle from the
    * client as it scrolls, so the no-op guard below matters — it is the only
@@ -1955,8 +2047,10 @@ export class EventStore {
       provider: message.provider,
       model: message.model,
       modelOptions: message.modelOptions,
+      ...(message.effort ? { effort: message.effort } : {}),
       planMode: message.planMode,
       autoPlan: message.autoPlan,
+      ...(message.source ? { source: message.source } : {}),
     }
     const event: QueuedMessageEvent = {
       v: STORE_VERSION,
@@ -2305,6 +2399,7 @@ export class EventStore {
             attachments: [...entry.attachments],
           })),
         })),
+      schedules: this.listSchedules(),
     }
   }
 
@@ -2317,6 +2412,7 @@ export class EventStore {
       Bun.write(this.messagesLogPath, ""),
       Bun.write(this.queuedMessagesLogPath, ""),
       Bun.write(this.turnsLogPath, ""),
+      Bun.write(this.schedulesLogPath, ""),
     ])
   }
 
@@ -2426,6 +2522,7 @@ export class EventStore {
       Bun.file(this.messagesLogPath).size,
       Bun.file(this.queuedMessagesLogPath).size,
       Bun.file(this.turnsLogPath).size,
+      Bun.file(this.schedulesLogPath).size,
     ])
     return sizes.reduce((total, size) => total + size, 0) >= COMPACTION_THRESHOLD_BYTES
   }

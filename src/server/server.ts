@@ -31,6 +31,8 @@ import { WorktreeProbe } from "./worktree-probe"
 import { TurnFileTracker } from "./worktree-snapshot"
 import { backfillTouchedFileBases } from "./touched-file-backfill"
 import { resumeInterruptedTurns } from "./resume-turns"
+import { ChatOrchestrator } from "./orchestrator"
+import { createChatCommands } from "./chat-commands"
 import { discoverProjects, type DiscoveredProject } from "./discovery"
 import { KeybindingsManager } from "./keybindings"
 import { PROJECT_ICON_URL_PREFIX, ProjectIcons, resolveProjectIconPath } from "./project-icons"
@@ -216,6 +218,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   })
   store.onTurnStarted = (chatId) => {
     turnFiles.beginTurn(chatId)
+    orchestrator.handleTurnStarted(chatId)
   }
   // A finished turn is the likeliest moment for the dirty set to have changed,
   // so probe that one project then — after recording the turn's own files, so
@@ -273,6 +276,23 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
       router.scheduleBroadcast()
     },
   })
+  // The agents' side of chat management: sub-chats, their reports, schedules.
+  // Its pushes go through `router`, which exists by the time anything can fire.
+  // One set of chat actions for both callers: the router runs them for the
+  // user, the orchestrator for an agent.
+  const chatCommands = createChatCommands({ store, agent, analytics })
+  const orchestrator = new ChatOrchestrator({
+    store,
+    agent,
+    commands: chatCommands,
+    push: (change) => {
+      void router.broadcastChatChange(change)
+    },
+    onError: (message) => console.warn(`${LOG_PREFIX} ${message}`),
+  })
+  agent.orchestration = orchestrator
+  agent.onChatSettled = (chatId) => orchestrator.handleChatSettled(chatId)
+  agent.onChatStopped = (chatId) => orchestrator.handleChatStopped(chatId)
   const usageLimits = new UsageLimitsManager(path.join(store.dataDir, "usage-limits.json"), {
     fetchClaudeUsage: () => agent.fetchClaudeUsage(),
     fetchCodexRateLimits: () => agent.fetchCodexRateLimits(),
@@ -316,6 +336,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     worktreeProbe,
     projectIcons,
     agent,
+    chatCommands,
     terminals,
     portTunnels,
     keybindings,
@@ -393,6 +414,9 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     }
   }
   await shellPathReady
+  // After the shell path: an overdue schedule or a report held over from the
+  // last run starts an agent straight away.
+  orchestrator.start()
   // Chats that were mid-turn when Kanna last exited pick up where they left
   // off. Not awaited — each resume starts a harness process, and boot should
   // not wait on them; chained onto the GC sweep so a chat about to be archived
@@ -788,6 +812,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     projectIcons.stop()
     // Cancels every in-flight turn *and* marks its chat, so the next boot
     // restarts the work instead of leaving it interrupted (see resume-turns.ts).
+    orchestrator.dispose()
     try { await agent.interruptForShutdown() } finally { agent.dispose() }
     router.dispose()
     providerAuth.dispose()

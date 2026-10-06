@@ -77,6 +77,22 @@ const ASTERISK_EMPHASIS = /(\*{1,3})(?=\S)([\s\S]*?\S)\1/g
  */
 const UNDERSCORE_EMPHASIS = /(?<![\p{L}\p{N}_])_(?=[^\s_])([\s\S]*?[^\s_])_(?![\p{L}\p{N}_])/gu
 
+/** A `<system-message>` block and the blank space after it. */
+const SYSTEM_MESSAGE_BLOCK = /<system-message>[\s\S]*?<\/system-message>\s*/g
+
+/**
+ * Take the `<system-message>` blocks out of a message, leaving what a person
+ * should read.
+ *
+ * Those blocks are how Kanna says something to an agent inside a message: who
+ * a sub-chat's report is about, with its chat id. The agent needs them and
+ * the user does not, so they are stored with the message and left out
+ * wherever it is shown: the bubble, the queue, and every preview.
+ */
+export function stripSystemMessages(text: string): string {
+  return text.includes("<system-message>") ? text.replace(SYSTEM_MESSAGE_BLOCK, "").trim() : text
+}
+
 /** Every run of whitespace, newlines included, becomes one space. */
 const WHITESPACE_RUN = /\s+/g
 
@@ -87,7 +103,7 @@ const WHITESPACE_RUN = /\s+/g
  * comes back with its whitespace collapsed and nothing else changed.
  */
 export function toMessagePreview(text: string): string {
-  return text
+  return stripSystemMessages(text)
     .replace(FENCE_LINE, "\n")
     .replace(INLINE_CODE, "$1")
     .replace(IMAGE, "$1")

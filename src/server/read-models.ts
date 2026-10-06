@@ -286,6 +286,7 @@ export function deriveSidebarData(
           ...(chat.pinnedAt ? { pinnedAt: chat.pinnedAt } : {}),
           hasAutomation: false,
           canFork: canForkChat(chat, activeStatuses, drainingChatIds) || undefined,
+          ...(chat.parentChatId ? { parentChatId: chat.parentChatId } : {}),
         }
       })
   }
@@ -295,7 +296,9 @@ export function deriveSidebarData(
     const iconUrl = options?.projectIcons?.get(project.localPath)
     const chats = toSidebarChatRows(project, chatsByProjectId.get(project.id) ?? [])
     const archivedChats = toSidebarChatRows(project, archivedChatsByProjectId.get(project.id) ?? [])
-    const { previewChats, olderChats } = getSidebarChatBuckets(chats, nowMs)
+    // The lists a project shows leave sub-chats out; `chats` keeps them for lookups.
+    const listedChats = chats.filter((chat) => !chat.parentChatId)
+    const { previewChats, olderChats } = getSidebarChatBuckets(listedChats, nowMs)
 
     return {
       groupKey: project.id,
@@ -319,7 +322,7 @@ export function deriveSidebarData(
       previewChats,
       olderChats,
       ...(archivedChats.length ? { archivedChats } : {}),
-      defaultCollapsed: chats.every((chat) => !isSidebarChatPreviewed(chat, nowMs)),
+      defaultCollapsed: listedChats.every((chat) => !isSidebarChatPreviewed(chat, nowMs)),
     }
   })
 
@@ -428,6 +431,14 @@ export function deriveChatSnapshot(
   const project = state.projectsById.get(chat.projectId)
   if (!project || project.deletedAt) return null
 
+  const schedules = [...(state.schedulesById?.values() ?? [])]
+    .filter((schedule) => (
+      (schedule.target.kind === "chat" && schedule.target.chatId === chat.id)
+      || schedule.createdByChatId === chat.id
+      || schedule.lastRunChatId === chat.id
+    ))
+    .sort((a, b) => a.createdAt - b.createdAt)
+
   const runtime: ChatRuntime = {
     chatId: chat.id,
     projectId: project.id,
@@ -440,6 +451,7 @@ export function deriveChatSnapshot(
     autoPlan: chat.autoPlan,
     sessionToken: chat.sessionToken,
     ...(subagents?.length ? { subagents: [...subagents] } : {}),
+    ...(schedules.length ? { schedules } : {}),
   }
 
   const transcript = getMessages(chat.id)

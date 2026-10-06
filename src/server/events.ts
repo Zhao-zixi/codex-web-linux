@@ -1,4 +1,4 @@
-import type { AgentProvider, ProjectSummary, QueuedChatMessage, TranscriptEntry } from "../shared/types"
+import type { AgentProvider, ChatSchedule, ProjectSummary, QueuedChatMessage, TranscriptEntry } from "../shared/types"
 
 export interface ProjectRecord extends ProjectSummary {
   sidebarTitle?: string
@@ -133,6 +133,23 @@ export interface ChatRecord {
    * never written again.
    */
   touchedPaths?: string[]
+  /**
+   * The chat whose agent started this one as a sub-chat. The link is what
+   * makes it a sub-chat: its result goes back to the parent, the parent is
+   * not done while it runs, and stopping the parent stops it.
+   */
+  parentChatId?: string
+  /** The chat this one was forked from. */
+  forkedFromChatId?: string
+  /** The chat whose agent created this one. Absent when a user did. */
+  createdByChatId?: string
+  /**
+   * Set while the parent has not yet been told how this sub-chat's work ended.
+   * Persisted so a result that lands across a restart is still delivered, and
+   * cleared by whichever comes first: the report, or a `wait_for_chats` that
+   * returned the result.
+   */
+  reportOwed?: boolean
 }
 
 /** One file a chat changed, and the committed content it changed it from. */
@@ -170,6 +187,7 @@ export interface StoreState {
   projectIdsByPath: Map<string, string>
   chatsById: Map<string, ChatRecord>
   queuedMessagesByChatId: Map<string, QueuedChatMessage[]>
+  schedulesById: Map<string, ChatSchedule>
 }
 
 export interface SnapshotFile {
@@ -179,6 +197,7 @@ export interface SnapshotFile {
   chats: ChatRecord[]
   sidebarProjectOrder?: string[]
   queuedMessages?: Array<{ chatId: string; entries: QueuedChatMessage[] }>
+  schedules?: ChatSchedule[]
   messages?: Array<{ chatId: string; entries: TranscriptEntry[] }>
 }
 
@@ -218,6 +237,17 @@ export type ChatEvent =
        * every plain chat_created, including old logs.
        */
       lastTurnEndedAt?: number
+      /** See the fields of the same names on `ChatRecord`. Absent on old logs. */
+      parentChatId?: string
+      forkedFromChatId?: string
+      createdByChatId?: string
+    }
+  | {
+      v: 2
+      type: "chat_report_owed_set"
+      timestamp: number
+      chatId: string
+      owed: boolean
     }
   | {
       v: 2
@@ -398,7 +428,22 @@ export type TurnEvent =
       pendingForkSessionToken: string | null
     }
 
-export type StoreEvent = ProjectEvent | ChatEvent | MessageEvent | QueuedMessageEvent | TurnEvent
+export type ScheduleEvent =
+  /** Create or replace. The whole record rides the event, so replay needs no merge rules. */
+  | {
+      v: 2
+      type: "schedule_set"
+      timestamp: number
+      schedule: ChatSchedule
+    }
+  | {
+      v: 2
+      type: "schedule_deleted"
+      timestamp: number
+      scheduleId: string
+    }
+
+export type StoreEvent = ProjectEvent | ChatEvent | MessageEvent | QueuedMessageEvent | TurnEvent | ScheduleEvent
 
 export function createEmptyState(): StoreState {
   return {
@@ -406,6 +451,7 @@ export function createEmptyState(): StoreState {
     projectIdsByPath: new Map(),
     chatsById: new Map(),
     queuedMessagesByChatId: new Map(),
+    schedulesById: new Map(),
   }
 }
 
@@ -421,7 +467,7 @@ export const STRUCTURED_RESULT_TOOL_KINDS: ReadonlySet<string> = new Set(["ask_u
  * travel with the transcript rather than being fetched when a row is opened —
  * there is no row to open. Superset of the structured-result kinds.
  */
-export const INLINE_TOOL_KINDS: ReadonlySet<string> = new Set([...STRUCTURED_RESULT_TOOL_KINDS, "todo_write", "display"])
+export const INLINE_TOOL_KINDS: ReadonlySet<string> = new Set([...STRUCTURED_RESULT_TOOL_KINDS, "todo_write", "display", "chat", "schedule"])
 
 /**
  * Tool call input fields that can grow without bound, by kind. The other

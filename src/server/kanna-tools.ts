@@ -5,6 +5,8 @@ import type { HarnessToolRequest } from "./harness-types"
 import { timestamped } from "./transcript"
 import { DISPLAY_TOOLS } from "./kanna-display-tools"
 import { GENERATE_IMAGES_TOOL } from "./kanna-image-tools"
+import { ORCHESTRATION_TOOLS } from "./kanna-orchestration-tools"
+import type { ChatOrchestrator } from "./orchestrator"
 
 export interface KannaToolResult {
   [key: string]: unknown
@@ -19,6 +21,8 @@ interface KannaToolContext {
   dataDir?: string
   signal: AbortSignal
   requestInput: (prompt: string) => Promise<string>
+  /** Absent only where a runtime is built without a server behind it, as in tests. */
+  orchestration?: ChatOrchestrator
 }
 
 export interface KannaToolDefinition {
@@ -30,7 +34,7 @@ export interface KannaToolDefinition {
 }
 
 // Add tools here. Every provider registers the same definitions and calls the same handlers.
-export const KANNA_TOOLS: readonly KannaToolDefinition[] = [...DISPLAY_TOOLS, GENERATE_IMAGES_TOOL]
+export const KANNA_TOOLS: readonly KannaToolDefinition[] = [...DISPLAY_TOOLS, GENERATE_IMAGES_TOOL, ...ORCHESTRATION_TOOLS]
 
 export const KANNA_TOOL_NAMES = KANNA_TOOLS.map((tool) => tool.name)
 
@@ -60,6 +64,7 @@ export class KannaToolRuntime implements KannaToolHost {
     dataDir?: string
     emit: (entry: TranscriptEntry) => Promise<void>
     requestInput: (request: HarnessToolRequest, signal: AbortSignal) => Promise<unknown>
+    orchestration?: ChatOrchestrator
   }, private readonly definitions: readonly KannaToolDefinition[] = KANNA_TOOLS) {}
 
   abort() {
@@ -98,6 +103,7 @@ export class KannaToolRuntime implements KannaToolHost {
         cwd: this.context.cwd,
         dataDir: this.context.dataDir,
         signal,
+        orchestration: this.context.orchestration,
         requestInput: async (prompt) => {
           tool = normalizeToolCall({ toolName: "AskUserQuestion", toolId, input: { questions: [{ id: "value", question: prompt, options: [] }] } })
           await this.context.emit(timestamped({ kind: "tool_call", tool }))

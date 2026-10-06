@@ -282,6 +282,55 @@ describe("CodexAppServerManager", () => {
     expect(turnStart?.params.collaborationMode?.settings?.reasoning_effort).toBe("xhigh")
   })
 
+  test("sends an explicit null service tier when fast mode is off", async () => {
+    const process = new FakeCodexProcess((message, child) => {
+      if (message.method === "initialize") {
+        child.writeServerMessage({ id: message.id, result: { userAgent: "codex-test" } })
+      } else if (message.method === "thread/start") {
+        child.writeServerMessage({ id: message.id, result: { thread: { id: "thread-1" }, model: "gpt-5.4" } })
+      } else if (message.method === "turn/start") {
+        child.writeServerMessage({
+          id: message.id,
+          result: { turn: { id: "turn-1", status: "completed", error: null } },
+        })
+        child.writeServerMessage({
+          method: "turn/completed",
+          params: {
+            threadId: "thread-1",
+            turn: { id: "turn-1", status: "completed", error: null },
+          },
+        })
+      }
+    })
+
+    const manager = new CodexAppServerManager({
+      spawnProcess: () => process as never,
+    })
+
+    await manager.startSession({
+      chatId: "chat-1",
+      cwd: "/tmp/project",
+      model: "gpt-5.4",
+      sessionToken: null,
+    })
+
+    const turn = await manager.startTurn({
+      chatId: "chat-1",
+      model: "gpt-5.4",
+      content: "Run pwd",
+      planMode: false,
+      onToolRequest: async () => ({}),
+    })
+
+    await collectStream(turn.stream)
+
+    // The key must be present: an absent tier means "leave unchanged" to the app-server.
+    const threadStart = process.messages.find((message: any) => message.method === "thread/start") as any
+    const turnStart = process.messages.find((message: any) => message.method === "turn/start") as any
+    expect(threadStart.params).toHaveProperty("serviceTier", null)
+    expect(turnStart.params).toHaveProperty("serviceTier", null)
+  })
+
   test("attaches a structured skill item plus system-message failsafe when invoking a skill", async () => {
     const process = new FakeCodexProcess((message, child) => {
       if (message.method === "initialize") {

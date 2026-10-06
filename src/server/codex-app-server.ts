@@ -919,10 +919,15 @@ export class CodexAppServerManager {
           },
         },
       } : {}
+      // Standard speed is an explicit null. An omitted tier inherits the
+      // user's config.toml (`service_tier = "priority"` runs fast while the
+      // UI shows "Standard"), and on turn/start it keeps the thread's tier, so
+      // turning fast mode off mid-chat would never take effect.
+      const serviceTier = args.serviceTier ?? null
       const threadParams = {
         model: args.model,
         cwd: args.cwd,
-        serviceTier: args.serviceTier,
+        serviceTier,
         approvalPolicy: "never",
         sandbox: "danger-full-access",
         experimentalRawEvents: false,
@@ -940,7 +945,7 @@ export class CodexAppServerManager {
           threadId: args.pendingForkSessionToken,
           model: args.model,
           cwd: args.cwd,
-          serviceTier: args.serviceTier,
+          serviceTier,
           approvalPolicy: "never",
           sandbox: "danger-full-access",
           persistExtendedHistory: false,
@@ -952,7 +957,7 @@ export class CodexAppServerManager {
             threadId: args.sessionToken,
             model: args.model,
             cwd: args.cwd,
-            serviceTier: args.serviceTier,
+            serviceTier,
             approvalPolicy: "never",
             sandbox: "danger-full-access",
             persistExtendedHistory: false,
@@ -1029,7 +1034,8 @@ export class CodexAppServerManager {
         approvalPolicy: "never",
         model: args.model,
         effort: args.effort,
-        serviceTier: args.serviceTier,
+        // null, not omitted: see startSession.
+        serviceTier: args.serviceTier ?? null,
         collaborationMode: {
           mode: args.planMode ? "plan" : "default",
           settings: {

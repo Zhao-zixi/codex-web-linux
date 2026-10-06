@@ -215,6 +215,24 @@ describe("ChatHoverCardContent", () => {
     expect(html).not.toContain(time)
   })
 
+  test("a chat waiting on a subagent says so where the landing time would go", () => {
+    // Its last turn did end, but stamping the card with that time would read
+    // as the chat having finished then.
+    const endedAt = NOW - 30 * 60_000
+    const time = new Date(endedAt).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+    const html = render({
+      status: "waiting_on_subagent",
+      turnCount: 3,
+      lastTurnStartedAt: endedAt - 60_000,
+      lastTurnEndedAt: endedAt,
+    })
+
+    const anchored = html.slice(html.indexOf("ml-auto"))
+    expect(anchored).toContain("3 turns")
+    expect(anchored).toContain("Waiting on a subagent")
+    expect(html).not.toContain(time)
+  })
+
   test("names the harness with its glyph, and nothing between them", () => {
     const html = render({ provider: "codex", turnCount: 2, lastTurnEndedAt: NOW })
 

@@ -22,6 +22,8 @@ export interface ChatWindowRouteDeps {
   store: Pick<EventStore, "state" | "getChat" | "getClientTranscript" | "getInitialTranscriptWindowStart"> & Partial<Pick<EventStore, "prepareTranscript">>
   agent: {
     getActiveStatuses: () => Map<string, KannaStatus>
+    /** Optional for the same reason as `getSubagents`. Preferred: it also has the chats waiting on a subagent. */
+    getChatStatuses?: () => Map<string, KannaStatus>
     getDrainingChatIds: () => Set<string>
     /** Optional: older callers and test fakes predate delegated-work tracking. */
     getSubagents?: (chatId: string) => SubagentActivity[]
@@ -39,7 +41,7 @@ export function readChatWindow(chatId: string, deps: ChatWindowRouteDeps): ChatS
     : 0
   const full = deriveChatSnapshot(
     store.state,
-    agent.getActiveStatuses(),
+    agent.getChatStatuses?.() ?? agent.getActiveStatuses(),
     agent.getDrainingChatIds(),
     chatId,
     (id) => store.getClientTranscript(id, windowStart),

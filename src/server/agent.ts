@@ -293,6 +293,14 @@ interface AgentCoordinatorArgs {
 }
 
 
+/**
+ * Whether a provider's subagents are known only from its transcript. See
+ * `AgentCoordinator.trackSubagentFromEntry`.
+ */
+function tracksSubagentsFromTranscript(provider: AgentProvider) {
+  return provider !== "claude" && provider !== "codex"
+}
+
 function isClaudeSteerLoggingEnabled() {
   return process.env.KANNA_LOG_CLAUDE_STEER === "1"
 }
@@ -1136,6 +1144,8 @@ export class AgentCoordinator {
     this.onStateChange = args.onStateChange
     this.analytics = args.analytics ?? NoopAnalyticsReporter
     this.codexManager = args.codexManager ?? new CodexAppServerManager()
+    // Optional: test stand-ins for the manager predate it.
+    this.codexManager.setTaskActivityListener?.((chatId, update) => this.applySubagentActivity(chatId, update))
     this.cursorManager = args.cursorManager ?? new CursorCliManager()
     this.grokManager = args.grokManager ?? new GrokCliManager()
     this.piManager = args.piManager ?? new PiAgentManager()
@@ -1239,6 +1249,38 @@ export class AgentCoordinator {
     return statuses
   }
 
+  /**
+   * What the sidebar and the chat page show: the turns in flight, plus every
+   * chat whose own turn has ended while work it handed off is still going.
+   *
+   * Read off the task log, so it agrees with the Tasks widget: a chat is
+   * waiting exactly while a row there is running and no turn is. That covers
+   * a monitor, which `hasBackgroundWork` leaves out. The two answer different
+   * questions. A monitor can wake the chat, so the chat is not at rest, but it
+   * can also outlive every piece of work, so nothing may wait for it to end.
+   */
+  getChatStatuses() {
+    const statuses = this.getActiveStatuses()
+    for (const [chatId, byId] of this.subagents) {
+      if (statuses.has(chatId)) continue
+      for (const activity of byId.values()) {
+        if (activity.status !== "running") continue
+        statuses.set(chatId, "waiting_on_subagent")
+        break
+      }
+    }
+    // What only the coordinator knows to be going. The orchestrator adds the
+    // rest (queues, reports on their way) and finds the chats above them.
+    const unsettled = new Set([...this.activeTurns.keys(), ...this.startingTurns.keys(), ...this.drainingStreams.keys()])
+    for (const chatId of this.subagents.keys()) {
+      if (this.hasBackgroundWork(chatId)) unsettled.add(chatId)
+    }
+    for (const chatId of this.orchestration?.getChatsWaitingOnSubchats(unsettled) ?? []) {
+      if (!statuses.has(chatId)) statuses.set(chatId, "waiting_on_subagent")
+    }
+    return statuses
+  }
+
   getPendingTool(chatId: string): PendingToolSnapshot | null {
     const pending = this.activeTurns.get(chatId)?.pendingTool
     if (!pending) return null
@@ -1268,6 +1310,11 @@ export class AgentCoordinator {
     return this.activeTurns.has(chatId) || this.startingTurns.has(chatId)
   }
 
+  /** A turn gave its result and its stream is still open. */
+  isDraining(chatId: string) {
+    return this.drainingStreams.has(chatId)
+  }
+
   /**
    * The provider's own background work still going (subagents, shells,
    * workflows), or its stream still open. A monitor does not count: it
@@ -1275,7 +1322,7 @@ export class AgentCoordinator {
    * as long as the session does.
    */
   hasBackgroundWork(chatId: string) {
-    if (this.drainingStreams.has(chatId)) return true
+    if (this.isDraining(chatId)) return true
     for (const activity of this.subagents.get(chatId)?.values() ?? []) {
       if (activity.status === "running" && activity.type !== "monitor") return true
     }
@@ -1423,6 +1470,9 @@ export class AgentCoordinator {
 
     pruneTaskLog(byId)
     this.emitStateChange(chatId)
+    // Outside a turn there is no turn start to tell the chats above this one
+    // that it is back at work.
+    if (update.kind === "started" && !this.isBusy(chatId)) this.orchestration?.handleBackgroundWorkStarted(chatId)
     // A chat whose turn ended with background work still going is finished
     // only now, and no turn end is coming to say so.
     if (update.kind === "stopped" || update.kind === "inFlight") this.notifySettled(chatId)
@@ -1437,6 +1487,16 @@ export class AgentCoordinator {
     if (await this.orchestration?.stopChildTask(chatId, taskId)) return
     const task = this.subagents.get(chatId)?.get(taskId)
     if (!task || task.status !== "running") return
+    if (task.stoppable && this.store.getChat(chatId)?.provider === "codex") {
+      // Codex does not tell a turn that the agent it is waiting on was
+      // stopped: its wait runs out after two minutes and it waits again. So
+      // an agent is stopped on its own only once the chat's turn is over.
+      if (this.isBusy(chatId)) {
+        throw new Error("This chat's turn is still using this agent. Stop the chat to end both.")
+      }
+      // A Codex agent is a thread with a turn of its own to interrupt.
+      if (await this.codexManager.stopAgent?.(chatId, taskId)) return
+    }
     const stopTask = this.claudeSessions.get(chatId)?.session.stopTask
     if (!task.stoppable || !stopTask) {
       throw new Error("This task can't be stopped on its own. Stop the chat to end it.")
@@ -1445,16 +1505,18 @@ export class AgentCoordinator {
   }
 
   /**
-   * Derive delegated work from the transcript, for providers with no hook
-   * equivalent (Codex, Grok — both normalize their spawn call to
-   * `subagent_task`). Weaker than Claude's hooks: a subagent is "running" from
-   * its tool call until its tool result, which is all these providers report.
+   * Derive delegated work from the transcript, for providers that report it
+   * nowhere else (Grok, which normalizes its spawn call to `subagent_task`).
+   * Weaker than a task stream: a subagent is "running" from its tool call
+   * until its tool result, which is all such a provider reports.
    *
-   * Claude is deliberately excluded. Its hooks key on `agent_id` while the tool
-   * call keys on `toolId`, so running both would list every agent twice.
+   * Claude and Codex are deliberately excluded. Each reports its tasks itself
+   * (Claude's hooks and task stream, Codex's agent threads) under ids that are
+   * not the tool call's, so running both would list every agent twice. And a
+   * Codex `wait` or `closeAgent` is a `subagent_task` call that is no agent.
    */
-  private trackSubagentFromEntry(chatId: string, entry: TranscriptEntry) {
-    if (this.activeTurns.get(chatId)?.provider === "claude") return
+  private trackSubagentFromEntry(chatId: string, provider: AgentProvider, entry: TranscriptEntry) {
+    if (!tracksSubagentsFromTranscript(provider)) return
     if (entry.kind === "tool_call" && entry.tool.toolKind === "subagent_task") {
       const input = entry.tool.input as { subagentType?: unknown; description?: unknown }
       const label = typeof input.subagentType === "string" && input.subagentType
@@ -2892,7 +2954,7 @@ export class AgentCoordinator {
 
         if (!event.entry || customToolEvents.skip(event.entry)) continue
         await this.store.appendMessage(active.chatId, event.entry)
-        this.trackSubagentFromEntry(active.chatId, event.entry)
+        this.trackSubagentFromEntry(active.chatId, active.provider, event.entry)
 
         if (event.entry.kind === "system_init") {
           active.status = active.pendingTool ? "waiting_for_user" : "running"
@@ -2946,6 +3008,14 @@ export class AgentCoordinator {
       }
       // Stream has fully ended — no longer draining.
       this.drainingStreams.delete(active.chatId)
+      // These providers report a subagent only on this stream, so one still
+      // marked running can never be closed and would hold the chat in
+      // "waiting on subagent" for good. Not when a newer turn has started:
+      // the log is that turn's now. Claude's tasks and Codex's agents outlive
+      // the turn, and each has its own way of saying one has ended.
+      if (tracksSubagentsFromTranscript(active.provider) && !this.activeTurns.has(active.chatId)) {
+        this.closeRunningSubagents(active.chatId)
+      }
       this.emitStateChange(active.chatId)
 
       if (active.postToolFollowUp && !active.cancelRequested) {
@@ -3074,7 +3144,15 @@ export class AgentCoordinator {
     // Remove from activeTurns immediately so the UI reflects the cancellation
     // right away, rather than waiting for interrupt() which may hang.
     this.activeTurns.delete(chatId)
-    this.closeRunningSubagents(chatId)
+    if (active.provider === "codex") {
+      // Codex's agents run on after the turn that spawned them is interrupted,
+      // and each still reports its own end, so their rows stay as they are. A
+      // stop is meant for them too. A steer is not: its new turn can go on
+      // waiting for them.
+      if (stopped) void this.codexManager.stopAgents?.(chatId)
+    } else {
+      this.closeRunningSubagents(chatId)
+    }
     this.emitStateChange(chatId)
     if (stopped) this.notifySettled(chatId)
     logClaudeSteer("cancel_active_turn_deleted", {

@@ -4,11 +4,13 @@ import { getChatViewer, openViewer, useViewerStore } from "./viewerStore"
 
 const FILE = { kind: "file", projectId: "p1", path: "README.md" } as const
 const DIFF = { kind: "diff", projectId: "p1", path: "src/a.ts" } as const
+const CHAT = { kind: "chat", chatId: "sub-1" } as const
+const IMAGE = { kind: "attachment", attachment: { url: "/media/a.png", name: "a.png", mimeType: "image/png", size: 1 } } as const
 
 describe("viewerStore", () => {
   beforeEach(() => {
     useRightSidebarStore.setState({ size: DEFAULT_RIGHT_SIDEBAR_SIZE, projects: {}, projectUi: {}, chatViewers: {} })
-    useViewerStore.setState({ chatKey: "", openCount: 0 })
+    useViewerStore.setState({ chatKey: "", openCount: 0, chatJump: null, liveChatId: null })
     useViewerStore.getState().setChat("chat-1")
   })
 
@@ -64,5 +66,68 @@ describe("viewerStore", () => {
       "chat-1": { item: { ...DIFF, path: "src/b.ts" }, expanded: false },
       "chat-4": { item: FILE, expanded: true, widthPx: 640 },
     })
+  })
+
+  test("a chat preview has a width of its own, apart from a file's", () => {
+    openViewer(FILE)
+    useViewerStore.getState().setWidth(700)
+    openViewer(CHAT)
+    expect(getChatViewer()).toEqual({ item: CHAT, expanded: false })
+    useViewerStore.getState().setWidth(520)
+    openViewer({ kind: "chat", chatId: "sub-2", back: ["sub-1"] })
+    expect(getChatViewer()?.widthPx).toBe(520)
+  })
+
+  test("closing what opened over a chat preview goes back to the chat, at its width", () => {
+    openViewer(CHAT)
+    useViewerStore.getState().setWidth(520)
+    openViewer(IMAGE)
+    openViewer(FILE)
+    expect(getChatViewer()?.item).toEqual(FILE)
+
+    useViewerStore.getState().close()
+    expect(getChatViewer()).toEqual({ item: CHAT, expanded: false, widthPx: 520 })
+    useViewerStore.getState().close()
+    expect(getChatViewer()).toBeNull()
+  })
+
+  test("another chat replaces a preview outright, and closeAll shuts the pane", () => {
+    openViewer(CHAT)
+    openViewer({ kind: "chat", chatId: "sub-2" })
+    useViewerStore.getState().close()
+    expect(getChatViewer()).toBeNull()
+
+    openViewer(CHAT)
+    openViewer(IMAGE)
+    useViewerStore.getState().closeAll()
+    expect(getChatViewer()).toBeNull()
+  })
+
+  test("a chat preview comes back after a reload, also from under a chart", () => {
+    expect(persistedChatViewers({
+      "chat-1": { item: { kind: "chat", chatId: "sub-2", back: ["sub-1"] }, expanded: false, widthPx: 520 },
+      "chat-2": {
+        item: { kind: "chart", payload: { title: "x", type: "bar", data: [] } },
+        expanded: true,
+        returnTo: { item: CHAT, widthPx: 480 },
+      },
+    })).toEqual({
+      "chat-1": { item: { kind: "chat", chatId: "sub-2", back: ["sub-1"] }, expanded: false, widthPx: 520 },
+      "chat-2": { item: CHAT, expanded: true, widthPx: 480 },
+    })
+  })
+
+  test("a jump for the previewed chat is one-shot and dropped with the page's chat", () => {
+    useViewerStore.getState().setChatJump("sub-1", "reply")
+    const jump = useViewerStore.getState().chatJump
+    expect(jump).toMatchObject({ chatId: "sub-1", target: "reply" })
+    useViewerStore.getState().clearChatJump("another-request")
+    expect(useViewerStore.getState().chatJump).toBe(jump)
+    useViewerStore.getState().clearChatJump(jump!.requestId)
+    expect(useViewerStore.getState().chatJump).toBeNull()
+
+    useViewerStore.getState().setChatJump("sub-1", "prompt")
+    useViewerStore.getState().setChat("chat-2")
+    expect(useViewerStore.getState().chatJump).toBeNull()
   })
 })

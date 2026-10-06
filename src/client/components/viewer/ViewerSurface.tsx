@@ -6,7 +6,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip"
 
 /**
  * The viewer's chrome, the one frame every full-size view sits in: a changed
- * file's diff, an attachment, a chart. A flat card, bordered like the
+ * file's diff, an attachment, a chart, another chat. A flat card, bordered like the
  * widget cards. On the chat page it opens in a pane of its own beside the
  * chat, and expands over the chat (navbar, transcript, composer) on
  * request; elsewhere it covers the page.
@@ -64,7 +64,16 @@ export function ViewerSurface({
   label,
   scrollKey,
   center,
+  leading,
+  fieldsKeepEscape = false,
 }: {
+  /** A control before the icon and title: a previewed chat's Back. */
+  leading?: ReactNode
+  /**
+   * Escape pressed in a field inside is the field's, not a close. For a view
+   * with a composer in it, where Escape stops the turn and closes its menus.
+   */
+  fieldsKeepEscape?: boolean
   icon?: ReactNode
   title: ReactNode
   subtitle?: ReactNode
@@ -116,13 +125,15 @@ export function ViewerSurface({
     function handleEscape(event: KeyboardEvent) {
       if (event.key !== "Escape" || event.metaKey || event.ctrlKey || event.altKey) return
       if (hasOpenLayer() || !ownsKeys()) return
+      const active = document.activeElement
+      if (fieldsKeepEscape && isTypingTarget(active) && surfaceRef.current?.contains(active)) return
       event.preventDefault()
       event.stopImmediatePropagation()
       onClose()
     }
     window.addEventListener("keydown", handleEscape, true)
     return () => window.removeEventListener("keydown", handleEscape, true)
-  }, [onClose])
+  }, [fieldsKeepEscape, onClose])
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -155,7 +166,11 @@ export function ViewerSurface({
       data-state={docked ? undefined : "open"}
       data-viewer-surface
       className={cn(
-        "flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-border bg-background outline-none dark:bg-card",
+        "flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-border outline-none",
+        // The card says once what colour it is, and is painted from that. A
+        // transcript shown in it (a previewed chat) fades and fills with the
+        // same `surface`, in either theme, wherever the card is placed.
+        "bg-surface [--surface:var(--color-background)] dark:[--surface:var(--color-card)]",
         // Opens like the modal it effectively is: from its own centre, a
         // touch small and faded, 200ms. It leaves at once: closing is you
         // done with it, and a fade would hold it over the chat you went back to.
@@ -174,6 +189,9 @@ export function ViewerSurface({
         )}
       >
         <div className={cn("flex min-w-0 items-center gap-2", !center && "flex-1")}>
+          {/* Pulled out by the header's own left padding less the 8px the
+              close button keeps on the right, so the two sit alike. */}
+          {leading ? <div className="-ml-2 flex shrink-0 items-center">{leading}</div> : null}
           {icon ? <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground [&_svg]:size-4">{icon}</span> : null}
           <div className="flex min-w-0 flex-1 items-baseline gap-2">
             <span className="min-w-0 max-w-[60%] shrink-0 truncate text-sm font-medium text-foreground">{title}</span>

@@ -10,7 +10,8 @@ import { EventStore } from "./event-store"
 import type { HarnessEvent, HarnessTurn } from "./harness-types"
 import { KannaToolRuntime } from "./kanna-tools"
 import { ChatOrchestrator, MAX_CHAT_DEPTH, MAX_LIVE_CHATS } from "./orchestrator"
-import { deriveChatSnapshot } from "./read-models"
+import type { ChatChange } from "./chat-commands"
+import { deriveChatSnapshot, deriveSidebarData } from "./read-models"
 import { timestamped } from "./transcript"
 import { splitTranscriptEntry } from "./transcript-payloads"
 import type { TranscriptEntry } from "../shared/types"
@@ -88,7 +89,7 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup()
 })
 
-async function setup() {
+async function setup(options?: { closeOutGraceMs?: number }) {
   const dataDir = await mkdtemp(path.join(tmpdir(), "kanna-orchestrator-data-"))
   const projectDir = await mkdtemp(path.join(tmpdir(), "kanna-orchestrator-project-"))
   const store = new EventStore(dataDir)
@@ -102,12 +103,14 @@ async function setup() {
     generateTitle: async () => ({ title: null, usedFallback: true, failureMessage: null }),
   })
   let clock: number | null = null
+  const pushes: ChatChange[] = []
   const orchestrator = new ChatOrchestrator({
     store,
     agent,
     commands: createChatCommands({ store, agent, analytics: NoopAnalyticsReporter }),
-    push: () => {},
+    push: (change) => { pushes.push(change) },
     now: () => clock ?? Date.now(),
+    closeOutGraceMs: options?.closeOutGraceMs,
   })
   agent.orchestration = orchestrator
   agent.onChatSettled = (chatId) => orchestrator.handleChatSettled(chatId)
@@ -134,6 +137,7 @@ async function setup() {
     codex,
     agent,
     orchestrator,
+    pushes,
     userChat,
     setClock: (value: number) => { clock = value },
     prompts: (chatId: string) => store.getMessages(chatId).filter((entry) => entry.kind === "user_prompt"),
@@ -253,23 +257,212 @@ describe("sub-chats", () => {
     expect(store.getQueuedMessages(root)).toHaveLength(0)
   })
 
-  test("a sub-chat is not finished while its own sub-chat runs", async () => {
+  test("a sub-chat reports when its turn ends, though its own sub-chat still runs, and is not finished", async () => {
     const { orchestrator, codex, store, userChat } = await setup()
     const root = await userChat()
-    const child = await orchestrator.createChat(root, { message: "coordinate" })
-    const grandchild = await orchestrator.createChat(child.chatId, { message: "do the legwork" })
+    const child = await orchestrator.createChat(root, { message: "coordinate", title: "Coordinator" })
+    const grandchild = await orchestrator.createChat(child.chatId, { message: "do the legwork", title: "Legwork" })
     codex.finish(child.chatId, "Handed off.")
-    await until(() => !codex.turnsFor(child.chatId)[0]!.open)
-    await Bun.sleep(30)
-    // The middle chat's turn ended, but nothing goes up until the bottom one is in.
-    expect(store.getQueuedMessages(root)).toHaveLength(0)
+    // The middle chat's turn ended, and that goes up at once, marked as not the end.
+    await until(() => store.getQueuedMessages(root).length === 1, "the interim report")
+    const interim = store.getQueuedMessages(root)[0]!.content
+    expect(interim).toContain("Sub-chat waiting_on_subchats:")
+    expect(interim).toContain("Not its last word")
+    expect(interim).toContain("\"Legwork\"")
+    expect(stripSystemMessages(interim)).toBe("Handed off.")
     expect(orchestrator.readChat({ chatId: child.chatId }).chat.status).toBe("waiting_on_subchats")
+    // Still owed: the turn the bottom chat wakes is to be reported too.
+    expect(store.getChat(child.chatId)).toMatchObject({ reportOwed: true, reportedThrough: store.getChat(child.chatId)!.lastTurnEndedAt })
 
     codex.finish(grandchild.chatId, "legwork done")
     await until(() => codex.turnsFor(child.chatId).length === 2, "the middle chat to wake")
     codex.finish(child.chatId, "All of it is done.")
-    await until(() => store.getQueuedMessages(root).length === 1, "the report to the top")
-    expect(store.getQueuedMessages(root)[0]!.content).toContain("All of it is done.")
+    await until(() => store.getQueuedMessages(root)[0]?.content.includes("All of it is done.") === true, "the report to the top")
+    // The top chat had not read the first report, so the second takes its
+    // place: one message, the chat named once, as it stands now.
+    expect(store.getQueuedMessages(root)).toHaveLength(1)
+    expect(store.getQueuedMessages(root)[0]).toMatchObject({ source: { kind: "report", chatIds: [child.chatId] } })
+    expect(store.getQueuedMessages(root)[0]!.content).toContain("Sub-chat completed:")
+    expect(store.getQueuedMessages(root)[0]!.content).not.toContain("Not its last word")
+    expect(stripSystemMessages(store.getQueuedMessages(root)[0]!.content)).toBe("All of it is done.")
+    expect(store.getChat(child.chatId)).not.toHaveProperty("reportOwed")
+    expect(store.getChat(child.chatId)).not.toHaveProperty("reportedThrough")
+  })
+})
+
+describe("waiting on a subagent", () => {
+  test("a chat whose turn ended while its sub-chat runs is waiting, until the result starts its next turn", async () => {
+    const { orchestrator, codex, store, agent, userChat } = await setup()
+    const root = await userChat()
+    const child = await orchestrator.createChat(root, { message: "run the benchmarks" })
+    // Its own turn is still going, so it is running, not waiting.
+    expect(agent.getChatStatuses().get(root)).not.toBe("waiting_on_subagent")
+    expect(agent.getActiveStatuses().has(root)).toBe(true)
+
+    codex.finish(root, "Benchmarks are running.")
+    await until(() => agent.getChatStatuses().get(root) === "waiting_on_subagent", "the parent to wait")
+    // What the user is shown, in both places a status is read from.
+    const sidebar = deriveSidebarData(store.state, agent.getChatStatuses())
+    expect(sidebar.projectGroups[0]!.chats.find((chat) => chat.chatId === root)?.status).toBe("waiting_on_subagent")
+    const snapshot = deriveChatSnapshot(store.state, agent.getChatStatuses(), new Set(), root, () => ({ messages: [], startIndex: 0, readAnchor: null }))
+    expect(snapshot?.runtime.status).toBe("waiting_on_subagent")
+
+    codex.finish(child.chatId, "p95 is 40ms.")
+    await until(() => codex.turnsFor(root).length === 2, "the parent to wake")
+    expect(agent.getChatStatuses().get(root)).not.toBe("waiting_on_subagent")
+    codex.finish(root, "p95 is 40ms, which is fine.")
+    await until(() => !agent.getChatStatuses().has(root), "the parent to come to rest")
+  })
+
+  test("the wait reaches every chat above the one still going", async () => {
+    const { orchestrator, codex, agent, userChat } = await setup()
+    const root = await userChat()
+    const child = await orchestrator.createChat(root, { message: "coordinate" })
+    const grandchild = await orchestrator.createChat(child.chatId, { message: "do the legwork" })
+    codex.finish(root, "Handed off.")
+    codex.finish(child.chatId, "Handed off.")
+    // The middle chat's turn ended, which it reports. The top one reads that
+    // and is waiting again.
+    await until(() => codex.turnsFor(root).length === 2, "the interim report's turn")
+    codex.finish(root, "Noted.")
+    await until(() => agent.getChatStatuses().get(root) === "waiting_on_subagent" && agent.getChatStatuses().get(child.chatId) === "waiting_on_subagent", "both to wait")
+    // The one doing the work is running, and waits on nothing.
+    expect(agent.getChatStatuses().get(grandchild.chatId)).not.toBe("waiting_on_subagent")
+
+    codex.finish(grandchild.chatId, "legwork done")
+    await until(() => codex.turnsFor(child.chatId).length === 2, "the middle chat to wake")
+    // The middle chat is working again. The top one still waits on it.
+    expect(agent.getChatStatuses().get(root)).toBe("waiting_on_subagent")
+    codex.finish(child.chatId, "All of it is done.")
+    await until(() => codex.turnsFor(root).length === 3, "the top chat to wake")
+    codex.finish(root, "Done.")
+    await until(() => agent.getChatStatuses().size === 0, "everything to come to rest")
+  })
+
+  test("a sub-chat that fails or is stopped ends the wait", async () => {
+    const { orchestrator, codex, agent, userChat } = await setup()
+    const root = await userChat()
+    const failing = await orchestrator.createChat(root, { message: "deploy" })
+    const stopped = await orchestrator.createChat(root, { message: "watch the deploy" })
+    codex.finish(root, "Deploying.")
+    await until(() => agent.getChatStatuses().get(root) === "waiting_on_subagent", "the parent to wait")
+
+    codex.fail(failing.chatId, "credentials expired")
+    await until(() => codex.turnsFor(root).length === 2, "the failure to wake the parent")
+    codex.finish(root, "The deploy failed.")
+    // One sub-chat is still going, so the parent is not done yet.
+    await until(() => agent.getChatStatuses().get(root) === "waiting_on_subagent", "the parent to wait again")
+
+    await agent.stopBackgroundTask(root, `chat:${stopped.chatId}`)
+    await until(() => codex.turnsFor(root).length === 3, "the stop to wake the parent")
+    codex.finish(root, "Stopped the watch.")
+    await until(() => !agent.getChatStatuses().has(root), "the parent to come to rest")
+  })
+
+  test("stopping the waiting chat stops what it waits on", async () => {
+    const { orchestrator, codex, agent, userChat } = await setup()
+    const root = await userChat()
+    const child = await orchestrator.createChat(root, { message: "long job" })
+    codex.finish(root, "Started.")
+    await until(() => agent.getChatStatuses().get(root) === "waiting_on_subagent", "the parent to wait")
+
+    await agent.cancel(root)
+    await until(() => !codex.turnsFor(child.chatId)[0]!.open, "the sub-chat to stop")
+    await until(() => agent.getChatStatuses().size === 0, "everything to come to rest")
+    expect(codex.turnsFor(root)).toHaveLength(1)
+  })
+
+  test("an agent sees a chat waiting on its provider's background task, and a wait holds for it", async () => {
+    const { orchestrator, codex, agent, userChat } = await setup()
+    const root = await userChat()
+    const other = await userChat("run the tests")
+    codex.finish(other, "The tests are running in the background.")
+    await until(() => orchestrator.readChat({ chatId: other }).chat.status === "completed")
+
+    // A task that outlived the turn, as Claude's do.
+    agent.applySubagentActivity(other, { kind: "started", id: "sh1", type: "shell", label: "bun test" })
+    expect(orchestrator.readChat({ chatId: other }).chat.status).toBe("waiting_on_subagent")
+    expect(orchestrator.listChats({ status: "waiting_on_subagent" }).chats.map((chat) => chat.chatId)).toEqual([other])
+    expect(agent.getChatStatuses().get(other)).toBe("waiting_on_subagent")
+
+    let returned = false
+    const waiting = orchestrator.waitForChats(root, { chatIds: [other], timeoutMs: 5_000 }).then((result) => {
+      returned = true
+      return result
+    })
+    await Bun.sleep(30)
+    expect(returned).toBe(false)
+
+    agent.applySubagentActivity(other, { kind: "stopped", id: "sh1", failed: false })
+    expect(await waiting).toMatchObject({ timedOut: false, chats: [{ chatId: other, status: "completed" }] })
+    expect(agent.getChatStatuses().has(other)).toBe(false)
+  })
+
+  test("a sub-chat waiting on a background task keeps the chats above it waiting", async () => {
+    const { orchestrator, codex, agent, pushes, userChat } = await setup()
+    const root = await userChat()
+    const child = await orchestrator.createChat(root, { message: "build it" })
+    codex.finish(child.chatId, "Building.")
+    codex.finish(root, "Asked for a build.")
+    await until(() => codex.turnsFor(root).length === 2, "the report's turn")
+    codex.finish(root, "The build is under way.")
+    await until(() => agent.getChatStatuses().size === 0, "everything to come to rest")
+
+    pushes.length = 0
+    agent.applySubagentActivity(child.chatId, { kind: "started", id: "sh1", type: "shell", label: "bun run build" })
+    expect(agent.getChatStatuses().get(child.chatId)).toBe("waiting_on_subagent")
+    expect(agent.getChatStatuses().get(root)).toBe("waiting_on_subagent")
+    // No turn started to say so, and the parent's own page has to hear of it.
+    expect(pushes).toContainEqual({ sidebar: true, chatIds: [root] })
+    // To an agent the two are told apart: one it can act on, one it cannot.
+    expect(orchestrator.readChat({ chatId: child.chatId }).chat.status).toBe("waiting_on_subagent")
+    expect(orchestrator.readChat({ chatId: root }).chat.status).toBe("waiting_on_subchats")
+
+    agent.applySubagentActivity(child.chatId, { kind: "stopped", id: "sh1", failed: true })
+    expect(agent.getChatStatuses().size).toBe(0)
+  })
+
+  test("a monitor shows as a wait, but holds up nothing an agent waits for", async () => {
+    const { orchestrator, codex, agent, userChat } = await setup()
+    const chat = await userChat("watch CI")
+    codex.finish(chat, "Watching the run.")
+    await until(() => orchestrator.readChat({ chatId: chat }).chat.status === "completed")
+
+    agent.applySubagentActivity(chat, { kind: "started", id: "m1", type: "monitor", label: "Watch CI" })
+    expect(agent.getChatStatuses().get(chat)).toBe("waiting_on_subagent")
+    // It can run as long as the session does, so a wait on it would not return.
+    expect(orchestrator.readChat({ chatId: chat }).chat.status).toBe("completed")
+  })
+
+  test("a failed turn shows as failed, even with work still going under it", async () => {
+    const { orchestrator, codex, store, agent, userChat } = await setup()
+    const root = await userChat()
+    await orchestrator.createChat(root, { message: "long job" })
+    codex.fail(root, "rate limited")
+    await until(() => agent.getChatStatuses().get(root) === "waiting_on_subagent", "the parent's turn to end")
+    const sidebar = deriveSidebarData(store.state, agent.getChatStatuses())
+    expect(sidebar.projectGroups[0]!.chats.find((chat) => chat.chatId === root)?.status).toBe("failed")
+  })
+
+  test("a sub-chat's turn starting pushes the sidebar and every chat above it", async () => {
+    const { orchestrator, codex, agent, pushes, userChat } = await setup()
+    const root = await userChat()
+    const child = await orchestrator.createChat(root, { message: "coordinate" })
+    const grandchild = await orchestrator.createChat(child.chatId, { message: "legwork" })
+    for (const chatId of [grandchild.chatId, child.chatId, root]) codex.finish(chatId, "ok")
+    // Each report wakes the chat above it once.
+    await until(() => codex.turnsFor(child.chatId).length === 2)
+    codex.finish(child.chatId, "ok")
+    await until(() => codex.turnsFor(root).length === 2)
+    codex.finish(root, "ok")
+    await until(() => agent.getChatStatuses().size === 0, "everything to come to rest")
+
+    // The user writes to the bottom chat, and both chats above it start waiting.
+    pushes.length = 0
+    await agent.send({ type: "chat.send", chatId: grandchild.chatId, provider: "codex", content: "one more thing" })
+    await until(() => codex.turnsFor(grandchild.chatId).length === 2)
+    expect(agent.getChatStatuses().get(root)).toBe("waiting_on_subagent")
+    expect(pushes).toContainEqual({ sidebar: true, chatIds: [child.chatId, root] })
   })
 })
 
@@ -661,6 +854,622 @@ describe("schedules", () => {
         createdByChatId: root,
       })
     }
+  })
+})
+
+describe("reporting when a turn ends", () => {
+  test("a parent at rest is woken twice: by the reply so far, then by the last one", async () => {
+    const { orchestrator, codex, store, agent, userChat } = await setup()
+    const root = await userChat()
+    const child = await orchestrator.createChat(root, { message: "coordinate" })
+    const grandchild = await orchestrator.createChat(child.chatId, { message: "do the legwork" })
+    codex.finish(root, "Handed off.")
+    codex.finish(child.chatId, "Legwork is under way.")
+
+    await until(() => codex.turnsFor(root).length === 2, "the interim report's turn")
+    expect(codex.turn(root).content).toContain("Not its last word")
+    expect(codex.turn(root).content).toContain("Legwork is under way.")
+    codex.finish(root, "Noted.")
+    // Both still read as waiting to the user: work is going under them.
+    await until(() => agent.getChatStatuses().get(root) === "waiting_on_subagent", "the top chat to wait again")
+    expect(agent.getChatStatuses().get(child.chatId)).toBe("waiting_on_subagent")
+    expect(codex.turnsFor(root)).toHaveLength(2)
+
+    codex.finish(grandchild.chatId, "legwork done")
+    await until(() => codex.turnsFor(child.chatId).length === 2, "the middle chat to wake")
+    codex.finish(child.chatId, "All of it is done.")
+    await until(() => codex.turnsFor(root).length === 3, "the last report's turn")
+    expect(codex.turn(root).content).toContain("Sub-chat completed:")
+    expect(codex.turn(root).content).toContain("All of it is done.")
+    expect(codex.turn(root).content).not.toContain("Not its last word")
+    codex.finish(root, "Done.")
+    await until(() => agent.getChatStatuses().size === 0, "everything to come to rest")
+    expect(codex.turnsFor(root)).toHaveLength(3)
+    expect(store.getChat(child.chatId)).not.toHaveProperty("reportOwed")
+  })
+
+  test("a sub-chat with nothing going under it reports once, as finished", async () => {
+    const { orchestrator, codex, store, userChat } = await setup({ closeOutGraceMs: 20 })
+    const root = await userChat()
+    const child = await orchestrator.createChat(root, { message: "audit the parser" })
+    codex.finish(child.chatId, "Found two bugs.")
+    await until(() => store.getQueuedMessages(root).length === 1, "the report")
+    expect(store.getQueuedMessages(root)[0]!.content).toContain("Sub-chat completed:")
+    expect(store.getQueuedMessages(root)[0]!.content).not.toContain("Not its last word")
+    expect(store.getChat(child.chatId)).not.toHaveProperty("reportOwed")
+    await Bun.sleep(60)
+    expect(store.getQueuedMessages(root)).toHaveLength(1)
+    expect(store.getQueuedMessages(root)[0]).toMatchObject({ source: { chatIds: [child.chatId] } })
+  })
+
+  test("a turn that ends with the provider's background work going is reported, and so is the turn that work wakes", async () => {
+    const { orchestrator, codex, store, agent, userChat } = await setup({ closeOutGraceMs: 300 })
+    const root = await userChat()
+    const child = await orchestrator.createChat(root, { message: "run the tests" })
+    codex.finish(root, "Asked for a test run.")
+    // A task that outlives the turn, as Claude's do.
+    agent.applySubagentActivity(child.chatId, { kind: "started", id: "sh1", type: "shell", label: "bun test" })
+    codex.finish(child.chatId, "The tests are running in the background.")
+
+    await until(() => codex.turnsFor(root).length === 2, "the interim report's turn")
+    expect(codex.turn(root).content).toContain("Sub-chat waiting_on_subagent:")
+    expect(codex.turn(root).content).toContain("background work of its own")
+    expect(codex.turn(root).content).toContain("The tests are running in the background.")
+    codex.finish(root, "Noted.")
+    await until(() => agent.getChatStatuses().get(root) === "waiting_on_subagent", "the parent to wait")
+
+    // The task ends. That is not a turn ending, so nothing goes up yet: the
+    // provider's answer to it is the turn to report.
+    agent.applySubagentActivity(child.chatId, { kind: "stopped", id: "sh1", failed: false })
+    await Bun.sleep(40)
+    expect(codex.turnsFor(root)).toHaveLength(2)
+    expect(store.getChat(child.chatId)?.reportOwed).toBe(true)
+    await agent.send({ type: "chat.send", chatId: child.chatId, provider: "codex", content: "(the provider answering its finished task)" })
+    await until(() => codex.turnsFor(child.chatId).length === 2, "the woken turn")
+    codex.finish(child.chatId, "All 412 tests pass.")
+
+    await until(() => codex.turnsFor(root).length === 3, "the last report's turn")
+    expect(codex.turn(root).content).toContain("Sub-chat completed:")
+    expect(codex.turn(root).content).toContain("All 412 tests pass.")
+    expect(store.getChat(child.chatId)).not.toHaveProperty("reportOwed")
+    // The clock the task's end started has nothing left to say.
+    codex.finish(root, "Good.")
+    await Bun.sleep(400)
+    expect(codex.turnsFor(root)).toHaveLength(3)
+    expect(store.getQueuedMessages(root)).toHaveLength(0)
+  })
+
+  test("background work that ends without waking the sub-chat still closes the account with its parent", async () => {
+    const { orchestrator, codex, store, agent, userChat } = await setup({ closeOutGraceMs: 40 })
+    const root = await userChat()
+    const child = await orchestrator.createChat(root, { message: "run the tests" })
+    agent.applySubagentActivity(child.chatId, { kind: "started", id: "sh1", type: "shell", label: "bun test" })
+    codex.finish(child.chatId, "The tests are running in the background.")
+    await until(() => store.getQueuedMessages(root).length === 1, "the interim report")
+    expect(store.getQueuedMessages(root)[0]!.content).toContain("Not its last word")
+
+    agent.applySubagentActivity(child.chatId, { kind: "stopped", id: "sh1", failed: true })
+    await until(() => !store.getChat(child.chatId)?.reportOwed, "the account to close")
+    await until(() => store.getQueuedMessages(root)[0]?.content.includes("Sub-chat completed:") === true, "the closing report")
+    expect(store.getQueuedMessages(root)).toHaveLength(1)
+    expect(store.getQueuedMessages(root)[0]!.content).not.toContain("Not its last word")
+    codex.finish(root, "ok")
+    await until(() => codex.turnsFor(root).length === 2)
+    codex.finish(root, "noted")
+    await until(() => orchestrator.readChat({ chatId: root }).chat.status === "completed", "the parent to come to rest")
+  })
+
+  test("a sub-chat that times its own next step reports the turn the schedule starts", async () => {
+    const { orchestrator, codex, store, userChat, setClock } = await setup()
+    const root = await userChat()
+    const other = await userChat("something else")
+    const child = await orchestrator.createChat(root, { message: "watch the deploy" })
+    setClock(1_000_000)
+    const schedule = await orchestrator.setSchedule(child.chatId, { message: "check the deploy", inMinutes: 10, name: "Deploy check" })
+    expect(store.getSchedule(schedule.scheduleId)).toMatchObject({ reportsToParent: true })
+    // Not for a chat nobody is waiting to hear from, nor for a message to another chat.
+    expect(store.getSchedule((await orchestrator.setSchedule(other, { message: "ping", inMinutes: 10 })).scheduleId)).not.toHaveProperty("reportsToParent")
+    expect(store.getSchedule((await orchestrator.setSchedule(child.chatId, { chatId: other, message: "ping", inMinutes: 10 })).scheduleId)).not.toHaveProperty("reportsToParent")
+
+    codex.finish(child.chatId, "I will look again in ten minutes.")
+    await until(() => store.getQueuedMessages(root).length === 1, "the first report")
+    const first = store.getQueuedMessages(root)[0]!.content
+    expect(first).toContain("Sub-chat completed:")
+    expect(first).toContain('It set itself the schedule "Deploy check"')
+    expect(first).toContain("I will look again in ten minutes.")
+    // A timer is not work in flight: nothing reads as waiting on it.
+    expect(store.getChat(child.chatId)).not.toHaveProperty("reportOwed")
+    codex.finish(root, "ok")
+    await until(() => codex.turnsFor(root).length === 2)
+    codex.finish(root, "Waiting for the check.")
+    await until(() => orchestrator.readChat({ chatId: root }).chat.status === "completed", "the parent to come to rest")
+
+    setClock(1_000_000 + 10 * 60_000)
+    await orchestrator.runDueSchedules()
+    await until(() => codex.turnsFor(child.chatId).length === 2, "the scheduled turn")
+    expect(store.getChat(child.chatId)?.reportOwed).toBe(true)
+    codex.finish(child.chatId, "The deploy is live.")
+    await until(() => codex.turnsFor(root).length === 3, "the second report's turn")
+    expect(codex.turn(root).content).toContain("The deploy is live.")
+    // The schedule has run out, so the report no longer promises another.
+    expect(codex.turn(root).content).not.toContain("It set itself the schedule")
+  })
+
+  test("a failure or a stop between the two reports still reaches the parent", async () => {
+    const { orchestrator, codex, store, agent, userChat } = await setup({ closeOutGraceMs: 40 })
+    const root = await userChat()
+    const first = await orchestrator.createChat(root, { message: "coordinate" })
+    const firstLeaf = await orchestrator.createChat(first.chatId, { message: "legwork" })
+    const second = await orchestrator.createChat(root, { message: "coordinate too" })
+    await orchestrator.createChat(second.chatId, { message: "legwork too" })
+    codex.finish(first.chatId, "Handed off.")
+    codex.finish(second.chatId, "Handed off as well.")
+    await until(() => {
+      const source = store.getQueuedMessages(root)[0]?.source
+      return source?.kind === "report" && source.chatIds.length === 2
+    }, "both interim reports")
+
+    // One fails in the turn its sub-chat wakes.
+    codex.finish(firstLeaf.chatId, "legwork done")
+    await until(() => codex.turnsFor(first.chatId).length === 2, "the first to wake")
+    codex.fail(first.chatId, "rate limited")
+    await until(() => store.getQueuedMessages(root)[0]?.content.includes("Sub-chat failed:") === true, "the failure to be reported")
+    expect(store.getQueuedMessages(root)[0]!.content).toContain("rate limited")
+    expect(store.getChat(first.chatId)).not.toHaveProperty("reportOwed")
+
+    // The other is stopped by the user while it waits. Its sub-chat stops
+    // with it, and the parent hears it is no longer waiting on anything.
+    await agent.cancel(second.chatId)
+    await until(() => !store.getChat(second.chatId)?.reportOwed, "the stopped chat's account to close")
+    await until(() => {
+      const report = store.getQueuedMessages(root)[0]
+      return report !== undefined && !report.content.includes("Not its last word")
+    }, "the closing report")
+    expect(store.getQueuedMessages(root)).toHaveLength(1)
+    expect(store.getQueuedMessages(root)[0]).toMatchObject({ source: { chatIds: [first.chatId, second.chatId] } })
+  })
+
+  test("what the parent has heard, and a schedule that reports back, survive a restart", async () => {
+    const { orchestrator, codex, store, userChat } = await setup()
+    const root = await userChat()
+    const child = await orchestrator.createChat(root, { message: "coordinate" })
+    await orchestrator.createChat(child.chatId, { message: "legwork" })
+    const schedule = await orchestrator.setSchedule(child.chatId, { message: "check", everyMinutes: 30 })
+    codex.finish(child.chatId, "Handed off.")
+    await until(() => store.getQueuedMessages(root).length === 1, "the interim report")
+    const through = store.getChat(child.chatId)!.lastTurnEndedAt
+
+    for (const compacted of [false, true]) {
+      if (compacted) await store.compact()
+      const reopened = new EventStore(store.dataDir)
+      await reopened.initialize()
+      expect(reopened.getChat(child.chatId)).toMatchObject({ reportOwed: true, reportedThrough: through })
+      expect(reopened.getSchedule(schedule.scheduleId)).toMatchObject({ reportsToParent: true })
+    }
+  })
+
+  test("stopping the parent between the two reports ends them", async () => {
+    const { orchestrator, codex, store, agent, userChat } = await setup({ closeOutGraceMs: 20 })
+    const root = await userChat()
+    const child = await orchestrator.createChat(root, { message: "coordinate" })
+    const grandchild = await orchestrator.createChat(child.chatId, { message: "legwork" })
+    codex.finish(root, "Handed off.")
+    codex.finish(child.chatId, "Handed off too.")
+    await until(() => codex.turnsFor(root).length === 2, "the interim report's turn")
+
+    await agent.cancel(root)
+    await until(() => !codex.turnsFor(grandchild.chatId)[0]!.open, "the chats under it to stop")
+    await Bun.sleep(80)
+    expect(store.getChat(child.chatId)).not.toHaveProperty("reportOwed")
+    expect(store.getQueuedMessages(root)).toHaveLength(0)
+    expect(codex.turnsFor(root)).toHaveLength(2)
+  })
+
+  test("wait_for_chats returns when the turn ends, once, and holds for the next turn after that", async () => {
+    const { orchestrator, codex, store, userChat } = await setup()
+    const root = await userChat()
+    const child = await orchestrator.createChat(root, { message: "coordinate" })
+    const grandchild = await orchestrator.createChat(child.chatId, { message: "legwork" })
+
+    const first = orchestrator.waitForChats(root, { chatIds: [child.chatId], timeoutMs: 5_000 })
+    codex.finish(child.chatId, "Handed off.")
+    expect(await first).toMatchObject({ timedOut: false, chats: [{ chatId: child.chatId, status: "waiting_on_subchats", finalMessage: "Handed off." }] })
+    // The wait handed that reply over, so it does not also come as a report.
+    await Bun.sleep(30)
+    expect(store.getQueuedMessages(root)).toHaveLength(0)
+    expect(store.getChat(child.chatId)).toMatchObject({ reportOwed: true, reportedThrough: store.getChat(child.chatId)!.lastTurnEndedAt })
+
+    // Asked again with nothing new, it holds, and a loop of waits cannot spin.
+    let returned = false
+    const second = orchestrator.waitForChats(root, { chatIds: [child.chatId], timeoutMs: 5_000 }).then((result) => {
+      returned = true
+      return result
+    })
+    await Bun.sleep(40)
+    expect(returned).toBe(false)
+
+    codex.finish(grandchild.chatId, "legwork done")
+    await until(() => codex.turnsFor(child.chatId).length === 2, "the middle chat to wake")
+    expect(returned).toBe(false)
+    codex.finish(child.chatId, "All of it is done.")
+    expect(await second).toMatchObject({ timedOut: false, chats: [{ status: "completed", finalMessage: "All of it is done." }] })
+    await Bun.sleep(30)
+    expect(store.getQueuedMessages(root)).toHaveLength(0)
+    expect(store.getChat(child.chatId)).not.toHaveProperty("reportOwed")
+  })
+
+  test("a wait takes an interim report that was already queued, and one on a chat that is not the caller's returns at its turn end too", async () => {
+    const { orchestrator, codex, store, userChat } = await setup()
+    const root = await userChat()
+    const stranger = await userChat("something else")
+    const child = await orchestrator.createChat(root, { message: "coordinate" })
+    await orchestrator.createChat(child.chatId, { message: "legwork" })
+
+    const watching = orchestrator.waitForChats(stranger, { chatIds: [child.chatId], timeoutMs: 5_000 })
+    codex.finish(child.chatId, "Handed off.")
+    expect(await watching).toMatchObject({ chats: [{ status: "waiting_on_subchats", finalMessage: "Handed off." }] })
+    // Nothing of the parent's was taken by a chat that is not the parent.
+    await until(() => store.getQueuedMessages(root).length === 1, "the interim report")
+
+    expect(await orchestrator.waitForChats(root, { chatIds: [child.chatId], timeoutMs: 5_000 })).toMatchObject({
+      timedOut: false,
+      chats: [{ status: "waiting_on_subchats", finalMessage: "Handed off." }],
+    })
+    expect(store.getQueuedMessages(root)).toHaveLength(0)
+    expect(store.getChat(child.chatId)?.reportOwed).toBe(true)
+  })
+
+  test("an adopted chat that hands work off holds its adopter until its last report", async () => {
+    const { orchestrator, codex, store, agent, userChat } = await setup()
+    const root = await userChat()
+    const other = await userChat("something else")
+    codex.finish(other, "done")
+    await until(() => orchestrator.readChat({ chatId: other }).chat.status === "completed")
+    await orchestrator.sendMessage(root, { chatId: other, message: "ship it", adopt: true })
+    const helper = await orchestrator.createChat(other, { message: "run the release checks" })
+    codex.finish(root, "Asked.")
+    codex.finish(other, "Checks are running.")
+
+    await until(() => codex.turnsFor(root).length === 2, "the interim report's turn")
+    expect(codex.turn(root).content).toContain("Not its last word")
+    codex.finish(root, "Noted.")
+    await until(() => agent.getChatStatuses().get(root) === "waiting_on_subagent", "the adopter to wait")
+    expect(store.getChat(other)?.reportOwed).toBe(true)
+
+    codex.finish(helper.chatId, "checks pass")
+    await until(() => codex.turnsFor(other).length === 3, "the adopted chat to wake")
+    codex.finish(other, "Shipped.")
+    await until(() => codex.turnsFor(root).length === 3, "the last report's turn")
+    expect(codex.turn(root).content).toContain("Shipped.")
+    codex.finish(root, "Done.")
+    await until(() => agent.getChatStatuses().size === 0, "everything to come to rest")
+  })
+})
+
+describe("adopting", () => {
+  /** The chats a project's sidebar lists, as the server sends them. */
+  function listed(store: EventStore, agent: AgentCoordinator) {
+    const group = deriveSidebarData(store.state, agent.getChatStatuses()).projectGroups[0]!
+    return [...group.previewChats, ...group.olderChats].map((chat) => chat.chatId)
+  }
+
+  test("a message with adopt makes the sender the parent, and the reply comes back to it", async () => {
+    const { orchestrator, codex, store, agent, userChat, prompts } = await setup()
+    const root = await userChat()
+    const other = await userChat("something else")
+
+    const sent = await orchestrator.sendMessage(root, { chatId: other, message: "rebase onto main", adopt: true })
+    expect(sent).toMatchObject({ parentChatId: root, adopted: true, started: false })
+    // The user started it, and that is still what the record says.
+    expect(store.getChat(other)).toMatchObject({ parentChatId: root, adopted: true, reportOwed: true })
+    expect(store.getChat(other)?.createdByChatId).toBeUndefined()
+    // Listed under the adopter everywhere a sub-chat is.
+    expect(orchestrator.getChildActivities(root)).toMatchObject([{ type: "chat", chatId: other, status: "running" }])
+    expect(orchestrator.listChats({ parentChatId: root }).chats.map((chat) => chat.chatId)).toEqual([other])
+    expect(orchestrator.readChat({ chatId: root }).subchats).toMatchObject([{ chatId: other, adopted: true }])
+
+    codex.finish(other, "done with the user's work")
+    await until(() => codex.turnsFor(other).length === 2, "the adopter's message to start")
+    expect(codex.turn(other).content).toContain("It adopted this chat, and your final reply is sent back to it")
+    codex.finish(other, "rebased")
+    await until(() => store.getQueuedMessages(root).length === 1, "the report")
+    expect(store.getQueuedMessages(root)[0]).toMatchObject({ source: { kind: "report", chatIds: [other] } })
+    expect(store.getQueuedMessages(root)[0]!.content).toContain("rebased")
+    expect(store.getChat(other)?.reportOwed).toBeUndefined()
+
+    // It stays adopted, so the next message earns a report with no flag.
+    await orchestrator.sendMessage(root, { chatId: other, message: "now push" })
+    expect(store.getChat(other)).toMatchObject({ parentChatId: root, adopted: true, reportOwed: true })
+    expect(prompts(other)).toHaveLength(3)
+
+    // The snapshots carry the link and where it came from.
+    const row = deriveSidebarData(store.state, agent.getChatStatuses()).projectGroups[0]!.chats.find((chat) => chat.chatId === other)
+    expect(row).toMatchObject({ parentChatId: root, adopted: true })
+    const snapshot = deriveChatSnapshot(store.state, agent.getChatStatuses(), new Set(), other, () => ({ messages: [], startIndex: 0, readAnchor: null }))
+    expect(snapshot?.runtime).toMatchObject({ parentChatId: root, adopted: true })
+  })
+
+  test("the push names the chat, its new parent and the one it left", async () => {
+    const { orchestrator, pushes, userChat } = await setup()
+    const root = await userChat()
+    const other = await userChat("something else")
+    const child = await orchestrator.createChat(root, { message: "work" })
+
+    pushes.length = 0
+    await orchestrator.sendMessage(root, { chatId: other, message: "fyi" })
+    expect(pushes).toEqual([{ sidebar: true, chatIds: [other] }])
+
+    pushes.length = 0
+    await orchestrator.sendMessage(other, { chatId: child.chatId, message: "report to me", adopt: true })
+    expect(pushes).toContainEqual({ sidebar: true, chatIds: [child.chatId, other, root] })
+  })
+
+  test("without the flag nothing is adopted and nothing is owed", async () => {
+    const { orchestrator, codex, store, userChat } = await setup()
+    const root = await userChat()
+    const other = await userChat("something else")
+    for (const adopt of [undefined, false]) {
+      const sent = await orchestrator.sendMessage(root, { chatId: other, message: "fyi", adopt })
+      expect(sent.parentChatId).toBeUndefined()
+      expect(sent.adopted).toBeUndefined()
+    }
+    expect(store.getChat(other)).not.toHaveProperty("parentChatId")
+    expect(store.getChat(other)).not.toHaveProperty("adopted")
+    expect(store.getChat(other)).not.toHaveProperty("reportOwed")
+    expect(orchestrator.getChildActivities(root)).toEqual([])
+
+    // The user's turn, then one for each message.
+    for (const turns of [1, 2, 3]) {
+      await until(() => codex.turnsFor(other).length === turns, `turn ${turns}`)
+      codex.finish(other, `reply ${turns}`)
+    }
+    await until(() => orchestrator.readChat({ chatId: other }).chat.status === "completed")
+    await Bun.sleep(30)
+    expect(store.getQueuedMessages(root)).toHaveLength(0)
+  })
+
+  test("an adopted chat stays in the sidebar, and one born a sub-chat stays out until it is adopted", async () => {
+    const { orchestrator, store, agent, userChat } = await setup()
+    const root = await userChat()
+    const other = await userChat("something else")
+    const child = await orchestrator.createChat(root, { message: "work" })
+    expect(listed(store, agent).sort()).toEqual([other, root].sort())
+
+    await orchestrator.sendMessage(root, { chatId: other, message: "rebase", adopt: true })
+    expect(listed(store, agent).sort()).toEqual([other, root].sort())
+
+    // Born a sub-chat, then adopted by another chat: its parent now came from
+    // adoption, so it is listed.
+    await orchestrator.sendMessage(other, { chatId: child.chatId, message: "report to me", adopt: true })
+    expect(store.getChat(child.chatId)).toMatchObject({ parentChatId: other, adopted: true, createdByChatId: root })
+    expect(listed(store, agent).sort()).toEqual([child.chatId, other, root].sort())
+  })
+
+  test("the link and where it came from survive a restart", async () => {
+    const { orchestrator, store, userChat } = await setup()
+    const root = await userChat()
+    const other = await userChat("something else")
+    const child = await orchestrator.createChat(root, { message: "work" })
+    await orchestrator.sendMessage(root, { chatId: other, message: "rebase", adopt: true })
+
+    for (const compacted of [false, true]) {
+      if (compacted) await store.compact()
+      const reopened = new EventStore(store.dataDir)
+      await reopened.initialize()
+      expect(reopened.getChat(other)).toMatchObject({ parentChatId: root, adopted: true, reportOwed: true })
+      // A chat an old log made a sub-chat of is one still, with no mark.
+      expect(reopened.getChat(child.chatId)).toMatchObject({ parentChatId: root })
+      expect(reopened.getChat(child.chatId)).not.toHaveProperty("adopted")
+    }
+  })
+
+  test("a sub-chat adopted away tells the parent that was waiting for it, and reports to the new one", async () => {
+    const { orchestrator, codex, store, userChat } = await setup()
+    const root = await userChat()
+    const other = await userChat("something else")
+    await store.renameChat(other, "Release train")
+    const child = await orchestrator.createChat(root, { message: "audit the parser", title: "Parser audit" })
+    codex.finish(root, "Handed off.")
+    await until(() => orchestrator.readChat({ chatId: root }).chat.status === "waiting_on_subchats", "the old parent to wait")
+
+    await orchestrator.sendMessage(other, { chatId: child.chatId, message: "report to me instead", adopt: true })
+    expect(store.getChat(child.chatId)).toMatchObject({ parentChatId: other, adopted: true, reportOwed: true })
+    // The old parent is woken with the news, not left waiting.
+    await until(() => codex.turnsFor(root).length === 2, "the old parent to be told")
+    expect(codex.turn(root).content).toContain("Sub-chat adopted:")
+    expect(codex.turn(root).content).toContain(`(chat id ${child.chatId})`)
+    expect(codex.turn(root).content).toContain("Release train")
+    expect(orchestrator.getChildActivities(root)).toEqual([])
+    codex.finish(root, "Noted.")
+    await until(() => orchestrator.readChat({ chatId: root }).chat.status === "completed", "the old parent to come to rest")
+
+    codex.finish(child.chatId, "audit one")
+    await until(() => codex.turnsFor(child.chatId).length === 2)
+    codex.finish(child.chatId, "audit two")
+    await until(() => store.getQueuedMessages(other).length === 1, "the report to the new parent")
+    expect(store.getQueuedMessages(other)[0]!.content).toContain("audit two")
+    await Bun.sleep(30)
+    expect(codex.turnsFor(root)).toHaveLength(2)
+    expect(store.getQueuedMessages(root)).toHaveLength(0)
+  })
+
+  test("a parent owed nothing hears nothing when its sub-chat is adopted", async () => {
+    const { orchestrator, codex, store, userChat } = await setup()
+    const root = await userChat()
+    const other = await userChat("something else")
+    const child = await orchestrator.createChat(root, { message: "work" })
+    codex.finish(child.chatId, "done")
+    await until(() => store.getQueuedMessages(root).length === 1, "the report")
+
+    await orchestrator.sendMessage(other, { chatId: child.chatId, message: "more work", adopt: true })
+    await Bun.sleep(30)
+    expect(store.getQueuedMessages(root)).toHaveLength(1)
+    expect(store.getQueuedMessages(root)[0]!.content).not.toContain("Sub-chat adopted")
+  })
+
+  test("a chat cannot adopt itself or a chat above it, and adopting its own sub-chat changes nothing", async () => {
+    const { orchestrator, store, userChat } = await setup()
+    const root = await userChat()
+    const child = await orchestrator.createChat(root, { message: "coordinate" })
+    const grandchild = await orchestrator.createChat(child.chatId, { message: "legwork" })
+
+    await expect(orchestrator.sendMessage(root, { chatId: root, message: "hi", adopt: true })).rejects.toThrow("cannot message itself")
+    await expect(orchestrator.sendMessage(child.chatId, { chatId: root, message: "hi", adopt: true })).rejects.toThrow("loop")
+    await expect(orchestrator.sendMessage(grandchild.chatId, { chatId: root, message: "hi", adopt: true })).rejects.toThrow("loop")
+    await expect(orchestrator.sendMessage(grandchild.chatId, { chatId: child.chatId, message: "hi", adopt: true })).rejects.toThrow("loop")
+    expect(store.getChat(root)).not.toHaveProperty("parentChatId")
+    expect(store.getChat(child.chatId)).toMatchObject({ parentChatId: root })
+    expect(store.getQueuedMessages(root)).toHaveLength(0)
+
+    // Already its parent: the chat stays one it started.
+    await orchestrator.sendMessage(root, { chatId: child.chatId, message: "status?", adopt: true })
+    expect(store.getChat(child.chatId)).toMatchObject({ parentChatId: root })
+    expect(store.getChat(child.chatId)).not.toHaveProperty("adopted")
+
+    // A chat further down can be pulled up: no loop in that.
+    await orchestrator.sendMessage(root, { chatId: grandchild.chatId, message: "report to me", adopt: true })
+    expect(store.getChat(grandchild.chatId)).toMatchObject({ parentChatId: root, adopted: true })
+  })
+
+  test("a send that fails leaves the chat with the parent it had", async () => {
+    const { orchestrator, codex, store, userChat } = await setup()
+    const root = await userChat()
+    const other = await userChat("something else")
+    const child = await orchestrator.createChat(root, { message: "work" })
+    codex.finish(other, "done")
+    await until(() => orchestrator.readChat({ chatId: other }).chat.status === "completed")
+
+    // Refused before anything is written.
+    await expect(orchestrator.sendMessage(root, { chatId: other, message: "hi", adopt: true, provider: "nope" as never })).rejects.toThrow("Unknown provider")
+    expect(store.getChat(other)).not.toHaveProperty("parentChatId")
+
+    // Written, then taken back when the turn does not start.
+    const startTurn = codex.startTurn.bind(codex)
+    codex.startTurn = async () => { throw new Error("provider is down") }
+    await expect(orchestrator.sendMessage(root, { chatId: other, message: "hi", adopt: true })).rejects.toThrow("did not start")
+    expect(store.getChat(other)).not.toHaveProperty("parentChatId")
+    expect(store.getChat(other)).not.toHaveProperty("adopted")
+    expect(store.getChat(other)).not.toHaveProperty("reportOwed")
+
+    codex.startTurn = startTurn
+
+    // A sub-chat goes back to the parent that started it, as one it started.
+    codex.finish(child.chatId, "done")
+    await until(() => store.getQueuedMessages(root).length === 1, "the sub-chat's report")
+    codex.startTurn = async () => { throw new Error("provider is down") }
+    await expect(orchestrator.sendMessage(other, { chatId: child.chatId, message: "hi", adopt: true })).rejects.toThrow("did not start")
+    codex.startTurn = startTurn
+    expect(store.getChat(child.chatId)).toMatchObject({ parentChatId: root })
+    expect(store.getChat(child.chatId)).not.toHaveProperty("adopted")
+    expect(store.getChat(child.chatId)).not.toHaveProperty("reportOwed")
+    expect(store.getQueuedMessages(root)).toHaveLength(1)
+  })
+
+  test("stopping the adopter leaves an adopted chat running, and drops the report it owed", async () => {
+    const { orchestrator, codex, store, agent, userChat } = await setup()
+    const root = await userChat()
+    const other = await userChat("something else")
+    const child = await orchestrator.createChat(root, { message: "work" })
+    await orchestrator.sendMessage(root, { chatId: other, message: "rebase", adopt: true })
+
+    await agent.cancel(root)
+    await until(() => !codex.turnsFor(child.chatId)[0]!.open, "the started sub-chat to stop")
+    await until(() => !store.getChat(other)?.reportOwed, "the report to be dropped")
+    // The user's own turn in it is untouched, and the link stays.
+    expect(codex.turnsFor(other)[0]!.open).toBe(true)
+    expect(store.getChat(other)).toMatchObject({ parentChatId: root, adopted: true })
+    // Stopped means stopped: it is not waiting on the chat it adopted.
+    expect(orchestrator.readChat({ chatId: root }).chat.status).toBe("cancelled")
+    expect(agent.getChatStatuses().get(root)).not.toBe("waiting_on_subagent")
+
+    codex.finish(other, "done")
+    await until(() => codex.turnsFor(other).length === 2)
+    codex.finish(other, "rebased")
+    await until(() => orchestrator.readChat({ chatId: other }).chat.status === "completed")
+    await Bun.sleep(30)
+    expect(codex.turnsFor(root)).toHaveLength(1)
+    expect(store.getQueuedMessages(root)).toHaveLength(0)
+  })
+
+  test("an adopted chat holds its adopter only while it owes a report", async () => {
+    const { orchestrator, codex, store, agent, userChat } = await setup()
+    const root = await userChat()
+    const other = await userChat("something else")
+    await orchestrator.sendMessage(root, { chatId: other, message: "rebase", adopt: true })
+    codex.finish(root, "Asked for a rebase.")
+    await until(() => agent.getChatStatuses().get(root) === "waiting_on_subagent", "the adopter to wait")
+    expect(orchestrator.readChat({ chatId: root }).chat.status).toBe("waiting_on_subchats")
+
+    codex.finish(other, "done")
+    await until(() => codex.turnsFor(other).length === 2)
+    codex.finish(other, "rebased")
+    await until(() => codex.turnsFor(root).length === 2, "the report's turn")
+    codex.finish(root, "Thanks.")
+    await until(() => orchestrator.readChat({ chatId: root }).chat.status === "completed")
+
+    // The user goes back to work in the chat. That is not the adopter's wait.
+    await agent.send({ type: "chat.send", chatId: other, provider: "codex", content: "one more thing" })
+    await until(() => codex.turnsFor(other).length === 3, "the user's turn")
+    expect(orchestrator.readChat({ chatId: root }).chat.status).toBe("completed")
+    expect(agent.getChatStatuses().get(root)).not.toBe("waiting_on_subagent")
+    codex.finish(other, "sure")
+    await until(() => orchestrator.readChat({ chatId: other }).chat.status === "completed")
+    await Bun.sleep(30)
+    expect(codex.turnsFor(root)).toHaveLength(2)
+    expect(store.getQueuedMessages(root)).toHaveLength(0)
+  })
+
+  test("wait_for_chats takes an adopted chat's result, so it does not also arrive as a report", async () => {
+    const { orchestrator, codex, store, userChat } = await setup()
+    const root = await userChat()
+    const other = await userChat("something else")
+    codex.finish(other, "done")
+    await until(() => orchestrator.readChat({ chatId: other }).chat.status === "completed")
+    await orchestrator.sendMessage(root, { chatId: other, message: "rebase", adopt: true })
+
+    const waiting = orchestrator.waitForChats(root, { chatIds: [other], timeoutMs: 5_000 })
+    codex.finish(other, "rebased")
+    expect(await waiting).toMatchObject({ timedOut: false, chats: [{ chatId: other, finalMessage: "rebased" }] })
+    await Bun.sleep(30)
+    expect(store.getChat(other)?.reportOwed).toBeUndefined()
+    expect(store.getQueuedMessages(root)).toHaveLength(0)
+  })
+
+  test("an agent adopts through send_message, and other fields are still refused", async () => {
+    const { orchestrator, store, userChat } = await setup()
+    const root = await userChat()
+    const other = await userChat("something else")
+    const runtime = new KannaToolRuntime({
+      chatId: root,
+      cwd: "/tmp",
+      emit: async () => {},
+      requestInput: async () => ({}),
+      orchestration: orchestrator,
+    })
+    const refused = await runtime.execute("send_message", { chatId: other, message: "rebase", adopted: true })
+    expect(refused.isError).toBe(true)
+    expect(store.getChat(other)).not.toHaveProperty("parentChatId")
+
+    const sent = await runtime.execute("send_message", { chatId: other, message: "rebase", adopt: true })
+    expect(JSON.parse(sent.content[0]!.text)).toMatchObject({ chatId: other, parentChatId: root, adopted: true })
+    expect(store.getChat(other)).toMatchObject({ parentChatId: root, adopted: true, reportOwed: true })
+  })
+
+  test("a wait the old parent had open does not take the new parent's report", async () => {
+    const { orchestrator, codex, store, userChat } = await setup()
+    const root = await userChat()
+    const other = await userChat("something else")
+    const child = await orchestrator.createChat(root, { message: "work" })
+    const waiting = orchestrator.waitForChats(root, { chatIds: [child.chatId], timeoutMs: 5_000 })
+    await orchestrator.sendMessage(other, { chatId: child.chatId, message: "report to me", adopt: true })
+
+    codex.finish(child.chatId, "one")
+    await until(() => codex.turnsFor(child.chatId).length === 2)
+    codex.finish(child.chatId, "two")
+    // The old parent still gets what it was blocked on, straight from the wait.
+    expect(await waiting).toMatchObject({ chats: [{ chatId: child.chatId, finalMessage: "two" }] })
+    await until(() => store.getQueuedMessages(other).length === 1, "the report to the new parent")
+    expect(store.getQueuedMessages(other)[0]!.content).toContain("two")
   })
 })
 

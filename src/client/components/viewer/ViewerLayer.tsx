@@ -1,8 +1,9 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState, type Ref } from "react"
 import { PANE_CLOSE_MS, prefersReducedMotion } from "../../app/paneAnimation"
 import type { ChatViewerState } from "../../stores/rightSidebarStore"
-import { useChatViewer, useViewerStore, type ViewerItem } from "../../stores/viewerStore"
+import { isChatTrailItem, useChatViewer, useViewerStore, type ViewerItem } from "../../stores/viewerStore"
 import type { DiffViewerContext } from "../chat-ui/git/DiffViewer"
+import type { ChatPreviewContext } from "../../app/ChatPage/ChatPreview"
 import { OpenLocalLinkProvider, type OpenLocalLinkTarget } from "../messages/shared"
 import { cn } from "../../lib/utils"
 import { ViewerPlacementProvider, type ViewerPlacement } from "./ViewerSurface"
@@ -13,6 +14,11 @@ const DiffViewer = lazy(() => import("../chat-ui/git/DiffViewer").then((m) => ({
 const AttachmentViewer = lazy(() => import("./AttachmentViewer").then((m) => ({ default: m.AttachmentViewer })))
 const ChartFullView = lazy(() => import("../messages/ChartTool").then((m) => ({ default: m.ChartFullView })))
 const FileViewer = lazy(() => import("./FileViewer").then((m) => ({ default: m.FileViewer })))
+// Its parts are the chat page's own, already loaded there. Lazy all the same:
+// the export viewer mounts this layer too, and never shows a chat.
+const ChatPreview = lazy(() => import("../../app/ChatPage/ChatPreview").then((m) => ({ default: m.ChatPreview })))
+// React Flow comes with it, and only a page that can preview a chat shows one.
+const GraphViewer = lazy(() => import("../../app/ChatGraph/GraphViewer").then((m) => ({ default: m.GraphViewer })))
 
 /**
  * Whether the viewer has something to show on a page that knows this project
@@ -37,9 +43,12 @@ function showsOn(item: ViewerItem | null, projectId: string | null | undefined) 
  * (the export viewer) never opens a diff or a project file. `onOpenLocalLink`
  * handles a file link inside what's shown (a markdown preview's), as the
  * transcript's do. `placement` is given where the page has a pane for it.
+ * `chat` is what the page knows about talking to a chat; a page without it
+ * never previews one, and a chat clicked there is navigated to.
  */
-export function ViewerLayer({ diff, className, onOpenLocalLink, placement, presented, layerRef }: {
+export function ViewerLayer({ diff, chat, className, onOpenLocalLink, placement, presented, layerRef }: {
   diff?: DiffViewerContext
+  chat?: ChatPreviewContext
   className?: string
   onOpenLocalLink?: (target: OpenLocalLinkTarget) => void
   placement?: ViewerPlacement
@@ -52,7 +61,11 @@ export function ViewerLayer({ diff, className, onOpenLocalLink, placement, prese
   const exiting = presented?.exiting ?? false
   const close = useViewerStore((store) => store.close)
   const openCount = useViewerStore((store) => store.openCount)
-  if (!item || !showsOn(item, diff?.projectId)) return null
+  // Counted while mounted, shown or not: it is what tells `useOpenChat` that
+  // a chat clicked on this page has a previewer to open in.
+  const canShowChat = Boolean(chat)
+  useEffect(() => (canShowChat ? useViewerStore.getState().registerChatPreviewHost() : undefined), [canShowChat])
+  if (!item || !showsOn(item, diff?.projectId) || (isChatTrailItem(item) && !chat)) return null
   // In a pane, the pane closes around it. Over the chat it leaves the way it
   // came, faded and a touch small, quicker than it came.
   const overlayExit = exiting && !(placement && !placement.expanded)
@@ -85,6 +98,12 @@ export function ViewerLayer({ diff, className, onOpenLocalLink, placement, prese
             <FileViewer key={`${item.path}:${item.line ?? ""}`} projectId={item.projectId} path={item.path} line={item.line} context={diff} onClose={close} />
           ) : item.kind === "chart" ? (
             <ChartFullView payload={item.payload} onClose={close} />
+          ) : (item.kind === "graph" || (item.kind === "chat" && item.graph)) && chat ? (
+            // The graph, and a chat picked from it: one view for both, so the
+            // graph stays where it was under the chat and Back finds it there.
+            <GraphViewer item={item} context={chat} onClose={close} />
+          ) : item.kind === "chat" && chat ? (
+            <ChatPreview item={item} context={chat} onClose={close} />
           ) : null}
         </Suspense>
       </OpenLocalLinkProvider>

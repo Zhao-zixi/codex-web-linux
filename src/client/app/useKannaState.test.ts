@@ -109,6 +109,16 @@ describe("getNewestRemainingChatId", () => {
     expect(getNewestRemainingChatId(sidebarData.projectGroups, "chat-4")).toBeNull()
   })
 
+  test("lands on an adopted chat, and never on a sub-chat", () => {
+    const sidebarData = createSidebarData()
+    const [first, ...rest] = sidebarData.projectGroups[1]!.chats
+    sidebarData.projectGroups[1]!.chats = [first!, { ...first!, _id: "row-5", chatId: "chat-5", parentChatId: "chat-4" }, ...rest]
+    expect(getNewestRemainingChatId(sidebarData.projectGroups, "chat-4")).toBeNull()
+
+    sidebarData.projectGroups[1]!.chats[1] = { ...sidebarData.projectGroups[1]!.chats[1]!, adopted: true }
+    expect(getNewestRemainingChatId(sidebarData.projectGroups, "chat-4")).toBe("chat-5")
+  })
+
   test("returns null when the chat is not found", () => {
     const sidebarData = createSidebarData()
 

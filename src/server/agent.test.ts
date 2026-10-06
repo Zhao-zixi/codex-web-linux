@@ -2951,7 +2951,7 @@ function createFakeStore(options?: {
 
 describe("shared display tool lifecycle", () => {
   for (const provider of ["claude", "codex", "cursor", "pi"] as const) {
-    test(`${provider} displays charts and attachments through the shared host`, async () => {
+    test(`${provider} displays visualizations and attachments through the shared host`, async () => {
       const events = new AsyncEventQueue<any>()
       let host: import("./kanna-tools").KannaToolHost | undefined
       const capture = (args: { customTools?: import("./kanna-tools").KannaToolHost }) => { host = args.customTools }
@@ -2962,7 +2962,8 @@ describe("shared display tool lifecycle", () => {
           return { provider, stream: events, interrupt: async () => { events.close() }, close: () => { events.close() } }
         },
       }
-      const store = createFakeStore()
+      const dataDir = mkdtempSync(path.join(tmpdir(), "kanna-viz-host-"))
+      const store = Object.assign(createFakeStore(), { dataDir })
       const coordinator = new AgentCoordinator({
         store: store as never,
         onStateChange: () => {},
@@ -2983,10 +2984,10 @@ describe("shared display tool lifecycle", () => {
       await coordinator.send({ type: "chat.send", chatId: "chat-1", provider, content: "Test tools", model: "test-model" })
       expect(host).toBeDefined()
       try {
-        const chart = await host!.execute("show_chart", {
-          title: "Sales", description: "Sales by month", type: "bar", data: [{ month: "Jan", sales: 10 }],
+        const visualization = await host!.execute("show_visualization", {
+          title: "Sales", html: "<p>January sales: 10</p>",
         })
-        expect(chart).toMatchObject({ structuredContent: { displayed: true } })
+        expect(visualization).toMatchObject({ structuredContent: { displayed: true } })
         const attachments = await host!.execute("send_attachments", {
           attachments: [{ url: "https://example.com/report.pdf" }],
         })
@@ -2997,6 +2998,7 @@ describe("shared display tool lifecycle", () => {
       } finally {
         await coordinator.cancel("chat-1")
         events.close()
+        rmSync(dataDir, { recursive: true, force: true })
       }
     })
   }
@@ -3229,18 +3231,18 @@ describe("subagent activity", () => {
 
   test("interrupting the turn closes agents still marked running", async () => {
     // An interrupt ends the turn without the Stop hook's sweep, so nothing
-    // else would ever close these.
+    // else would ever close these. Grok here: Codex's agents report their own
+    // ends and are left to (see "waiting on a subagent").
     let release!: () => void
-    const fakeCodexManager = {
-      async startSession() {},
+    const fakeGrokManager = {
       async startTurn(): Promise<HarnessTurn> {
         async function* stream() {
           yield {
             type: "transcript" as const,
             entry: timestamped({
               kind: "system_init",
-              provider: "codex",
-              model: "gpt-5.4",
+              provider: "grok",
+              model: "grok-4",
               tools: [],
               agents: [],
               slashCommands: [],
@@ -3249,15 +3251,15 @@ describe("subagent activity", () => {
           }
           await new Promise<void>((resolve) => { release = resolve })
         }
-        return { provider: "codex", stream: stream(), interrupt: async () => release(), close: () => {} }
+        return { provider: "grok", stream: stream(), interrupt: async () => release(), close: () => {} }
       },
     }
     const agent = new AgentCoordinator({
       store: createFakeStore() as never,
       onStateChange: () => {},
-      codexManager: fakeCodexManager as never,
+      grokManager: fakeGrokManager as never,
     })
-    await agent.send({ type: "chat.send", chatId: "chat-1", provider: "codex", content: "work" })
+    await agent.send({ type: "chat.send", chatId: "chat-1", provider: "grok", content: "work" })
     await waitFor(() => agent.getActiveStatuses().get("chat-1") === "running")
     agent.applySubagentActivity("chat-1", { kind: "started", id: "a1", type: "subagent", label: "x" }, 1000)
     agent.applySubagentActivity("chat-1", { kind: "started", id: "a2", type: "subagent", label: "y" }, 1000)
@@ -3270,5 +3272,242 @@ describe("subagent activity", () => {
     expect(byId.get("a1")?.endedAt).toBeDefined()
     // Work that already finished keeps its outcome.
     expect(byId.get("a2")).toMatchObject({ status: "completed", endedAt: 2000 })
+  })
+})
+
+describe("waiting on a subagent", () => {
+  function coordinator() {
+    return new AgentCoordinator({ store: createFakeStore() as never, onStateChange: () => {} })
+  }
+
+  test("a chat with no turn and a task still running is waiting on it", () => {
+    const agent = coordinator()
+    expect(agent.getChatStatuses().has("chat-1")).toBe(false)
+
+    agent.applySubagentActivity("chat-1", { kind: "started", id: "a1", type: "subagent", label: "explore" }, 1000)
+    expect(agent.getChatStatuses().get("chat-1")).toBe("waiting_on_subagent")
+    // Not a turn: nothing to stop or queue behind.
+    expect(agent.getActiveStatuses().has("chat-1")).toBe(false)
+
+    agent.applySubagentActivity("chat-1", { kind: "stopped", id: "a1", failed: false }, 2000)
+    expect(agent.getChatStatuses().has("chat-1")).toBe(false)
+  })
+
+  test("it ends the wait however the task ends", () => {
+    for (const end of [{ failed: true }, { failed: false, stopped: true }]) {
+      const agent = coordinator()
+      agent.applySubagentActivity("chat-1", { kind: "started", id: "sh1", type: "shell", label: "bun test" }, 1000)
+      expect(agent.getChatStatuses().get("chat-1")).toBe("waiting_on_subagent")
+      agent.applySubagentActivity("chat-1", { kind: "stopped", id: "sh1", ...end }, 2000)
+      expect(agent.getChatStatuses().has("chat-1")).toBe(false)
+    }
+    // A task killed with no end event is closed by the next sweep.
+    const agent = coordinator()
+    agent.applySubagentActivity("chat-1", { kind: "started", id: "w1", type: "workflow", label: "review" }, 1000)
+    agent.applySubagentActivity("chat-1", { kind: "inFlight", ids: [] }, 2000)
+    expect(agent.getChatStatuses().has("chat-1")).toBe(false)
+  })
+
+  test("a monitor holds the status, though nothing waits for a monitor to end", () => {
+    const agent = coordinator()
+    agent.applySubagentActivity("chat-1", { kind: "started", id: "m1", type: "monitor", label: "Watch CI" }, 1000)
+    expect(agent.getChatStatuses().get("chat-1")).toBe("waiting_on_subagent")
+    expect(agent.hasBackgroundWork("chat-1")).toBe(false)
+  })
+
+  test("a Claude turn that ends with a task in the background leaves the chat waiting", async () => {
+    const events = new AsyncEventQueue<any>()
+    let report: ((update: SubagentActivityUpdate) => void) | undefined
+    const settled: string[] = []
+    const store = createFakeStore()
+    const agent = new AgentCoordinator({
+      store: store as never,
+      onStateChange: () => {},
+      startClaudeSession: async (args) => {
+        report = args.onSubagentActivity
+        return {
+          provider: "claude",
+          stream: events,
+          getAccountInfo: async () => null,
+          interrupt: async () => {},
+          close: () => {},
+          setModel: async () => {},
+          setPermissionMode: async () => {},
+          sendPrompt: async () => {},
+        }
+      },
+    })
+    agent.onChatSettled = (chatId) => settled.push(chatId)
+    await agent.send({ type: "chat.send", projectId: "project-1", provider: "claude", content: "review this in the background" })
+    await waitFor(() => report !== undefined)
+
+    // While the turn runs the chat is running, whatever it has handed off.
+    report!({ kind: "started", id: "a1", type: "subagent", label: "code-reviewer" })
+    expect(agent.getChatStatuses().get("chat-1")).not.toBe("waiting_on_subagent")
+    expect(agent.getChatStatuses().has("chat-1")).toBe(true)
+
+    events.push({
+      type: "transcript" as const,
+      entry: timestamped({ kind: "result", subtype: "success", isError: false, durationMs: 0, result: "Started the review." }),
+    })
+    await waitFor(() => store.turnFinishedCount === 1)
+    await waitFor(() => agent.getChatStatuses().get("chat-1") === "waiting_on_subagent")
+
+    // The task's end is the only thing left to say the chat is finished.
+    const settledBefore = settled.length
+    report!({ kind: "stopped", id: "a1", failed: false })
+    expect(agent.getChatStatuses().has("chat-1")).toBe(false)
+    expect(settled.length).toBe(settledBefore + 1)
+    events.close()
+  })
+
+  test("a subagent the provider never closed does not outlive its stream", async () => {
+    // Grok reports a subagent as a tool call and its result. A stream that
+    // ends without the result would leave the chat waiting for good.
+    let release!: () => void
+    const fakeGrokManager = {
+      async startTurn(): Promise<HarnessTurn> {
+        async function* stream() {
+          yield {
+            type: "transcript" as const,
+            entry: timestamped({
+              kind: "tool_call",
+              tool: {
+                kind: "tool",
+                toolKind: "subagent_task",
+                toolName: "Task",
+                toolId: "spawn-1",
+                input: { subagentType: "spawnAgent" },
+              },
+            }),
+          }
+          yield {
+            type: "transcript" as const,
+            entry: timestamped({ kind: "result", subtype: "success", isError: false, durationMs: 0, result: "" }),
+          }
+          await new Promise<void>((resolve) => { release = resolve })
+        }
+        return { provider: "grok", stream: stream(), interrupt: async () => release(), close: () => {} }
+      },
+    }
+    const agent = new AgentCoordinator({
+      store: createFakeStore() as never,
+      onStateChange: () => {},
+      grokManager: fakeGrokManager as never,
+    })
+    await agent.send({ type: "chat.send", chatId: "chat-1", provider: "grok", content: "work" })
+    // The result is in and the stream is still open, with the subagent on it.
+    await waitFor(() => agent.getChatStatuses().get("chat-1") === "waiting_on_subagent")
+
+    release()
+    await waitFor(() => !agent.getChatStatuses().has("chat-1"))
+    expect(agent.getSubagents("chat-1")[0]).toMatchObject({ id: "spawn-1", status: "failed" })
+  })
+
+  /** A Codex manager whose turn the test ends by hand, and that records what it is asked to stop. */
+  function codexWithAgents() {
+    const events = new AsyncEventQueue<any>()
+    let report: ((chatId: string, update: SubagentActivityUpdate) => void) | null = null
+    const stopped: string[] = []
+    const manager = {
+      setTaskActivityListener(listener: typeof report) { report = listener },
+      async startSession() {},
+      async startTurn(): Promise<HarnessTurn> {
+        return { provider: "codex", stream: events, interrupt: async () => events.close(), close: () => {} }
+      },
+      async stopAgent(_chatId: string, threadId: string) {
+        stopped.push(threadId)
+        return true
+      },
+      async stopAgents() { stopped.push("all") },
+    }
+    const store = createFakeStore()
+    const agent = new AgentCoordinator({ store: store as never, onStateChange: () => {}, codexManager: manager as never })
+    const agentStarted = (id: string) => report!("chat-1", { kind: "started", id, type: "subagent", label: "audit parser", stoppable: true })
+    const finishTurn = () => {
+      events.push({
+        type: "transcript" as const,
+        entry: timestamped({ kind: "result", subtype: "success", isError: false, durationMs: 0, result: "" }),
+      })
+      events.close()
+    }
+    return { agent, store, events, stopped, agentStarted, finishTurn, report: (update: SubagentActivityUpdate) => report!("chat-1", update) }
+  }
+
+  test("a Codex chat waits on the agents it spawned, past the end of its own turn", async () => {
+    const { agent, store, agentStarted, finishTurn, report } = codexWithAgents()
+    await agent.send({ type: "chat.send", chatId: "chat-1", provider: "codex", content: "split this up" })
+    await waitFor(() => agent.getActiveStatuses().has("chat-1"))
+
+    agentStarted("agent-thread-1")
+    expect(agent.getChatStatuses().get("chat-1")).not.toBe("waiting_on_subagent")
+
+    // The turn's stream closes with the turn. The agent's row is not on it.
+    finishTurn()
+    await waitFor(() => store.turnFinishedCount === 1)
+    await waitFor(() => agent.getChatStatuses().get("chat-1") === "waiting_on_subagent")
+    expect(agent.getSubagents("chat-1")).toMatchObject([{ id: "agent-thread-1", status: "running", stoppable: true }])
+
+    report({ kind: "stopped", id: "agent-thread-1", failed: false })
+    expect(agent.getChatStatuses().has("chat-1")).toBe(false)
+  })
+
+  test("a Codex wait or close call is not an agent", async () => {
+    const { agent, events, finishTurn } = codexWithAgents()
+    await agent.send({ type: "chat.send", chatId: "chat-1", provider: "codex", content: "wait for them" })
+    await waitFor(() => agent.getActiveStatuses().has("chat-1"))
+    events.push({
+      type: "transcript" as const,
+      entry: timestamped({
+        kind: "tool_call",
+        tool: { kind: "tool", toolKind: "subagent_task", toolName: "Task", toolId: "wait-1", input: { subagentType: "wait" } },
+      }),
+    })
+    finishTurn()
+    await waitFor(() => !agent.getActiveStatuses().has("chat-1"))
+    expect(agent.getSubagents("chat-1")).toEqual([])
+    expect(agent.getChatStatuses().has("chat-1")).toBe(false)
+  })
+
+  test("stopping a Codex chat stops its agents and leaves their rows for them to close", async () => {
+    const { agent, stopped, agentStarted, report } = codexWithAgents()
+    await agent.send({ type: "chat.send", chatId: "chat-1", provider: "codex", content: "work" })
+    await waitFor(() => agent.getActiveStatuses().has("chat-1"))
+    agentStarted("agent-thread-1")
+
+    await agent.cancel("chat-1")
+    expect(stopped).toEqual(["all"])
+    // Still running until Codex says its turn was interrupted.
+    expect(agent.getSubagents("chat-1")[0]).toMatchObject({ status: "running" })
+    report({ kind: "stopped", id: "agent-thread-1", failed: false, stopped: true })
+    expect(agent.getSubagents("chat-1")[0]).toMatchObject({ status: "stopped" })
+    expect(agent.getChatStatuses().has("chat-1")).toBe(false)
+  })
+
+  test("steering a Codex chat leaves its agents running", async () => {
+    const { agent, stopped, agentStarted } = codexWithAgents()
+    await agent.send({ type: "chat.send", chatId: "chat-1", provider: "codex", content: "work" })
+    await waitFor(() => agent.getActiveStatuses().has("chat-1"))
+    agentStarted("agent-thread-1")
+
+    await agent.cancel("chat-1", { hideInterrupted: true })
+    expect(stopped).toEqual([])
+    expect(agent.getSubagents("chat-1")[0]).toMatchObject({ status: "running" })
+  })
+
+  test("a Codex agent's row stops that agent's own turn, once the chat's turn is over", async () => {
+    const { agent, stopped, agentStarted, finishTurn } = codexWithAgents()
+    await agent.send({ type: "chat.send", chatId: "chat-1", provider: "codex", content: "work" })
+    await waitFor(() => agent.getActiveStatuses().has("chat-1"))
+    agentStarted("agent-thread-1")
+    // Not while the turn may be waiting on it: Codex would leave the turn
+    // waiting for an agent that is never going to finish.
+    await expect(agent.stopBackgroundTask("chat-1", "agent-thread-1")).rejects.toThrow("Stop the chat")
+    expect(stopped).toEqual([])
+    finishTurn()
+    await waitFor(() => agent.getChatStatuses().get("chat-1") === "waiting_on_subagent")
+
+    await agent.stopBackgroundTask("chat-1", "agent-thread-1")
+    expect(stopped).toEqual(["agent-thread-1"])
   })
 })

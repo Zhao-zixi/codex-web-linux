@@ -15,6 +15,7 @@ import { appendSystemMessageBlock, buildSkillSystemMessage } from "./harness-ski
 import { buildKannaAgentId } from "./attribution"
 import { buildKannaSystemInstructions } from "./harness-instructions"
 import { AsyncQueue } from "./async-queue"
+import type { SubagentActivityUpdate } from "./background-tasks"
 import type { KannaToolHost } from "./kanna-tools"
 import { createKannaMcpServer } from "./kanna-mcp"
 import { asNumber, asRecord } from "../shared/json"
@@ -130,6 +131,28 @@ interface PendingTurn {
   ) => Promise<CommandExecutionApprovalDecision | FileChangeApprovalDecision>
 }
 
+/**
+ * An agent the chat's thread spawned, or one of those agents spawned.
+ *
+ * Codex runs each as a thread of its own on the chat's connection, and sends
+ * that thread's turns and items in with the chat's, told apart only by
+ * `threadId`. An agent outlives the turn that spawned it: the chat's turn can
+ * end while the agent works, and nothing wakes the chat when it finishes.
+ */
+interface SpawnedAgent {
+  threadId: string
+  label: string
+  description?: string
+  /** The `spawnAgent` call that made it, where Codex reports one. */
+  toolUseId?: string
+  /**
+   * Its turn now in flight. This is what the agent's task row follows: the row
+   * runs exactly while this is set, so it ends the way any Codex turn ends,
+   * with a `turn/completed`, or with the process.
+   */
+  turnId: string | null
+}
+
 interface SessionContext {
   customTools?: ReturnType<typeof createKannaMcpServer>
   chatId: string
@@ -138,6 +161,14 @@ interface SessionContext {
   pendingRequests: Map<CodexRequestId, PendingRequest<unknown>>
   pendingTurn: PendingTurn | null
   sessionToken: string | null
+  /** By thread id. */
+  agents: Map<string, SpawnedAgent>
+  /**
+   * Turns in flight on threads no spawn has named yet, by thread id. The
+   * spawn and the agent's first turn arrive within a few milliseconds of each
+   * other, and not always in the same order.
+   */
+  unclaimedTurns: Map<string, string>
   stderrLines: string[]
   closed: boolean
 }
@@ -195,6 +226,26 @@ function codexSystemInitEntry(model: string): TranscriptEntry {
 function errorMessage(value: unknown): string {
   if (value instanceof Error) return value.message
   return String(value)
+}
+
+/** The thread a notification is about, for the ones that are about one. */
+function notificationThreadId(notification: ServerNotification): string | undefined {
+  const threadId = (notification.params as { threadId?: unknown }).threadId
+  return typeof threadId === "string" ? threadId : undefined
+}
+
+const AGENT_LABEL_LIMIT = 80
+
+/** `/root/audit_parser` → "audit parser": the name the spawning agent gave it. */
+function agentLabelFromPath(agentPath: string): string {
+  const name = agentPath.split("/").filter(Boolean).pop() ?? ""
+  return name.replace(/_/g, " ").trim() || "Agent"
+}
+
+function agentLabelFromPrompt(prompt: string | null | undefined): string {
+  const line = prompt?.trim().split("\n")[0]?.trim() ?? ""
+  if (!line) return "Agent"
+  return line.length > AGENT_LABEL_LIMIT ? `${line.slice(0, AGENT_LABEL_LIMIT - 1)}…` : line
 }
 
 /**
@@ -759,6 +810,7 @@ export class CodexAppServerManager {
   private readonly sessions = new Map<string, SessionContext>()
   private readonly spawnProcess: SpawnCodexAppServer
   private onRateLimits: ((snapshot: CodexRateLimitSnapshot) => void) | null = null
+  private onTaskActivity: ((chatId: string, update: SubagentActivityUpdate) => void) | null = null
 
   constructor(args: { spawnProcess?: SpawnCodexAppServer } = {}) {
     this.spawnProcess = args.spawnProcess ?? ((cwd) =>
@@ -772,6 +824,16 @@ export class CodexAppServerManager {
   /** Register a sink for pushed `account/rateLimits/updated` notifications. */
   setRateLimitsListener(listener: ((snapshot: CodexRateLimitSnapshot) => void) | null) {
     this.onRateLimits = listener
+  }
+
+  /**
+   * Register a sink for the agents a chat's thread spawns: a `started` each
+   * time one begins a turn, a `stopped` when that turn ends. They come this
+   * way and not on a turn's stream because an agent outlives the turn that
+   * spawned it, and that turn's stream closes with the turn.
+   */
+  setTaskActivityListener(listener: ((chatId: string, update: SubagentActivityUpdate) => void) | null) {
+    this.onTaskActivity = listener
   }
 
   /**
@@ -847,6 +909,8 @@ export class CodexAppServerManager {
       pendingRequests: new Map(),
       pendingTurn: null,
       sessionToken: null,
+      agents: new Map(),
+      unclaimedTurns: new Map(),
       stderrLines: [],
       closed: false,
     }
@@ -888,6 +952,8 @@ export class CodexAppServerManager {
       pendingRequests: new Map(),
       pendingTurn: null,
       sessionToken: null,
+      agents: new Map(),
+      unclaimedTurns: new Map(),
       stderrLines: [],
       closed: false,
     }
@@ -1146,6 +1212,31 @@ export class CodexAppServerManager {
     }
   }
 
+  /**
+   * Stops one spawned agent's turn, as a turn of the chat's own is stopped.
+   * Its end comes back as a `turn/completed`, which is what closes its row.
+   * False when the chat has no such agent running.
+   */
+  async stopAgent(chatId: string, agentThreadId: string) {
+    const context = this.sessions.get(chatId)
+    const agent = context?.agents.get(agentThreadId)
+    if (!context || context.closed || !agent?.turnId) return false
+    await this.sendRequest(context, "turn/interrupt", {
+      threadId: agent.threadId,
+      turnId: agent.turnId,
+    } satisfies TurnInterruptParams)
+    return true
+  }
+
+  /**
+   * Stops every agent a chat has running. Codex leaves them going when the
+   * turn that spawned them is interrupted, so stopping the chat has to ask.
+   */
+  async stopAgents(chatId: string) {
+    const running = [...(this.sessions.get(chatId)?.agents.values() ?? [])].filter((agent) => agent.turnId !== null)
+    await Promise.allSettled(running.map((agent) => this.stopAgent(chatId, agent.threadId)))
+  }
+
   stopSession(chatId: string) {
     const context = this.sessions.get(chatId)
     if (!context) return
@@ -1377,6 +1468,10 @@ export class CodexAppServerManager {
 
   private async handleNotification(context: SessionContext, notification: ServerNotification) {
     if (notification.method === "thread/started") {
+      // A spawned agent's thread is not a new thread for the chat. Taking its
+      // id would send the chat's next turn to the agent.
+      const thread = notification.params.thread
+      if (thread.parentThreadId || context.agents.has(thread.id)) return
       context.sessionToken = notification.params.thread.id
       if (context.pendingTurn) {
         context.pendingTurn.queue.push({
@@ -1392,6 +1487,23 @@ export class CodexAppServerManager {
       const params = notification.params as AccountRateLimitsUpdatedNotification
       if (params?.rateLimits) this.onRateLimits?.(params.rateLimits)
       return
+    }
+
+    // Everything past here is about one thread, and the threads of the agents
+    // a chat spawns report on this connection too. Read as the chat's own, an
+    // agent's `turn/completed` ended the chat's turn while it was still
+    // waiting on that agent, and the agent's messages and commands went into
+    // the chat's transcript.
+    const threadId = notificationThreadId(notification)
+    if (threadId && context.sessionToken && threadId !== context.sessionToken) {
+      this.handleAgentNotification(context, threadId, notification)
+      return
+    }
+
+    // Before the check for a turn: an agent's end is reported on the chat's
+    // thread, and can come after the turn that spawned it is over.
+    if (notification.method === "item/started" || notification.method === "item/completed") {
+      this.trackSpawnedAgents(context, notification.params.item)
     }
 
     const pendingTurn = context.pendingTurn
@@ -1425,6 +1537,145 @@ export class CodexAppServerManager {
       default:
         return
     }
+  }
+
+  /**
+   * A notification about a thread that is not the chat's. Only the threads of
+   * agents the chat spawned are followed, and of those only the turns: what
+   * an agent says and runs is its own, and is not the chat's transcript.
+   *
+   * The signals were read off `codex app-server` 0.159: a spawned agent's
+   * `turn/started` and `turn/completed` arrive here with its thread id, and an
+   * agent whose turn is interrupted reports `turn/completed` as `interrupted`.
+   */
+  private handleAgentNotification(context: SessionContext, threadId: string, notification: ServerNotification) {
+    switch (notification.method) {
+      case "turn/started":
+        this.agentTurnStarted(context, threadId, notification.params.turn.id)
+        return
+      case "turn/completed": {
+        const { id, status } = notification.params.turn
+        this.agentTurnEnded(context, threadId, id, status === "failed" ? "failed" : status === "interrupted" ? "stopped" : "completed")
+        return
+      }
+      case "item/started":
+      case "item/completed":
+        // An agent can spawn agents of its own.
+        if (context.agents.has(threadId)) this.trackSpawnedAgents(context, notification.params.item)
+        return
+      case "error":
+        // The end of the agent's turn, not of the chat's session.
+        if (!notification.params.willRetry) this.agentTurnEnded(context, threadId, notification.params.turnId ?? null, "failed")
+        return
+      case "thread/closed":
+        this.agentTurnEnded(context, threadId, null, "stopped")
+        return
+      case "thread/status/changed": {
+        // Only the states a thread does not come back from. `idle` is left to
+        // `turn/completed`: a new thread is idle for a moment before its
+        // first turn, and reading that as an end would close the row early.
+        const status = notification.params.status.type
+        if (status === "systemError") this.agentTurnEnded(context, threadId, null, "failed")
+        else if (status === "notLoaded") this.agentTurnEnded(context, threadId, null, "stopped")
+        return
+      }
+      default:
+        return
+    }
+  }
+
+  /**
+   * Learns of an agent from the item that spawned it, and of one of its turns
+   * ending from the item that says so. Codex has announced a spawn two ways:
+   * a `spawnAgent` call whose result names the new threads, and since then a
+   * `subAgentActivity` item. Neither starts a row. The agent's own
+   * `turn/started` does, so a row always has a turn that must end.
+   */
+  private trackSpawnedAgents(context: SessionContext, item: ThreadItem) {
+    if (item.type === "collabAgentToolCall") {
+      if (item.tool !== "spawnAgent") return
+      for (const threadId of item.receiverThreadIds ?? []) {
+        this.nameAgent(context, {
+          threadId,
+          label: agentLabelFromPrompt(item.prompt),
+          ...(item.prompt?.trim() ? { description: item.prompt.trim() } : {}),
+          toolUseId: item.id,
+        })
+      }
+      return
+    }
+    if (item.type !== "subAgentActivity") return
+    if (item.kind === "started" || item.kind === "interacted") {
+      this.nameAgent(context, { threadId: item.agentThreadId, label: agentLabelFromPath(item.agentPath) })
+      return
+    }
+    // The item's id names the turn that ended ("subagent-completed-<turn id>"),
+    // which keeps a late report of one turn from ending the agent's next.
+    const turnId = /^subagent-(?:completed|interrupted)-(.+)$/.exec(item.id)?.[1] ?? null
+    this.agentTurnEnded(context, item.agentThreadId, turnId, item.kind === "interrupted" ? "stopped" : "completed")
+  }
+
+  private nameAgent(context: SessionContext, named: Omit<SpawnedAgent, "turnId">) {
+    if (named.threadId === context.sessionToken || context.agents.has(named.threadId)) return
+    context.agents.set(named.threadId, { ...named, turnId: null })
+    const turnId = context.unclaimedTurns.get(named.threadId)
+    if (turnId === undefined) return
+    context.unclaimedTurns.delete(named.threadId)
+    this.agentTurnStarted(context, named.threadId, turnId)
+  }
+
+  private agentTurnStarted(context: SessionContext, threadId: string, turnId: string) {
+    const agent = context.agents.get(threadId)
+    if (!agent) {
+      context.unclaimedTurns.set(threadId, turnId)
+      return
+    }
+    agent.turnId = turnId
+    this.onTaskActivity?.(context.chatId, {
+      kind: "started",
+      id: threadId,
+      type: "subagent",
+      label: agent.label,
+      ...(agent.description ? { description: agent.description } : {}),
+      ...(agent.toolUseId ? { toolUseId: agent.toolUseId } : {}),
+      stoppable: true,
+    })
+  }
+
+  /** `turnId` is null when the report is of the thread, not of one turn. */
+  private agentTurnEnded(
+    context: SessionContext,
+    threadId: string,
+    turnId: string | null,
+    outcome: "completed" | "failed" | "stopped",
+  ) {
+    if (turnId === null || context.unclaimedTurns.get(threadId) === turnId) context.unclaimedTurns.delete(threadId)
+    const agent = context.agents.get(threadId)
+    if (!agent || agent.turnId === null) return
+    if (turnId !== null && turnId !== agent.turnId) return
+    agent.turnId = null
+    this.onTaskActivity?.(context.chatId, {
+      kind: "stopped",
+      id: threadId,
+      failed: outcome === "failed",
+      ...(outcome === "stopped" ? { stopped: true } : {}),
+    })
+  }
+
+  /**
+   * The process is gone, or about to be, and its agents with it. None of them
+   * can report an end now, so each one still running is closed here, as cut
+   * off rather than finished. Without this a dropped connection would leave
+   * the chat waiting on a subagent for good.
+   */
+  private closeAgents(context: SessionContext) {
+    for (const agent of context.agents.values()) {
+      if (agent.turnId === null) continue
+      agent.turnId = null
+      this.onTaskActivity?.(context.chatId, { kind: "stopped", id: agent.threadId, failed: true })
+    }
+    context.agents.clear()
+    context.unclaimedTurns.clear()
   }
 
   private handleItemStarted(pendingTurn: PendingTurn, notification: ItemStartedNotification) {
@@ -1652,6 +1903,7 @@ export class CodexAppServerManager {
 
   private failContext(context: SessionContext, message: string) {
     context.customTools?.close()
+    this.closeAgents(context)
     const pendingTurn = context.pendingTurn
     if (pendingTurn && !pendingTurn.resolved) {
       pendingTurn.queue.push({

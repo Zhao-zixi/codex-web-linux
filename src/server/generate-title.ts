@@ -1,4 +1,5 @@
 import { getSharedQuickResponseAdapter } from "./quick-response"
+import { stripSystemMessages } from "../shared/message-preview"
 
 const TITLE_SCHEMA = {
   type: "object",
@@ -16,8 +17,13 @@ function normalizeGeneratedTitle(value: unknown): string | null {
   return normalized
 }
 
+/**
+ * A title is made from what the user wrote. What Kanna put in the message for
+ * the agent (`stripSystemMessages`) is no part of that: left in, a first
+ * message sent from the graph view would be titled after its instructions.
+ */
 export function fallbackTitleFromMessage(messageContent: string): string | null {
-  const normalized = messageContent.replace(/\s+/g, " ").trim()
+  const normalized = stripSystemMessages(messageContent).replace(/\s+/g, " ").trim()
   if (!normalized) return null
   if (normalized.length <= 35) return normalized
   return `${normalized.slice(0, 35)}...`
@@ -42,7 +48,7 @@ export async function generateTitleForChatDetailed(
   const result = await adapter.generateStructuredWithDiagnostics<string>({
     cwd,
     task: "conversation title generation",
-    prompt: `Generate a short, descriptive title (under 30 chars) for a conversation that starts with this message.\n\n${messageContent}`,
+    prompt: `Generate a short, descriptive title (under 30 chars) for a conversation that starts with this message.\n\n${stripSystemMessages(messageContent)}`,
     schema: TITLE_SCHEMA,
     parse: (value) => {
       const output = value && typeof value === "object" ? value as { title?: unknown } : {}

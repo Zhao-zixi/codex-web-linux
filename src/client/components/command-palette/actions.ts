@@ -1,4 +1,5 @@
 import commandScore from "command-score"
+import { isSubChat } from "../../../shared/sub-chat"
 import type { LocalProjectSummary, SidebarProjectGroup } from "../../../shared/types"
 import type { SidebarThread } from "../../lib/thread-sections"
 import {
@@ -98,7 +99,7 @@ export function flattenVisibleProjectGroups(groups: SidebarProjectGroup[]): Pale
     let lastActivityAt = 0
     for (const chat of group.chats) {
       // Opening a project lands on a chat its list shows.
-      if (chat.parentChatId) continue
+      if (isSubChat(chat)) continue
       const activityAt = chat.lastMessageAt ?? chat._creationTime
       if (activityAt >= lastActivityAt) {
         lastActivityAt = activityAt

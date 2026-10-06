@@ -1,16 +1,25 @@
 import type { AgentProvider, ChatAttachment, ChatSnapshot, ModelOptions, SidebarData, TranscriptEntry, UserPromptEntry } from "../../shared/types"
+import { isSubChat } from "../../shared/sub-chat"
+import { stripSystemMessages } from "../../shared/message-preview"
 import type { ComposerState } from "../stores/chatPreferencesStore"
 import { processTranscriptMessages } from "../lib/parseTranscript"
 
 // Pure helpers backing useKannaState. Everything here is stateless and unit
 // testable; the hook composes these with socket subscriptions and React state.
 
+/**
+ * The last thing typed into this chat, for the composer to bring back.
+ *
+ * What was typed, so without anything Kanna put in the message for the agent
+ * (`stripSystemMessages`): a message sent from the graph view carries a block
+ * the user never saw, and recalling it would put that block in the composer.
+ */
 export function getPreviousPrompt(messages: ReturnType<typeof processTranscriptMessages>) {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]
-    if (message?.kind === "user_prompt" && message.content.trim().length > 0) {
-      return message.content
-    }
+    if (message?.kind !== "user_prompt") continue
+    const typed = stripSystemMessages(message.content)
+    if (typed.trim().length > 0) return typed
   }
   return null
 }
@@ -82,7 +91,7 @@ export function getNewestRemainingChatId(projectGroups: SidebarData["projectGrou
   if (!projectGroup) return null
 
   // A chat the project's list shows, not a sub-chat the user never opened.
-  return projectGroup.chats.find((chat) => chat.chatId !== activeChatId && !chat.parentChatId)?.chatId ?? null
+  return projectGroup.chats.find((chat) => chat.chatId !== activeChatId && !isSubChat(chat))?.chatId ?? null
 }
 
 export function applySidebarProjectOrder(

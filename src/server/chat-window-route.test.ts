@@ -96,6 +96,17 @@ describe("chat window route", () => {
     expect(body).toEqual(await firstSocketSnapshot(deps))
   })
 
+  test("says when the chat is waiting on a subagent, as the socket does", async () => {
+    // The app paints from this body before its socket answers, so a status
+    // only the socket knew would show the chat at rest for that long.
+    const deps = createDeps(turn(1))
+    const waiting = { ...deps, agent: { ...deps.agent, getChatStatuses: () => new Map([["chat-1", "waiting_on_subagent" as const]]) } }
+    const response = await handleChatWindow(new Request(url), url, waiting as unknown as ChatWindowRouteDeps)
+    const body = await response!.json()
+    expect(body.runtime.status).toBe("waiting_on_subagent")
+    expect(body).toEqual(await firstSocketSnapshot(waiting))
+  })
+
   test("gzips when the client accepts it", async () => {
     const deps = createDeps([...turn(1), ...turn(2), ...turn(3)])
     const request = new Request(url, { headers: { "Accept-Encoding": "br, gzip;q=0.8" } })

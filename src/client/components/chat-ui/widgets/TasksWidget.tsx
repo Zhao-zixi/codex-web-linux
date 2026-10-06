@@ -3,6 +3,7 @@ import { Check, Loader2, MessageSquare, Network, Radar, Square, X, type LucideIc
 import { PROVIDERS, type SubagentActivity, type TranscriptEntry } from "../../../../shared/types"
 import { cn } from "../../../lib/utils"
 import { useChatReferenceActions, useSidebarThread } from "../chat-reference"
+import { chatOpenMenuItems } from "../ChatOpenMenuItems"
 import { SidebarChatCard } from "../sidebar/ChatHoverCard"
 import { ThreadRowMenu } from "../sidebar/ThreadRow"
 import { formatPromptTimestamp } from "../../messages/ResultMessage"
@@ -310,6 +311,7 @@ function ChatTaskRow({ task, now, isStopping, onStop, onJump, className }: {
     </>
   )
   const hasItems = Boolean(onJump) || canStop
+  const openItems = thread && actions ? chatOpenMenuItems(thread, actions) : null
   return (
     <WidgetRow
       rowKey={task.id}
@@ -332,7 +334,7 @@ function ChatTaskRow({ task, now, isStopping, onStop, onJump, className }: {
           archived={thread.archived}
           editorLabel={actions.editorLabel}
           {...actions.menu}
-          leadingItems={hasItems ? items : undefined}
+          leadingItems={openItems || hasItems ? <>{openItems}{hasItems ? items : null}</> : undefined}
         >
           {row}
         </ThreadRowMenu>

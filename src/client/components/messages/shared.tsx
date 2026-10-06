@@ -12,6 +12,8 @@ import {
 import { toJsxRuntime } from "hast-util-to-jsx-runtime"
 import { Link, useInRouterContext } from "react-router-dom"
 import { parseChatLink } from "../../../shared/chat-links"
+import { chatIdFromChatPath } from "../../lib/chat-open"
+import { useChatReferenceActions } from "../chat-ui/chat-reference"
 import { Fragment } from "react"
 import { jsx, jsxs } from "react/jsx-runtime"
 import { parseTranscriptMarkdown } from "../../lib/markdown-cache"
@@ -285,7 +287,7 @@ export const markdownComponents = {
 
   table: ({ children, ...props }: ComponentPropsWithoutRef<"table">) => (
     <div className="border border-border  rounded-xl overflow-x-auto">
-      <table className="table-auto min-w-full divide-y divide-border bg-background" {...props}>{children}</table>
+      <table className="table-auto min-w-full divide-y divide-border bg-surface" {...props}>{children}</table>
     </div>
   ),
 
@@ -356,14 +358,32 @@ export function createMarkdownComponents(options?: {
         ? renderOptions.sourceOrigin ?? undefined
         : typeof window === "undefined" ? undefined : window.location.origin
       const chatLink = parseChatLink(href, chatOrigin)
+      const chatActions = useChatReferenceActions()
       if (chatLink) {
         const className = "transition-all underline decoration-2 text-logo decoration-logo/50 hover:text-logo/70"
         // Standalone exports have no Kanna router to resolve a chat against.
         if (renderOptions.localLinkMode === "text") return <span className={className}>{children}</span>
+        const linkedChatId = chatIdFromChatPath(chatLink)
+        // On a chat page a chat link opens the way a chat's card does
+        // (`useOpenChat`): in the previewer, and a tab for
+        // Cmd/Ctrl-click or the middle button. It stays a real link, so it
+        // still copies and shows its address. Shift and Alt are left to the
+        // browser, which has its own meanings for them.
+        const openChat = chatActions && linkedChatId
+          ? (event: React.MouseEvent<HTMLAnchorElement>) => {
+              if (event.defaultPrevented || event.shiftKey || event.altKey || event.button > 1) return
+              event.preventDefault()
+              chatActions.onOpenChat(linkedChatId)
+            }
+          : undefined
+        const handleClick = (event: React.MouseEvent<HTMLAnchorElement>) => {
+          onClick?.(event)
+          openChat?.(event)
+        }
         return inRouter ? (
-          <Link {...props} className={className} to={chatLink} onClick={onClick}>{children}</Link>
+          <Link {...props} className={className} to={chatLink} onClick={handleClick} onAuxClick={openChat}>{children}</Link>
         ) : (
-          <a {...props} className={className} href={chatLink} onClick={onClick}>{children}</a>
+          <a {...props} className={className} href={chatLink} onClick={handleClick} onAuxClick={openChat}>{children}</a>
         )
       }
       const parsedLocalLink = parseLocalFileLink(href)

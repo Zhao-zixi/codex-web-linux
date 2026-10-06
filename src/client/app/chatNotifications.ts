@@ -1,4 +1,5 @@
 import type { SidebarChatRow, SidebarData, SidebarProjectGroup } from "../../shared/types"
+import { isUnreadForUser } from "../lib/thread-sections"
 
 const BROWSER_CHAT_TITLE_MAX_LENGTH = 80
 
@@ -7,13 +8,10 @@ function getSidebarGroupChats(group: SidebarProjectGroup): SidebarChatRow[] {
 }
 
 /**
- * Whether a chat's unread mark is the user's to hear about. A sub-chat's is
- * not: it finished for its parent, which reports the result in its own turn.
- * A sub-chat that stops to ask something still counts as waiting, below.
+ * See `isUnreadForUser`. A sub-chat that stops to ask something still counts
+ * as waiting, below.
  */
-function countsAsUnread(chat: SidebarChatRow) {
-  return chat.unread && !chat.parentChatId
-}
+const countsAsUnread = isUnreadForUser
 
 export function getNotificationTitleCount(sidebarData: SidebarData) {
   return sidebarData.projectGroups.reduce((count, group) => (

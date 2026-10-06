@@ -1,4 +1,4 @@
-import { memo, type RefObject, useCallback, useEffect, useMemo, useState } from "react"
+import { memo, type RefObject, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ListHoverCard } from "../../ui/list-hover-card"
 import { TURN_CARD_ROW_INSET, TurnCardMessage, TurnCardMetaRow, TurnCardTimingRow } from "../../ui/turn-card"
 import { GitBranch, PencilLine } from "lucide-react"
@@ -203,18 +203,25 @@ function useChatTouchedFiles(
   const [result, setResult] = useState<ChatTouchedFilesResult | null>(
     () => (cacheKey ? touchedFilesCache.get(cacheKey) ?? null : null)
   )
+  /** The chat `result` was fetched for. */
+  const heldForChatIdRef = useRef(row?.chatId ?? null)
 
   useEffect(() => {
     if (!row || !cacheKey || !load) return
     const cached = touchedFilesCache.get(cacheKey)
     if (cached) {
+      heldForChatIdRef.current = row.chatId
       setResult(cached)
       return
     }
     // Cleared rather than left showing the previous chat's files: cards are
     // reused as the pointer runs down the list, and one row's list under
-    // another row's title is worse than no list at all.
-    setResult(null)
+    // another row's title is worse than no list at all. Kept when it is the
+    // same chat with newer work in it: the list it had stands until the new
+    // one lands, so a card that stays up on one chat (a node in the graph
+    // view) does not empty and refill each time its chat moves.
+    if (heldForChatIdRef.current !== row.chatId) setResult(null)
+    heldForChatIdRef.current = row.chatId
     let cancelled = false
     void load(row.chatId).then((next) => {
       if (touchedFilesCache.size >= TOUCHED_FILES_CACHE_LIMIT) {
@@ -253,15 +260,19 @@ function useChatPreview(
   const [result, setResult] = useState<ChatPreview | null>(
     () => (cacheKey ? previewCache.get(cacheKey) ?? null : null)
   )
+  const heldForChatIdRef = useRef(row?.chatId ?? null)
 
   useEffect(() => {
     if (!row || !cacheKey || !load) return
     const cached = previewCache.get(cacheKey)
     if (cached) {
+      heldForChatIdRef.current = row.chatId
       setResult(cached)
       return
     }
-    setResult(null)
+    // As in `useChatTouchedFiles`: cleared for another chat, kept for this one.
+    if (heldForChatIdRef.current !== row.chatId) setResult(null)
+    heldForChatIdRef.current = row.chatId
     let cancelled = false
     void load(row.chatId).then((next) => {
       if (previewCache.size >= TOUCHED_FILES_CACHE_LIMIT) {
@@ -320,7 +331,11 @@ export function ChatHoverCardContent({
   // is live: the only end time on hand then belongs to the *previous* turn.
   const endedAt = getActiveTurnStartedAt(row) != null || row.lastTurnEndedAt == null
     ? null
-    : formatPromptTimestamp(new Date(row.lastTurnEndedAt).toISOString())
+    // A turn has landed, but the chat has not: saying when would read as the
+    // time it finished. The slot says what it is waiting on instead.
+    : row.status === "waiting_on_subagent"
+      ? "Waiting on a subagent"
+      : formatPromptTimestamp(new Date(row.lastTurnEndedAt).toISOString())
   // Both blocks are clickable whenever the surface offers the jump at all. The
   // card doesn't identify the messages and doesn't need to: it shows a chat's
   // latest prompt and latest reply by definition, and the transcript resolves

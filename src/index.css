@@ -83,6 +83,15 @@
     --success: oklch(69.6% 0.17 162.48); /* emerald-500 */
     /* Reachable from outside (a port exposed through a tunnel). */
     --info: oklch(68.5% 0.169 237.323); /* sky-500 */
+    /* Shared with the isolated visualization documents on web and iOS. */
+    --viz-red: var(--logo);
+    --viz-green: var(--success);
+    --viz-blue: var(--info);
+    --viz-yellow: #efb100;
+    --viz-orange: #ff9900;
+    --viz-purple: #615fff;
+    --viz-pink: #f6339a;
+    --viz-teal: #00bba7;
     /* Section and widget titles: quieter than body text, louder than muted. */
     --section-title: oklch(44.6% 0.043 257.281); /* slate-600 */
   }
@@ -122,8 +131,30 @@
     --logo: oklch(71.2% 0.194 13.428);
     --success: oklch(76.5% 0.177 163.223); /* emerald-400 */
     --info: oklch(74.6% 0.16 232.661); /* sky-400 */
+    --viz-yellow: #fdc700;
+    --viz-orange: #ffb86a;
+    --viz-purple: #a3a0ff;
+    --viz-pink: #fb64b6;
+    --viz-teal: #00d5be;
     --section-title: var(--color-slate-300);
   }
+}
+
+/*
+ * `surface`: the colour of whatever a transcript is sitting on. The page's
+ * background by default; a container with a fill of its own names it in
+ * `--surface` (the viewer's card, which is the card colour in dark mode) and
+ * paints itself with it. Everything in a transcript that has to disappear
+ * into what is behind it reads this, never `background`: the composer dock's
+ * fade, and the pills and bordered lists that are filled only so the surface
+ * seems to show through. One declaration then moves all of them together.
+ *
+ * `inline`, so a utility carries the `var()` itself and resolves it where it
+ * is used. As a plain theme variable it would be resolved once, on the root,
+ * and never see a container's `--surface`.
+ */
+@theme inline {
+  --color-surface: var(--surface, var(--color-background));
 }
 
 @theme {

@@ -74,6 +74,21 @@ describe("renderChatStatusDot", () => {
     expect(html).not.toContain("bg-emerald-400")
   })
 
+  test("waiting on a subagent spins in grey, ahead of unread, and the title holds still", () => {
+    const html = renderDot({ ...baseChat, status: "waiting_on_subagent", unread: true })
+
+    expect(html).toContain("animate-spin")
+    expect(html).toContain("text-muted-foreground")
+    // Not the running red: nothing is happening in this chat itself.
+    expect(html).not.toContain("text-logo")
+    expect(html).not.toContain("bg-emerald-400")
+
+    const row = renderRow({ thread: thread({ status: "waiting_on_subagent" }), showStatus: true, detailLabel: null })
+    expect(row).not.toContain("kanna-shiny-track")
+    // Still going, so it never recedes with the chats at rest.
+    expect(row).not.toContain(DIM_CLASS)
+  })
+
   test("renders the compositor-driven shimmer for a running title", () => {
     const html = renderRow({ thread: thread({ status: "running" }), showStatus: true, detailLabel: null })
 

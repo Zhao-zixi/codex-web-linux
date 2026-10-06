@@ -230,12 +230,15 @@ test("bundles sent files and preserves external attachment URLs", async () => {
   const projectDir = await createTempDir("kanna-display-export-")
   const source = path.join(projectDir, "report.txt")
   await writeFile(source, "Report contents")
+  const visualization = path.join(projectDir, "visualization-abc.html")
+  await writeFile(visualization, "<p>Visualization</p>")
   const result = await writeStandaloneTranscriptExport({
     chatId: "chat-1", title: "Report", localPath: projectDir, theme: "light", attachmentMode: "bundle",
-    resolveMediaPath: url => url === "/api/chats/chat-1/media/report.txt" ? source : null,
+    resolveMediaPath: url => url === "/api/chats/chat-1/media/report.txt" ? source : url === "/api/chats/chat-1/media/visualization-abc.html" ? visualization : null,
     messages: [{ _id: "result", createdAt: 1, kind: "tool_result", toolId: "files", content: [
       { type: "attachment", kind: "file", name: "report.txt", url: "/api/chats/chat-1/media/report.txt" },
       { type: "attachment", kind: "image", name: "photo", url: "https://example.com/photo.png" },
+      { type: "visualization", version: 1, title: "Example", height: 360, url: "/api/chats/chat-1/media/visualization-abc.html" },
     ] }],
   }, {
     viewerDistDir,
@@ -248,4 +251,6 @@ test("bundles sent files and preserves external attachment URLs", async () => {
   expect(bundle.messages[0].content[0].url).toBe("./attachments/report.txt")
   expect(bundle.messages[0].content[1].url).toBe("https://example.com/photo.png")
   expect(await Bun.file(path.join(result.outputDir, "attachments/report.txt")).text()).toBe("Report contents")
+  expect(bundle.messages[0].content[2].url).toBe("./attachments/visualization-abc.html")
+  expect(await Bun.file(path.join(result.outputDir, "attachments/visualization-abc.html")).text()).toBe("<p>Visualization</p>")
 })

@@ -2,9 +2,9 @@ import { useRef } from "react"
 import { CalendarClock, Loader2, Pencil } from "lucide-react"
 import { toMessagePreview } from "../../../shared/message-preview"
 import { SCHEDULE_TOOL_NAMES } from "../../../shared/tools"
-import type { ScheduleTrigger } from "../../../shared/types"
+import type { ChatSchedule, ScheduleTrigger } from "../../../shared/types"
 import { cn } from "../../lib/utils"
-import { useChatSchedules } from "../chat-ui/chat-reference"
+import { useChatSchedules, type ChatSchedulesValue } from "../chat-ui/chat-reference"
 import {
   formatScheduleState,
   formatScheduleTrigger,
@@ -14,7 +14,7 @@ import {
 } from "../chat-ui/widgets/SchedulesWidget"
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../ui/context-menu"
 import { ListHoverCard } from "../ui/list-hover-card"
-import { text, TOOL_CARD_CAPTION_CLASS, TOOL_CARD_CLASS, TOOL_CARD_WIDTH_CLASS, toolCardErrorText, useToolCardPayload } from "./tool-card"
+import { text, TOOL_CARD_CAPTION_CLASS, TOOL_CARD_CLASS, TOOL_CARD_WIDTH_CLASS, toolCardClasses, toolCardErrorText, useToolCardPayload } from "./tool-card"
 import type { ProcessedToolCall } from "./types"
 
 /**
@@ -58,8 +58,6 @@ export function ScheduleToolMessage({ message }: { message: ScheduleToolCall }) 
   const deleted = message.toolName === "delete_schedule"
   const scheduleId = text(result?.scheduleId) ?? text(result?.deleted) ?? text(input.scheduleId)
   const schedule = !deleted && scheduleId ? context?.schedules.find((candidate) => candidate.id === scheduleId) ?? null : null
-  const containerRef = useRef<HTMLDivElement | null>(null)
-  const now = useMinuteClock(Boolean(schedule?.enabled && schedule.nextRunAt != null))
 
   if (message.isError) {
     return <p role="alert" className="text-sm text-destructive">{toolCardErrorText(rawResult, "The schedule could not be changed.")}</p>
@@ -88,24 +86,42 @@ export function ScheduleToolMessage({ message }: { message: ScheduleToolCall }) 
     )
   }
 
-  const Icon = TRIGGER_ICON[schedule.trigger.kind]
-  const on = schedule.enabled && schedule.nextRunAt != null
   const caption = [verb, formatScheduleTrigger(schedule.trigger), toMessagePreview(schedule.content)].filter(Boolean).join(" · ")
+  return <ScheduleCardBox schedule={schedule} context={context} caption={caption} />
+}
+
+/**
+ * A live schedule's card: the row, its hover card with the recent runs, and
+ * Edit. A tool call's card is one use. The other is a message the schedule
+ * sent, which names it with the same card as a quote (SourcedMessage).
+ */
+export function ScheduleCardBox({ schedule, context, caption, quote = false }: {
+  schedule: ChatSchedule
+  context: ChatSchedulesValue
+  caption: string
+  quote?: boolean
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const on = schedule.enabled && schedule.nextRunAt != null
+  const now = useMinuteClock(on)
+  const Icon = TRIGGER_ICON[schedule.trigger.kind]
+  const classes = toolCardClasses(quote)
   const edit = () => context.onEdit(schedule)
 
   return (
-    <div ref={containerRef} className={TOOL_CARD_WIDTH_CLASS}>
+    <div ref={containerRef} className={classes.width}>
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div
             // What the hover card finds the card under the pointer by.
             data-row-key={schedule.id}
             className={cn(
-              TOOL_CARD_CLASS,
+              classes.box,
               // Lit under the pointer and while its hover card is up, as a
               // chat's card is. It does not give under a press: there is
               // nothing a press does.
-              "select-none hover:border-muted-foreground/40 data-[hover-card-open]:border-muted-foreground/40",
+              classes.lit,
+              "select-none",
             )}
           >
             <div className="flex min-w-0 items-center gap-2.5">

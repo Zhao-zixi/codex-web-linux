@@ -278,6 +278,7 @@ function getReplayEventPriority(event: StoreEvent) {
     case "chat_files_touched":
     case "chat_last_message_at_set":
     case "chat_report_owed_set":
+    case "chat_parent_set":
       return 9
     case "chat_pin_set":
     case "chat_deleted":
@@ -780,8 +781,23 @@ export class EventStore {
         if (!chat) break
         // Bookkeeping between two chats, not activity in this one: `updatedAt`
         // stays put so the sidebar does not reorder.
-        if (event.owed) chat.reportOwed = true
-        else delete chat.reportOwed
+        if (event.owed) {
+          chat.reportOwed = true
+          if (event.reportedThrough !== undefined) chat.reportedThrough = event.reportedThrough
+        } else {
+          delete chat.reportOwed
+          delete chat.reportedThrough
+        }
+        break
+      }
+      case "chat_parent_set": {
+        const chat = this.state.chatsById.get(event.chatId)
+        if (!chat) break
+        // Like the report flag, a change between two chats: `updatedAt` stays put.
+        if (event.parentChatId) chat.parentChatId = event.parentChatId
+        else delete chat.parentChatId
+        if (event.parentChatId && event.adopted) chat.adopted = true
+        else delete chat.adopted
         break
       }
       case "schedule_set": {
@@ -1833,6 +1849,44 @@ export class EventStore {
       timestamp: Date.now(),
       chatId,
       owed,
+    }
+    await this.append(this.chatsLogPath, event)
+  }
+
+  /**
+   * Records that the parent has this sub-chat's reply up to the turn that
+   * ended at `through`, and is still owed what comes after. See
+   * `ChatRecord.reportedThrough`.
+   */
+  async setReportedThrough(chatId: string, through: number) {
+    const chat = this.requireChat(chatId)
+    if (chat.reportOwed && chat.reportedThrough === through) return
+    const event: ChatEvent = {
+      v: STORE_VERSION,
+      type: "chat_report_owed_set",
+      timestamp: Date.now(),
+      chatId,
+      owed: true,
+      reportedThrough: through,
+    }
+    await this.append(this.chatsLogPath, event)
+  }
+
+  /**
+   * Moves a chat under another parent, or under none. `adopted` says whether
+   * the parent took the chat on or started it. See `ChatRecord.adopted`.
+   */
+  async setChatParent(chatId: string, parent: { parentChatId: string; adopted: boolean } | null) {
+    const chat = this.requireChat(chatId)
+    const adopted = Boolean(parent?.adopted)
+    if ((chat.parentChatId ?? null) === (parent?.parentChatId ?? null) && Boolean(chat.adopted) === adopted) return
+    const event: ChatEvent = {
+      v: STORE_VERSION,
+      type: "chat_parent_set",
+      timestamp: Date.now(),
+      chatId,
+      parentChatId: parent?.parentChatId ?? null,
+      adopted,
     }
     await this.append(this.chatsLogPath, event)
   }

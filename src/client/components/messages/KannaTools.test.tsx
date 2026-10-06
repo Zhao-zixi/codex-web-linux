@@ -73,3 +73,21 @@ test("chart aliases filter category columns and CSV escapes quotes", () => {
   expect(resolveChartKeys(chart)).toEqual({ xKey: "month", keys: ["value"] })
   expect(csvCell('A "quoted", value')).toBe('"A ""quoted"", value"')
 })
+
+test("visualizations stay inline between Markdown messages without a tool card", () => {
+  const entries: TranscriptEntry[] = [
+    { _id: "before", createdAt: 0, kind: "assistant_text", text: "Here is the relationship." },
+    { _id: "visualization", createdAt: 1, kind: "tool_call", tool: normalizeToolCall({ toolName: "show_visualization", toolId: "viz", input: { title: "Relationship", html: "<svg></svg>" } }) },
+    { _id: "visualization-result", createdAt: 2, kind: "tool_result", toolId: "viz", content: [{ type: "visualization", version: 1, title: "Relationship", height: 360, url: "/api/chats/chat-1/media/visualization-abc.html" }] },
+    { _id: "after", createdAt: 3, kind: "assistant_text", text: "Move the slider to compare." },
+  ]
+  const messages = processTranscriptMessages(entries)
+  const rows = buildResolvedTranscriptRows(messages, { isLoading: false, latestToolIds: getLatestToolIds(messages) })
+  expect(rows.every(row => row.kind !== "tool-group")).toBe(true)
+  const html = renderToStaticMarkup(<>{rows.map(row => <KannaTranscriptRow key={row.id} row={row} onToolGroupExpandedChange={() => {}} onAskUserQuestionSubmit={() => {}} onExitPlanModeConfirm={() => {}} />)}</>)
+  expect(html).toContain("Loading visualization")
+  expect(html).not.toContain("chart-card")
+  expect(html).not.toContain("show_visualization")
+  expect(html.indexOf("Here is the relationship")).toBeLessThan(html.indexOf("Loading visualization"))
+  expect(html.indexOf("Loading visualization")).toBeLessThan(html.indexOf("Move the slider"))
+})

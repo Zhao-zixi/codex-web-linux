@@ -209,7 +209,7 @@ async function prepareStandaloneMessages(
     // a request against a server that is not there.
     if (message.kind === "tool_result" && Array.isArray(message.content)) {
       for (const block of message.content as Array<{ type?: unknown; url?: unknown }>) {
-        if (!block || typeof block !== "object" || (block.type !== "image" && block.type !== "attachment") || typeof block.url !== "string" || !block.url) {
+        if (!block || typeof block !== "object" || (block.type !== "image" && block.type !== "attachment" && block.type !== "visualization") || typeof block.url !== "string" || !block.url) {
           continue
         }
         if (/^https?:\/\//.test(block.url)) continue

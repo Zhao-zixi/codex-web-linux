@@ -44,4 +44,13 @@ export function isProcessingStatus(status?: string) {
   return status === "starting" || status === "running" || status === "waiting_for_user"
 }
 
+/**
+ * The chat has no turn of its own in flight, so a send starts one at once and
+ * the "starting" shown meanwhile is the client's to supply. A chat waiting on
+ * a subagent is one of these: the work it waits on is not its turn.
+ */
+export function hasNoTurnStatus(status?: string) {
+  return status === "idle" || status === "waiting_on_subagent"
+}
+
 export const canCancelStatus = isProcessingStatus

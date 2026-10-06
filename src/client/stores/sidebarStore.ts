@@ -100,6 +100,27 @@ export function useProjectIdForChat(chatId: string | null): string | null {
   })
 }
 
+/**
+ * The chat whose agent this chat reports to, or null for a chat of the user's
+ * own. Read live rather than from how the chat began: the link can be moved
+ * to another chat after the fact. A string, so a subscriber hears about a
+ * change of parent and nothing else in the snapshot.
+ */
+export function useParentChatId(chatId: string | null): string | null {
+  return useSidebarStore((state) => parentChatIdOf(state.data, chatId))
+}
+
+/** `useParentChatId` on a snapshot. An archived sub-chat still has its parent. */
+export function parentChatIdOf(data: SidebarData, chatId: string | null): string | null {
+  if (!chatId) return null
+  for (const group of data.projectGroups) {
+    const chat = group.chats.find((candidate) => candidate.chatId === chatId)
+      ?? group.archivedChats?.find((candidate) => candidate.chatId === chatId)
+    if (chat) return chat.parentChatId ?? null
+  }
+  return null
+}
+
 export function useProjectRepoUrl(projectId: string | null): string | undefined {
   return useSidebarStore((state) => (
     projectId

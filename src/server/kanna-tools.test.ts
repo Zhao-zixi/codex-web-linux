@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { z } from "zod"
 import { validateToolArguments } from "@mariozechner/pi-ai"
 import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises"
@@ -15,7 +15,10 @@ import { parseTranscriptMediaUrl, getTranscriptMediaDir, retargetEntryMediaUrls 
 import { EventStore } from "./event-store"
 import { splitTranscriptEntry } from "./transcript-payloads"
 
-const chart = { title: "Sales", description: "Sales by month", type: "bar", data: [{ month: "Jan", revenue: 10 }, { month: "Feb", revenue: 20 }] }
+const visualization = { title: "Sales", html: '<svg aria-label="Sales"><text>Jan: 10, Feb: 20</text></svg>' }
+let testDataDir: string
+beforeEach(async () => { testDataDir = await mkdtemp(path.join(tmpdir(), "kanna-tools-")) })
+afterEach(async () => { await rm(testDataDir, { recursive: true, force: true }) })
 const attachments = { attachments: [{ url: "https://example.com/chart.png" }, { url: "https://example.com/report.pdf" }] }
 const inputTool: KannaToolDefinition = {
   name: "test_input", description: "Test input", schema: z.strictObject({}), waitsForUser: true,
@@ -24,7 +27,7 @@ const inputTool: KannaToolDefinition = {
     return { content: [{ type: "text", text: value }], structuredContent: { answers: { value: [value] } } }
   },
 }
-function setup(dataDir?: string, definitions?: readonly KannaToolDefinition[]) {
+function setup(dataDir: string = testDataDir, definitions?: readonly KannaToolDefinition[]) {
   const entries: TranscriptEntry[] = []
   const replies: Array<(value: unknown) => void> = []
   const runtime = new KannaToolRuntime({ chatId: "chat-1", cwd: dataDir ?? "/project", dataDir,
@@ -54,25 +57,27 @@ describe("shared Kanna display tools", () => {
       { type: "attachment", url: "https://example.com/report.pdf", name: "report.pdf", kind: "file", mimeType: "application/pdf", size: null },
     ])
   })
-  test("replaces demo tools and keeps chart data available in transcript headers", async () => {
+  test("replaces show_chart with a general visualization tool and keeps only metadata in headers", async () => {
     expect(KANNA_TOOL_NAMES).toEqual([
-      "show_chart", "send_attachments", "generate_images",
+      "show_visualization", "send_attachments", "generate_images",
       "get_context", "list_chats", "read_chat", "create_chat", "fork_chat", "send_message", "wait_for_chats",
       "cancel_chat", "update_chat", "update_queued_message", "set_schedule", "list_schedules", "delete_schedule",
     ])
     const { runtime, entries } = setup()
-    expect(await runtime.execute("show_chart", chart)).toMatchObject({ structuredContent: { displayed: true } })
+    expect(await runtime.execute("show_visualization", visualization)).toMatchObject({ structuredContent: { displayed: true } })
     expect(entries.map(entry => entry.kind)).toEqual(["tool_call", "tool_result"])
-    expect(entries[0]).toMatchObject({ tool: { toolKind: "display", input: { payload: { xAxisKey: "month", dataKeys: ["revenue"] } } } })
+    expect(entries[0]).toMatchObject({ tool: { toolKind: "display", input: { payload: { title: "Sales" } } } })
     expect(splitTranscriptEntry(entries[0]!, () => true).payload).toBeNull()
+    expect(JSON.stringify(entries)).not.toContain(visualization.html)
+    expect(await runtime.execute("show_chart", {})).toMatchObject({ isError: true })
     expect(await runtime.execute("tool_test_smiley", {})).toMatchObject({ isError: true })
     expect(await runtime.execute("tool_test_input", {})).toMatchObject({ isError: true })
   })
-  test("rejects invalid chart series and negative pie values", async () => {
+  test("rejects ambiguous, empty, and invalid visualization inputs", async () => {
     const { runtime } = setup()
-    expect(await runtime.execute("show_chart", { ...chart, data: [{ month: "Jan" }] })).toMatchObject({ isError: true })
-    expect(await runtime.execute("show_chart", { ...chart, type: "pie", data: [{ month: "Jan", revenue: -1 }] })).toMatchObject({ isError: true })
-    expect(await runtime.execute("show_chart", { ...chart, type: "unknown" })).toMatchObject({ isError: true })
+    for (const input of [{ title: "Empty" }, { ...visualization, path: "also.html" }, { ...visualization, html: "" }, { ...visualization, height: -1 }]) {
+      expect(await runtime.execute("show_visualization", input)).toMatchObject({ isError: true })
+    }
   })
   test("resolves media types and rejects unsafe URLs or ambiguous sources", async () => {
     const { runtime, entries } = setup()
@@ -110,7 +115,7 @@ describe("shared Kanna display tools", () => {
       const runtime = new KannaToolRuntime({ chatId: chat.id, cwd: dir, dataDir: dir,
         emit: entry => store.appendMessage(chat.id, entry).then(() => {}), requestInput: async () => ({}),
       })
-      await runtime.execute("show_chart", chart)
+      await runtime.execute("show_visualization", visualization)
       await runtime.execute("send_attachments", attachments)
       const reopened = new EventStore(dir)
       await reopened.initialize()
@@ -139,7 +144,7 @@ describe("shared Kanna display tools", () => {
   })
   test("suppresses provider copies without dropping other tools", () => {
     const filter = new KannaToolEventFilter()
-    expect(filter.skip({ kind: "tool_call", tool: { toolName: "mcp__kanna__show_chart", toolId: "native-1" } } as TranscriptEntry)).toBe(true)
+    expect(filter.skip({ kind: "tool_call", tool: { toolName: "mcp__kanna__show_visualization", toolId: "native-1" } } as TranscriptEntry)).toBe(true)
     expect(filter.skip({ kind: "tool_result", toolId: "native-1" } as TranscriptEntry)).toBe(true)
     expect(filter.skip({ kind: "tool_result", toolId: "other" } as TranscriptEntry)).toBe(false)
   })
@@ -152,7 +157,7 @@ describe("shared Kanna display tools", () => {
     await client.connect(clientTransport)
     try {
       expect((await client.listTools()).tools.map(tool => tool.name)).toEqual(KANNA_TOOL_NAMES)
-      expect(await client.callTool({ name: "show_chart", arguments: chart })).toMatchObject({ structuredContent: { displayed: true } })
+      expect(await client.callTool({ name: "show_visualization", arguments: visualization })).toMatchObject({ structuredContent: { displayed: true } })
       expect(await client.callTool({ name: "send_attachments", arguments: attachments })).toMatchObject({ structuredContent: { displayed: true } })
     } finally { runtime.abort(); await client.close(); await server.instance.close() }
   })
@@ -160,25 +165,22 @@ describe("shared Kanna display tools", () => {
     const { runtime } = setup()
     const tools = createPiKannaTools(runtime)
     expect(tools.map(tool => tool.name)).toEqual(KANNA_TOOL_NAMES)
-    for (const [index, input] of [chart, attachments].entries()) {
+    for (const [index, input] of [visualization, attachments].entries()) {
       const tool = tools[index]!
       const validated = validateToolArguments(tool, { type: "toolCall", id: "pi-1", name: tool.name, arguments: input })
       expect(await tool.execute("pi-1", validated, undefined, undefined, {} as never)).toMatchObject({ details: { displayed: true } })
     }
   })
-  test("Pi validation preserves chart numbers, category strings, and missing values", async () => {
+  test("Pi validation preserves HTML and optional sizing", async () => {
     const { runtime, entries } = setup()
-    const tool = createPiKannaTools(runtime)[0]!
-    const input = { ...chart, type: "line", xKey: "n", yKeys: ["value"],
-      data: [{ n: "001", value: 0 }, { n: "002", value: 1 }, { n: "003", value: null }, { n: "004", value: 2.5 }],
-      config: { value: { label: "Fibonacci", color: "#00a6f5" } },
-    }
-    const validated = validateToolArguments(tool, { type: "toolCall", id: "pi-chart", name: tool.name, arguments: input })
+    const tool = createPiKannaTools(runtime).find(tool => tool.name === "show_visualization")!
+    const input = { ...visualization, height: 420, html: '<p data-value="001">0 &lt; 2.5</p>' }
+    const validated = validateToolArguments(tool, { type: "toolCall", id: "pi-viz", name: tool.name, arguments: input })
     expect(validated).toEqual(input)
-    expect(await tool.execute("pi-chart", validated, undefined, undefined, {} as never)).toMatchObject({ details: { displayed: true } })
-    expect(entries[0]).toMatchObject({ tool: { input: { payload: { data: input.data, xAxisKey: "n", dataKeys: ["value"] } } } })
+    expect(await tool.execute("pi-viz", validated, undefined, undefined, {} as never)).toMatchObject({ details: { displayed: true } })
+    expect(entries[0]).toMatchObject({ tool: { input: { payload: { title: "Sales", height: 420 } } } })
     expect(() => validateToolArguments(tool, { type: "toolCall", id: "invalid", name: tool.name,
-      arguments: { ...input, data: [{ n: "001", value: { nested: 1 } }] },
+      arguments: { ...input, html: { nested: true } },
     })).toThrow("Validation failed")
   })
   test("Pi validation keeps the chat tools' optional fields and number types", async () => {
@@ -204,7 +206,7 @@ describe("shared Kanna display tools", () => {
       expect((await fetch(servers[0]!.url, { headers: servers[1]!.headers })).status).toBe(401)
       await client.connect(new StreamableHTTPClientTransport(new URL(servers[0]!.url), { requestInit: { headers: servers[0]!.headers } }))
       expect((await client.listTools()).tools.map(tool => tool.name)).toEqual(KANNA_TOOL_NAMES)
-      expect(await client.callTool({ name: "show_chart", arguments: chart })).toMatchObject({ structuredContent: { displayed: true } })
+      expect(await client.callTool({ name: "show_visualization", arguments: visualization })).toMatchObject({ structuredContent: { displayed: true } })
       expect(first.entries).toHaveLength(2)
       expect(second.entries).toHaveLength(0)
     } finally { await client.close(); for (const server of servers) server.close() }

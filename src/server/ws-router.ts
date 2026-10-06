@@ -262,8 +262,16 @@ export function createWsRouter({
   const resolvedAnalytics = analytics ?? NoopAnalyticsReporter
   const chatCommands = providedChatCommands ?? createChatCommands({ store, agent, analytics: resolvedAnalytics })
 
+  /**
+   * Every chat that is not at rest: a turn in flight, or waiting on a
+   * subagent. The fallback is for test fakes that predate the second.
+   */
+  function getChatStatuses() {
+    return agent.getChatStatuses?.() ?? agent.getActiveStatuses()
+  }
+
   function getProtectedChatIds() {
-    const activeStatuses = agent.getActiveStatuses()
+    const activeStatuses = getChatStatuses()
     const drainingChatIds = typeof agent.getDrainingChatIds === "function"
       ? agent.getDrainingChatIds()
       : new Set<string>()
@@ -379,7 +387,7 @@ export function createWsRouter({
       return cache.sidebar
     }
 
-    const activeStatuses = agent.getActiveStatuses()
+    const activeStatuses = getChatStatuses()
     const drainingChatIds = agent.getDrainingChatIds()
     const pendingToolKinds = new Map<string, string>()
     const pendingUserInputPreviews = new Map<string, string>()
@@ -627,7 +635,7 @@ export function createWsRouter({
         type: "chat",
         data: deriveChatSnapshot(
           store.state,
-          agent.getActiveStatuses(),
+          getChatStatuses(),
           agent.getDrainingChatIds(),
           topic.chatId,
           (chatId) => store.getClientTranscript(chatId),
@@ -662,7 +670,7 @@ export function createWsRouter({
     }
     const data = deriveChatSnapshot(
       store.state,
-      agent.getActiveStatuses(),
+      getChatStatuses(),
       agent.getDrainingChatIds(),
       chatId,
       (id) => store.getClientTranscript(id, fromIndex ?? getEarliestChatWindowStart(id)),

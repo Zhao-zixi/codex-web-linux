@@ -326,8 +326,8 @@ describe("Cursor shared tools", () => {
   test("preserves the MCP tool name from Cursor's nested args", () => {
     const entry = firstEntry(JSON.stringify({
       type: "tool_call", subtype: "started", call_id: "cursor-input",
-      tool_call: { mcpToolCall: { args: { providerIdentifier: "plugin-kanna-tools-kanna", toolName: "show_chart", args: { prompt: "Value" } } } },
+      tool_call: { mcpToolCall: { args: { providerIdentifier: "plugin-kanna-tools-kanna", toolName: "show_visualization", args: { prompt: "Value" } } } },
     }))
-    expect(entry).toMatchObject({ kind: "tool_call", tool: { toolName: "show_chart" } })
+    expect(entry).toMatchObject({ kind: "tool_call", tool: { toolName: "show_visualization" } })
   })
 })

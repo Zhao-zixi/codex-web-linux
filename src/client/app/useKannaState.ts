@@ -5,6 +5,7 @@ import { useShallow } from "zustand/react/shallow"
 import { PROVIDERS, withPiFaveModels, type AgentProvider, type AppSettingsPatch, type AskUserQuestionAnswerMap, type AppSettingsSnapshot, type ChatDiffSnapshot, type FaveModel, type KeybindingsSnapshot, type LlmProviderSnapshot, type LlmProviderValidationResult, type ModelOptions, type ProviderCatalogEntry, type QueuedChatMessage, type StandaloneTranscriptExportCommandResult, type TranscriptEntry, type UpdateSnapshot } from "../../shared/types"
 import { NEW_CHAT_COMPOSER_ID, useChatPreferencesStore } from "../stores/chatPreferencesStore"
 import { useRightSidebarStore } from "../stores/rightSidebarStore"
+import { usePreviewedChatId } from "../stores/viewerStore"
 import { useTerminalLayoutStore } from "../stores/terminalLayoutStore"
 import { getEditorPresetLabel, useTerminalPreferencesStore } from "../stores/terminalPreferencesStore"
 import { useEffectiveEditorPreset } from "../components/open-external-menu"
@@ -26,7 +27,7 @@ import type { OpenLocalLinkTarget } from "../components/messages/shared"
 import { useAppDialog } from "../components/ui/app-dialog"
 import { useTheme } from "../hooks/useTheme"
 import { processTranscriptMessages } from "../lib/parseTranscript"
-import { canCancelStatus, getLatestToolIds, isProcessingStatus } from "./derived"
+import { canCancelStatus, getLatestToolIds, hasNoTurnStatus, isProcessingStatus } from "./derived"
 import {
   getActiveChatSnapshot,
   getMostRecentlyActiveProjectId,
@@ -712,7 +713,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
   const latestToolIds = useMemo(() => getLatestToolIds(messages), [messages])
   const runtime = activeChatSnapshot?.runtime ?? null
   const queuedMessages = activeChatSnapshot?.queuedMessages ?? EMPTY_QUEUED_MESSAGES
-  const optimisticRuntimeStatus = optimisticProcessing?.scopeId === optimisticScopeId && (!runtime || runtime.status === "idle")
+  const optimisticRuntimeStatus = optimisticProcessing?.scopeId === optimisticScopeId && (!runtime || hasNoTurnStatus(runtime.status))
     ? "starting"
     : null
   // The chat's snapshot waits on the server reading the transcript off disk,
@@ -744,7 +745,9 @@ export function useKannaState(activeChatId: string | null): KannaState {
 
   // A chat left mid-turn is followed from the window it was just showing: the
   // chat subscription's cleanup flushes that window before this effect runs.
-  useBackgroundChatSubscriptions(socket, activeChatId, transcriptWindowSizeRef)
+  // Nor the chat in the previewer, which holds a subscription of its own
+  // while it is there (`useChatSession`).
+  useBackgroundChatSubscriptions(socket, activeChatId, transcriptWindowSizeRef, usePreviewedChatId())
 
   const canCancel = canCancelStatus(effectiveRuntimeStatus ?? undefined)
   const isDraining = runtime?.isDraining ?? false
@@ -770,7 +773,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
     if (optimisticProcessing?.scopeId !== optimisticScopeId) {
       return
     }
-    if (runtime?.status && runtime.status !== "idle") {
+    if (runtime?.status && !hasNoTurnStatus(runtime.status)) {
       setOptimisticProcessing(null)
     }
   }, [optimisticProcessing, optimisticScopeId, runtime?.status])
@@ -786,7 +789,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
     if (!optimisticProcessing?.ackedAt || optimisticProcessing.scopeId !== optimisticScopeId) {
       return
     }
-    if (runtime?.status && runtime.status !== "idle") {
+    if (runtime?.status && !hasNoTurnStatus(runtime.status)) {
       return
     }
     const { ackedAt } = optimisticProcessing

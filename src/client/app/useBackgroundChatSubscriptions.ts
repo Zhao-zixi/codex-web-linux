@@ -87,15 +87,17 @@ function followChatInBackground(
 }
 
 /**
- * Hold a subscription on every running chat except the open one, so opening a
- * running chat paints from a current window and the server only has to send
- * what landed since the last background push. The open chat has its own
- * full-rate subscription, and the two never overlap.
+ * Hold a subscription on every running chat except the open ones, so opening
+ * a running chat paints from a current window and the server only has to send
+ * what landed since the last background push. An open chat has its own
+ * full-rate subscription, and the two never overlap. Open means the chat the
+ * page is on, and the one in the previewer beside it (`previewChatId`).
  */
 export function useBackgroundChatSubscriptions(
   socket: KannaSocket,
   activeChatId: string | null,
   windowSizeRef: React.RefObject<number>,
+  previewChatId: string | null = null,
 ) {
   const runningChatIds = useRunningChatIds()
   const followedRef = useRef(new Map<string, { stop: () => void; dropTimer: ReturnType<typeof setTimeout> | null }>())
@@ -104,6 +106,7 @@ export function useBackgroundChatSubscriptions(
     const followed = followedRef.current
     const wanted = new Set(runningChatIds)
     if (activeChatId) wanted.delete(activeChatId)
+    if (previewChatId) wanted.delete(previewChatId)
 
     for (const [chatId, entry] of followed) {
       if (wanted.has(chatId)) {
@@ -111,7 +114,7 @@ export function useBackgroundChatSubscriptions(
         entry.dropTimer = null
         continue
       }
-      if (chatId === activeChatId) {
+      if (chatId === activeChatId || chatId === previewChatId) {
         if (entry.dropTimer !== null) clearTimeout(entry.dropTimer)
         entry.stop()
         followed.delete(chatId)
@@ -130,7 +133,7 @@ export function useBackgroundChatSubscriptions(
         dropTimer: null,
       })
     }
-  }, [activeChatId, runningChatIds, socket, windowSizeRef])
+  }, [activeChatId, previewChatId, runningChatIds, socket, windowSizeRef])
 
   useEffect(() => () => {
     const followed = followedRef.current

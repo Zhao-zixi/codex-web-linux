@@ -1,0 +1,84 @@
+/* The graph view's canvas (ChatGraphCanvas). Loaded with it, after React
+   Flow's own base styles, which these adjust. */
+
+.chat-graph {
+  /* The dot grid is what tells you the canvas moved when you pan across an
+     empty stretch of it. Faint: it is ground, not content. */
+  --xy-background-pattern-dots-color: color-mix(in oklab, var(--color-foreground) 14%, transparent);
+  --xy-edge-stroke: var(--color-border);
+  --xy-edge-stroke-width: 1.5;
+}
+
+/* On the layer and not in the colour above, so the dots' strength is one
+   number to turn whatever they are tinted with. */
+.chat-graph .react-flow__background {
+  opacity: 0.5;
+}
+
+/* A node is placed by the layout, not dragged, and its edges are drawn, not
+   made: a handle is only where an edge meets its node, and shows nothing. */
+.chat-graph .react-flow__handle {
+  width: 1px;
+  height: 1px;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  background: transparent;
+  opacity: 0;
+}
+
+.chat-graph .react-flow__node {
+  cursor: default;
+}
+
+/* An edge to a chat that is working carries more ink than one to a chat at
+   rest, so the live branches of the tree read from far out. A colour change,
+   not marching dashes: it would run all day, on every edge, for nothing a
+   spinner on the node does not already say. */
+.chat-graph .react-flow__edge.chat-graph-edge-live .react-flow__edge-path {
+  stroke: color-mix(in oklab, var(--color-foreground) 45%, transparent);
+}
+
+.chat-graph .react-flow__edge-path {
+  transition: stroke 200ms ease;
+}
+
+/* A chat its parent took on, as against one it started (`ChatGraphNode.adopted`):
+   a broken line for a link that was not there from the start. Still, like
+   every edge here. */
+.chat-graph .react-flow__edge.chat-graph-edge-adopted .react-flow__edge-path {
+  stroke-dasharray: 5 4;
+}
+
+/* A sub-chat arriving. It grows a little out of the point its edge lands on,
+   so it reads as coming from its parent and not from nowhere. Not from
+   nothing, either: 0.96, with the fade doing the rest. */
+@keyframes chat-graph-node-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+
+@keyframes chat-graph-fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.chat-graph-node-enter {
+  animation: chat-graph-node-enter 220ms var(--ease-snappy) backwards;
+  transform-origin: 0 var(--chat-graph-handle-top, 26px);
+}
+
+.chat-graph .react-flow__edge.chat-graph-edge-enter {
+  animation: chat-graph-fade-in 300ms ease-out backwards;
+}
+
+/* Reduced motion keeps the fade, which says "this is new", and drops the
+   growth. */
+@media (prefers-reduced-motion: reduce) {
+  .chat-graph-node-enter {
+    animation-name: chat-graph-fade-in;
+  }
+}

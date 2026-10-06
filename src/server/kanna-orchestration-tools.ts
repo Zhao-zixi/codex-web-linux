@@ -41,7 +41,8 @@ const getContext = z.strictObject({})
 const listChats = z.strictObject({
   projectId: z.string().optional().describe("Only chats in this project."),
   query: z.string().optional().describe("Text to find in titles and each chat's latest messages."),
-  status: z.enum(["idle", "running", "needs_input", "waiting_on_subchats", "completed", "failed", "cancelled"]).optional(),
+  status: z.enum(["idle", "running", "needs_input", "waiting_on_subagent", "waiting_on_subchats", "completed", "failed", "cancelled"]).optional()
+    .describe("waiting_on_subagent and waiting_on_subchats are a chat whose own turn ended while work it handed off is still going: its provider's background tasks, or chats it started."),
   parentChatId: z.string().optional().describe("Only sub-chats of this chat."),
   includeArchived: z.boolean().optional(),
   limit: z.number().int().min(1).max(100).optional().describe("Default 30."),
@@ -75,6 +76,7 @@ const sendMessage = z.strictObject({
   chatId: z.string(),
   message: z.string().min(1),
   delivery: z.enum(["queue", "steer"]).optional().describe("queue (default) starts it now if the chat is idle and after its current turn otherwise. steer interrupts the current turn to deliver it now."),
+  adopt: z.boolean().optional().describe("true adopts the chat: this chat becomes its parent, as if it had started it. Use it when you hand work to an existing chat and need the result. From this message on, its reply arrives here as a message when its turn ends (or through wait_for_chats), it is listed as this chat's sub-chat, and this chat is not finished while that reply is owed. It stays adopted: later messages need no flag, and there is no undo. It is still the user's chat: it stays in their sidebar, and stopping this chat does not stop it, only drops the reply it owes. A chat that had another parent is taken from it, and that parent is told no more results are coming. A chat above this one, in the chain of chats that started it, cannot be adopted. Leave it unset for a message that needs no answer."),
   ...runOptions,
 })
 
@@ -155,7 +157,7 @@ export const ORCHESTRATION_TOOLS: readonly KannaToolDefinition[] = [
   },
   {
     name: "create_chat",
-    description: "Start a new chat with a first message, on any provider and model. Returns at once. By default it is a sub-chat of this one: its result arrives here as a message when it finishes.",
+    description: "Start a new chat with a first message, on any provider and model. Returns at once. By default it is a sub-chat of this one: its reply arrives here as a message when its turn ends. If it is still waiting on work it handed off, the message says so and another follows when that work comes back.",
     schema: createChat,
     async execute(input, context) {
       const { message, title, subchat, projectId, ...run } = createChat.parse(input)
@@ -173,16 +175,16 @@ export const ORCHESTRATION_TOOLS: readonly KannaToolDefinition[] = [
   },
   {
     name: "send_message",
-    description: "Send a message to another chat, as the user would. It starts a turn if the chat is idle and queues behind the current turn otherwise.",
+    description: "Send a message to another chat, as the user would. It starts a turn if the chat is idle and queues behind the current turn otherwise. A chat this one did not start sends nothing back when it finishes, unless this chat adopts it (adopt).",
     schema: sendMessage,
     async execute(input, context) {
-      const { chatId, message, delivery, ...run } = sendMessage.parse(input)
-      return reply(await orchestration(context).sendMessage(context.chatId, { chatId, message, delivery, ...(run as Run) }))
+      const { chatId, message, delivery, adopt, ...run } = sendMessage.parse(input)
+      return reply(await orchestration(context).sendMessage(context.chatId, { chatId, message, delivery, adopt, ...(run as Run) }))
     },
   },
   {
     name: "wait_for_chats",
-    description: "Wait until chats finish, then return each one's status and final reply. Also returns when one stops to ask the user something. A timeout returns what is known so far and stops nothing; call again to keep waiting.",
+    description: "Wait until each chat's turn ends, then return its status and last reply. A chat still waiting on work it handed off (waiting_on_subagent, waiting_on_subchats) returns with that status and its reply so far; wait on it again and the wait holds until its next turn ends. Also returns when one stops to ask the user something. A timeout returns what is known so far and stops nothing; call again to keep waiting.",
     schema: waitForChats,
     async execute(input, context) {
       const { chatIds, mode, timeoutSeconds } = waitForChats.parse(input)

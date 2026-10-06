@@ -1,15 +1,18 @@
-import { useMemo, useRef, type KeyboardEvent } from "react"
+import { createContext, useContext, useMemo, useRef, type KeyboardEvent } from "react"
 import { Loader2, MessageCircle } from "lucide-react"
 import { toMessagePreview } from "../../../shared/message-preview"
+import { isWorkingStatus } from "../../../shared/types"
 import { CHAT_TOOL_NAMES } from "../../../shared/tools"
 import { getThreadDetailLabel } from "../../lib/thread-detail-label"
+import type { SidebarThread } from "../../lib/thread-sections"
 import { cn, normalizeChatId } from "../../lib/utils"
 import { useChatReferenceActions, useSidebarThread } from "../chat-ui/chat-reference"
+import { chatOpenMenuItems } from "../chat-ui/ChatOpenMenuItems"
 import { SidebarChatHoverCard } from "../chat-ui/sidebar/ChatHoverCard"
 import { ThreadRowMenu } from "../chat-ui/sidebar/ThreadRow"
 import { ThreadRowContent } from "../chat-ui/ThreadRowContent"
 import { useNow } from "../chat-ui/widgets/TasksWidget"
-import { text, TOOL_CARD_CAPTION_CLASS, TOOL_CARD_CLASS, TOOL_CARD_WIDTH_CLASS, toolCardErrorText, useToolCardPayload } from "./tool-card"
+import { resultRecord, text, TOOL_CARD_CAPTION_CLASS, toolCardClasses, toolCardErrorText, useToolCardPayload } from "./tool-card"
 import type { ProcessedToolCall } from "./types"
 
 /**
@@ -19,13 +22,14 @@ import type { ProcessedToolCall } from "./types"
  * It is that chat's row, lifted out of the sidebar: the same status glyph,
  * the same title shimmering while it runs, the same right-click menu and the
  * same hover card. The row says how the chat is doing; the line under it says
- * what this call did to it and with what words. A click opens the chat.
+ * what this call did to it and with what words. A click opens the chat in
+ * the previewer beside this one (`useOpenChat`).
  *
  * Its status is live, not a record of the call. A chat started an hour ago
  * that is still running still spins, and one that finished shows that it has.
  */
 
-type ChatToolCall = Extract<ProcessedToolCall, { toolKind: "chat" | "unknown_tool" }>
+export type ChatToolCall = Extract<ProcessedToolCall, { toolKind: "chat" | "unknown_tool" }>
 
 /**
  * Whether a tool call is one this card draws. By kind, and by name for a call
@@ -49,34 +53,144 @@ function describeCall(message: ChatToolCall, input: Record<string, unknown>, res
   return input.subchat === false ? "Started a chat" : "Started a sub-chat"
 }
 
+/** A new chat's id comes back in the result. A message names its chat going in. */
+function chatToolTarget(message: ChatToolCall, input: Record<string, unknown>, result: Record<string, unknown> | null): string | null {
+  return text(result?.chatId) ?? (message.toolName === "send_message" ? text(input.chatId) : null)
+}
+
+/**
+ * The chat a call reached, read without a hook: from the input and result the
+ * call carries inline. Null for a failed call, and for one recorded before
+ * the kind existed, whose input and result are in the payload sidecar.
+ */
+export function inlineChatToolTarget(message: ChatToolCall): string | null {
+  if (message.isError) return null
+  return chatToolTarget(message, message.input.payload ?? {}, resultRecord(message.rawResult))
+}
+
 export function ChatToolMessage({ message }: { message: ChatToolCall }) {
-  const actions = useChatReferenceActions()
   const { input, rawResult, result } = useToolCardPayload(message)
-  // A new chat's id comes back in the result. A message names its chat going in.
-  const chatId = text(result?.chatId) ?? (message.toolName === "send_message" ? text(input.chatId) : null)
-  const thread = useSidebarThread(chatId)
-  const containerRef = useRef<HTMLDivElement | null>(null)
-  const running = thread?.row.status === "running" || thread?.row.status === "starting"
-  const now = useNow(running)
-  // One array for as long as the chat is unchanged: the hover card is memoized on it.
-  const threads = useMemo(() => (thread ? [thread] : []), [thread])
+  const chatId = chatToolTarget(message, input, result)
 
   if (message.isError) {
     return <p role="alert" className="text-sm text-destructive">{toolCardErrorText(rawResult, "The chat could not be reached.")}</p>
   }
 
-  const pending = !message.resultEntryId
   const sent = text(input.message)
-  const caption = [describeCall(message, input, result), sent ? toMessagePreview(sent) : null].filter(Boolean).join(" · ")
-  const captionLine = <p className={TOOL_CARD_CAPTION_CLASS}>{caption}</p>
+  return (
+    <ChatCard
+      chatId={chatId}
+      title={text(result?.title) ?? text(input.title) ?? (sent ? toMessagePreview(sent) : "Chat")}
+      caption={[describeCall(message, input, result), sent ? toMessagePreview(sent) : null].filter(Boolean).join(" · ")}
+      pending={!message.resultEntryId}
+    />
+  )
+}
+
+/**
+ * What a call said to the chat it reached, as one line. For the quote on that
+ * chat's answer. Read without a hook, like `inlineChatToolTarget`.
+ */
+export function inlineChatToolExcerpt(message: ChatToolCall): string | null {
+  const sent = text(message.input.payload?.message)
+  return sent ? toMessagePreview(sent) : null
+}
+
+/** The label on every quote of a chat a message is tied to. See `ChatReplyQuote`. */
+export const REPLY_LABEL = "Replied to"
+
+/**
+ * A chat's row as the quote over a message: the link between two
+ * chats, drawn one way from both ends.
+ *
+ * A parent sends a sub-chat its task, and the sub-chat's report comes back.
+ * Each of those messages quotes the chat at the other end under the same
+ * "Replied to", so a reader who has met the link in one chat knows it in the
+ * other. In the sub-chat it is also the way back to the parent, which no list
+ * of chats offers (ParentChatLink).
+ *
+ * `excerpt` is what was said to the quoted chat, where this transcript holds
+ * the call that said it.
+ */
+export function ChatReplyQuote({ chatId, title, excerpt, interim = false }: {
+  chatId: string | null
+  /** What to call the chat while the sidebar cannot say. */
+  title: string
+  excerpt?: string | null
+  /** The message under the quote is what the chat had to say so far, with more to follow. */
+  interim?: boolean
+}) {
+  const thread = useSidebarThread(chatId)
+  const currentProjectId = useContext(ReplyQuoteProjectContext)
+  return <ChatCard chatId={chatId} title={title} caption={replyCaption(thread, currentProjectId, excerpt, interim)} quote />
+}
+
+/**
+ * What a quote says of a reply its chat sent while still working. About the
+ * message, not the chat: the chat finishes, and this reply stays one it sent
+ * on the way. So not "still working", which the quote's live status mark
+ * already says for as long as it is true and would be wrong here afterwards.
+ */
+export const INTERIM_REPLY_NOTE = "Not final"
+
+/**
+ * The project of the chat being read, for a quote to tell when the chat it
+ * quotes is in another one. Null where that is not known, and then no quote
+ * names a project.
+ */
+export const ReplyQuoteProjectContext = createContext<string | null>(null)
+
+/**
+ * The line under a quoted chat's title: the label, then the things that are
+ * not what a reader would assume, then what the chat was told. The other chat
+ * is usually in this project and usually still open, and a reply is usually
+ * its last word. The excerpt comes last because it is the part that can run
+ * long and be cut.
+ */
+export function replyCaption(
+  thread: (Pick<SidebarThread, "archived" | "projectId"> & { projectLabel: Pick<SidebarThread["projectLabel"], "text"> }) | null,
+  currentProjectId: string | null,
+  excerpt?: string | null,
+  interim = false,
+): string {
+  const parts = [REPLY_LABEL]
+  if (thread && currentProjectId && thread.projectId !== currentProjectId) parts.push(thread.projectLabel.text)
+  if (thread?.archived) parts.push("Archived")
+  if (interim) parts.push(INTERIM_REPLY_NOTE)
+  if (excerpt) parts.push(excerpt)
+  return parts.join(" · ")
+}
+
+/**
+ * The card itself, for a chat known only by its id. A tool call's card is one
+ * use. The other, as a quote, is the chat at the far end of a message
+ * (`ChatReplyQuote`).
+ */
+export function ChatCard({ chatId, title, caption, pending = false, quote = false }: {
+  chatId: string | null
+  /** What to call the chat while the sidebar cannot say. */
+  title: string
+  caption?: string | null
+  /** The call that makes the chat has not returned. */
+  pending?: boolean
+  quote?: boolean
+}) {
+  const actions = useChatReferenceActions()
+  const thread = useSidebarThread(chatId)
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const running = isWorkingStatus(thread?.row.status)
+  const now = useNow(running)
+  // One array for as long as the chat is unchanged: the hover card is memoized on it.
+  const threads = useMemo(() => (thread ? [thread] : []), [thread])
+  const classes = toolCardClasses(quote)
+  const captionLine = caption ? <p className={TOOL_CARD_CAPTION_CLASS}>{caption}</p> : null
 
   // Before the call returns there is no chat to show yet, and after it one
   // the sidebar has not heard of (a snapshot behind, or deleted since). Both
   // draw the same card with what the call itself knows, and nothing to open.
   if (!thread || !actions || !chatId) {
-    const title = text(result?.title) ?? text(input.title) ?? (sent ? toMessagePreview(sent) : "Chat")
     return (
-      <div className={cn(TOOL_CARD_CLASS, TOOL_CARD_WIDTH_CLASS)}>
+      <div className={cn(classes.box, classes.width)}>
         <div className="flex min-w-0 items-center gap-2.5">
           {pending
             ? <Loader2 className="size-3.5 shrink-0 animate-spin text-logo" />
@@ -96,21 +210,30 @@ export function ChatToolMessage({ message }: { message: ChatToolCall }) {
   }
 
   return (
-    <div ref={containerRef} className={TOOL_CARD_WIDTH_CLASS}>
-      <ThreadRowMenu thread={thread} archived={thread.archived} editorLabel={actions.editorLabel} {...actions.menu}>
+    <div ref={containerRef} className={classes.width}>
+      <ThreadRowMenu
+        thread={thread}
+        archived={thread.archived}
+        editorLabel={actions.editorLabel}
+        {...actions.menu}
+        leadingItems={chatOpenMenuItems(thread, actions)}
+      >
         <div
           role="button"
           tabIndex={0}
           // What the hover card finds the card under the pointer by.
           data-chat-id={normalizeChatId(chatId)}
           onClick={open}
+          // The middle button, which `onOpenChat` reads as "in a tab".
+          onAuxClick={(event) => { if (event.button === 1) open() }}
           onKeyDown={onKeyDown}
           className={cn(
-            TOOL_CARD_CLASS,
+            classes.box,
             // The border lights at once, as a row's highlight does, and stays
             // lit while the hover card it opened is up. The press is the only
             // thing that moves: a 1.5% give, in and out on the app's curve.
-            "cursor-pointer select-none outline-none hover:border-muted-foreground/40 data-[hover-card-open]:border-muted-foreground/40 focus-visible:ring-2 focus-visible:ring-ring",
+            classes.lit,
+            "cursor-pointer select-none outline-none focus-visible:ring-2 focus-visible:ring-ring",
             "transition-[scale] duration-150 ease-snappy active:scale-[0.985] motion-reduce:transition-none motion-reduce:active:scale-100",
           )}
         >

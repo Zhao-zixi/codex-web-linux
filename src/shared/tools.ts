@@ -1,3 +1,4 @@
+import { VISUALIZATION_TOOL_NAME } from "./visualization"
 import { ATTACHMENT_TOOL_NAMES, resolveChartKeys, type ChartToolPayload } from "./display-tools"
 import type {
   AskUserQuestionItem,
@@ -27,6 +28,12 @@ export function normalizeToolCall(args: {
   input: Record<string, unknown>
 }): NormalizedToolCall {
   const { toolName, toolId, input } = args
+
+  if (toolName === VISUALIZATION_TOOL_NAME) {
+    // Executable HTML lives in immutable media, not duplicated into every transcript update.
+    const payload = { title: input.title, height: input.height }
+    return { kind: "tool", toolKind: "display", toolName, toolId, input: { payload }, rawInput: payload }
+  }
 
   if (toolName === "show_chart" || ATTACHMENT_TOOL_NAMES.includes(toolName)) {
     // Native clients cannot depend on the order of keys in a JSON object.

@@ -2527,3 +2527,265 @@ describe("Codex shared tools", () => {
     })
   }
 })
+
+/**
+ * The frames here are cut down from what `codex app-server` 0.159 sent when a
+ * thread spawned an agent: the agent's thread reports on the chat's
+ * connection, under its own thread id.
+ */
+describe("Codex spawned agents", () => {
+  const ROOT = "thread-root"
+  const AGENT = "thread-agent"
+
+  /** A session whose turn the test writes frames into by hand. */
+  async function startSpawningTurn() {
+    const process = new FakeCodexProcess((message, child) => {
+      if (message.method === "initialize") {
+        child.writeServerMessage({ id: message.id, result: { userAgent: "codex-test" } })
+      } else if (message.method === "thread/start") {
+        child.writeServerMessage({ id: message.id, result: { thread: { id: ROOT }, model: "gpt-5.4", reasoningEffort: "high" } })
+      } else if (message.method === "turn/start") {
+        child.writeServerMessage({ id: message.id, result: { turn: { id: "turn-root", status: "inProgress", error: null } } })
+      } else if (message.method === "turn/interrupt") {
+        child.writeServerMessage({ id: message.id, result: {} })
+      }
+    })
+    const manager = new CodexAppServerManager({ spawnProcess: () => process as never })
+    const updates: any[] = []
+    manager.setTaskActivityListener((chatId, update) => updates.push({ chatId, ...update }))
+    await manager.startSession({ chatId: "chat-1", cwd: "/tmp/project", model: "gpt-5.4", sessionToken: null })
+    const turn = await manager.startTurn({
+      chatId: "chat-1",
+      model: "gpt-5.4",
+      content: "spawn an agent",
+      planMode: false,
+      onToolRequest: async () => ({}),
+    })
+    const events = collectStream(turn.stream)
+    const send = (method: string, params: unknown) => process.writeServerMessage({ method, params })
+    /** Lets the frames written so far be read. */
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 20))
+    return { process, manager, updates, events, send, settle }
+  }
+
+  const spawned = (threadId = AGENT, agentPath = "/root/audit_parser") => ({
+    threadId: ROOT,
+    turnId: "turn-root",
+    item: { type: "subAgentActivity", id: `call-${threadId}`, kind: "started", agentThreadId: threadId, agentPath },
+  })
+  const turnOf = (threadId: string, id: string, status: string) => ({ threadId, turn: { id, status, error: null } })
+  const rootCompleted = () => turnOf(ROOT, "turn-root", "completed")
+
+  test("an agent's row runs for as long as its own turn, past the end of the turn that spawned it", async () => {
+    const { updates, events, send, settle, manager } = await startSpawningTurn()
+    send("item/started", spawned())
+    send("thread/status/changed", { threadId: AGENT, status: { type: "idle" } })
+    send("item/completed", spawned())
+    await settle()
+    // Named, but no turn of its own yet, so no row: a row must have an end coming.
+    expect(updates).toEqual([])
+
+    send("thread/status/changed", { threadId: AGENT, status: { type: "active", activeFlags: [] } })
+    send("turn/started", turnOf(AGENT, "turn-agent", "inProgress"))
+    await settle()
+    expect(updates).toEqual([
+      { chatId: "chat-1", kind: "started", id: AGENT, type: "subagent", label: "audit parser", stoppable: true },
+    ])
+
+    // The chat's turn ends first, as it does when the model does not wait.
+    send("item/completed", { threadId: ROOT, turnId: "turn-root", item: { type: "agentMessage", id: "m1", text: "spawned." } })
+    send("turn/completed", rootCompleted())
+    const transcript = (await events).filter((event) => event.type === "transcript").map((event) => event.entry)
+    expect(transcript.at(-1)).toMatchObject({ kind: "result", subtype: "success" })
+    expect(updates).toHaveLength(1)
+
+    send("thread/status/changed", { threadId: AGENT, status: { type: "idle" } })
+    send("turn/completed", turnOf(AGENT, "turn-agent", "completed"))
+    // Codex says it a second time on the chat's own thread. Once is enough.
+    send("item/completed", {
+      threadId: ROOT,
+      turnId: "turn-root",
+      item: { type: "subAgentActivity", id: "subagent-completed-turn-agent", kind: "completed", agentThreadId: AGENT, agentPath: "/root/audit_parser" },
+    })
+    await settle()
+    expect(updates.slice(1)).toEqual([{ chatId: "chat-1", kind: "stopped", id: AGENT, failed: false }])
+    manager.stopAll()
+  })
+
+  test("what an agent says and runs stays out of the chat's turn, and its end does not end the chat's", async () => {
+    const { updates, events, send, manager } = await startSpawningTurn()
+    send("item/completed", spawned())
+    send("turn/started", turnOf(AGENT, "turn-agent", "inProgress"))
+    // The chat is waiting on the agent while the agent works.
+    send("item/started", { threadId: AGENT, turnId: "turn-agent", item: { type: "commandExecution", id: "cmd-1", command: "sleep 8", cwd: "/tmp", status: "inProgress" } })
+    send("thread/tokenUsage/updated", { threadId: AGENT, turnId: "turn-agent", tokenUsage: { total: { inputTokens: 9, outputTokens: 1, totalTokens: 10 }, modelContextWindow: 100 } })
+    send("item/completed", { threadId: AGENT, turnId: "turn-agent", item: { type: "agentMessage", id: "m-agent", text: "DONE" } })
+    send("turn/completed", turnOf(AGENT, "turn-agent", "completed"))
+    // Only now does the chat's own turn finish.
+    send("item/completed", { threadId: ROOT, turnId: "turn-root", item: { type: "agentMessage", id: "m-root", text: "The agent said DONE." } })
+    send("turn/completed", rootCompleted())
+
+    const transcript = (await events).filter((event) => event.type === "transcript").map((event) => event.entry)
+    expect(transcript.filter((entry) => entry.kind === "assistant_text").map((entry) => entry.text)).toEqual(["The agent said DONE."])
+    expect(transcript.some((entry) => entry.kind === "tool_call")).toBe(false)
+    expect(transcript.some((entry) => entry.kind === "context_window_updated")).toBe(false)
+    expect(transcript.filter((entry) => entry.kind === "result")).toHaveLength(1)
+    expect(updates.map((update) => update.kind)).toEqual(["started", "stopped"])
+    manager.stopAll()
+  })
+
+  test("a failed or interrupted agent closes its row, and so does one whose thread goes away", async () => {
+    const { updates, send, settle, manager } = await startSpawningTurn()
+    const outcomes: Array<[string, () => void, object]> = [
+      ["failed", () => send("turn/completed", turnOf("a-failed", "t", "failed")), { failed: true }],
+      ["interrupted", () => send("turn/completed", turnOf("a-interrupted", "t", "interrupted")), { failed: false, stopped: true }],
+      ["error", () => send("error", { threadId: "a-error", turnId: "t", willRetry: false, error: { message: "usage limit" } }), { failed: true }],
+      ["closed", () => send("thread/closed", { threadId: "a-closed" }), { failed: false, stopped: true }],
+      ["crashed", () => send("thread/status/changed", { threadId: "a-crashed", status: { type: "systemError" } }), { failed: true }],
+    ]
+    for (const [name, end, expected] of outcomes) {
+      const threadId = `a-${name}`
+      send("item/completed", spawned(threadId))
+      send("turn/started", turnOf(threadId, "t", "inProgress"))
+      end()
+      await settle()
+      expect(updates.at(-1)).toEqual({ chatId: "chat-1", kind: "stopped", id: threadId, ...expected })
+    }
+    // None of it touched the chat's own session: a retrying error on an agent
+    // is its own business, and the chat's turn is still open.
+    send("error", { threadId: "a-error", turnId: "t", willRetry: true, error: { message: "Reconnecting... 1/5" } })
+    send("turn/completed", rootCompleted())
+    await settle()
+    expect(updates).toHaveLength(outcomes.length * 2)
+    manager.stopAll()
+  })
+
+  test("a connection that drops closes every agent still running", async () => {
+    for (const drop of ["exit", "stop"] as const) {
+      const { process, updates, send, settle, manager } = await startSpawningTurn()
+      send("item/completed", spawned("a-1"))
+      send("turn/started", turnOf("a-1", "t-1", "inProgress"))
+      send("item/completed", spawned("a-2"))
+      send("turn/started", turnOf("a-2", "t-2", "inProgress"))
+      send("turn/completed", turnOf("a-2", "t-2", "completed"))
+      send("turn/completed", rootCompleted())
+      await settle()
+
+      if (drop === "exit") process.closeWithCode(1)
+      else manager.stopSession("chat-1")
+      await settle()
+      // Only the one still going, and as cut off rather than finished.
+      expect(updates.at(-1)).toEqual({ chatId: "chat-1", kind: "stopped", id: "a-1", failed: true })
+      expect(updates.filter((update) => update.kind === "stopped")).toHaveLength(2)
+      manager.stopAll()
+    }
+  })
+
+  test("an agent that is sent more work runs again, and a late report of its last turn does not end the new one", async () => {
+    const { updates, send, settle, manager } = await startSpawningTurn()
+    send("item/completed", spawned())
+    send("turn/started", turnOf(AGENT, "turn-1", "inProgress"))
+    send("turn/completed", turnOf(AGENT, "turn-1", "completed"))
+    send("turn/started", turnOf(AGENT, "turn-2", "inProgress"))
+    send("item/completed", {
+      threadId: ROOT,
+      turnId: "turn-root",
+      item: { type: "subAgentActivity", id: "subagent-completed-turn-1", kind: "completed", agentThreadId: AGENT, agentPath: "/root/audit_parser" },
+    })
+    await settle()
+    expect(updates.map((update) => update.kind)).toEqual(["started", "stopped", "started"])
+    manager.stopAll()
+  })
+
+  test("the spawn and the agent's first turn can arrive in either order", async () => {
+    const { updates, send, settle, manager } = await startSpawningTurn()
+    send("turn/started", turnOf(AGENT, "turn-agent", "inProgress"))
+    await settle()
+    // A thread nothing has named is not known to be an agent of this chat's.
+    expect(updates).toEqual([])
+    send("item/started", spawned())
+    await settle()
+    expect(updates.map((update) => [update.kind, update.id])).toEqual([["started", AGENT]])
+    manager.stopAll()
+  })
+
+  test("the older spawnAgent call names its agents the same way", async () => {
+    const { updates, events, send, manager } = await startSpawningTurn()
+    send("item/completed", {
+      threadId: ROOT,
+      turnId: "turn-root",
+      item: {
+        type: "collabAgentToolCall",
+        id: "exec-1",
+        tool: "spawnAgent",
+        status: "completed",
+        senderThreadId: ROOT,
+        receiverThreadIds: [AGENT],
+        prompt: "Read package.json and report its scripts.\nDo not modify files.",
+        agentsStates: { [AGENT]: { status: "pendingInit", message: null } },
+      },
+    })
+    send("turn/started", turnOf(AGENT, "turn-agent", "inProgress"))
+    send("turn/completed", turnOf(AGENT, "turn-agent", "completed"))
+    send("turn/completed", rootCompleted())
+    await events
+    expect(updates).toEqual([
+      {
+        chatId: "chat-1",
+        kind: "started",
+        id: AGENT,
+        type: "subagent",
+        label: "Read package.json and report its scripts.",
+        description: "Read package.json and report its scripts.\nDo not modify files.",
+        toolUseId: "exec-1",
+        stoppable: true,
+      },
+      { chatId: "chat-1", kind: "stopped", id: AGENT, failed: false },
+    ])
+    manager.stopAll()
+  })
+
+  test("an agent's agent is the chat's too", async () => {
+    const { updates, send, settle, manager } = await startSpawningTurn()
+    send("item/completed", spawned())
+    send("turn/started", turnOf(AGENT, "turn-agent", "inProgress"))
+    send("item/started", {
+      threadId: AGENT,
+      turnId: "turn-agent",
+      item: { type: "subAgentActivity", id: "call-nested", kind: "started", agentThreadId: "thread-nested", agentPath: "/root/audit_parser/check_tests" },
+    })
+    send("turn/started", turnOf("thread-nested", "turn-nested", "inProgress"))
+    await settle()
+    expect(updates.map((update) => [update.kind, update.id, update.label])).toEqual([
+      ["started", AGENT, "audit parser"],
+      ["started", "thread-nested", "check tests"],
+    ])
+    manager.stopAll()
+  })
+
+  test("stopping an agent interrupts its own turn on its own thread", async () => {
+    const { process, send, settle, manager } = await startSpawningTurn()
+    send("item/completed", spawned())
+    send("turn/started", turnOf(AGENT, "turn-agent", "inProgress"))
+    await settle()
+
+    expect(await manager.stopAgent("chat-1", AGENT)).toBe(true)
+    expect(process.messages.at(-1)).toMatchObject({ method: "turn/interrupt", params: { threadId: AGENT, turnId: "turn-agent" } })
+    // Nothing to stop: not an agent, or one between turns.
+    expect(await manager.stopAgent("chat-1", "thread-unknown")).toBe(false)
+    send("turn/completed", turnOf(AGENT, "turn-agent", "interrupted"))
+    await settle()
+    expect(await manager.stopAgent("chat-1", AGENT)).toBe(false)
+    manager.stopAll()
+  })
+
+  test("an agent's thread starting does not become the chat's thread", async () => {
+    const { process, send, manager, events } = await startSpawningTurn()
+    send("thread/started", { thread: { id: AGENT, parentThreadId: ROOT } })
+    send("turn/completed", rootCompleted())
+    await events
+    await manager.startTurn({ chatId: "chat-1", model: "gpt-5.4", content: "next", planMode: false, onToolRequest: async () => ({}) })
+    expect(process.messages.at(-1)).toMatchObject({ method: "turn/start", params: { threadId: ROOT } })
+    manager.stopAll()
+  })
+})

@@ -121,6 +121,15 @@ describe("flattenVisibleProjectGroups", () => {
     expect(projects.map((project) => project.projectId)).toEqual(["project-b"])
   })
 
+  test("a project opens on an adopted chat, and never on a sub-chat", () => {
+    const data = makeSidebarData()
+    data.projectGroups[0]!.chats.push(makeChatRow({ chatId: "child", title: "Parser audit", parentChatId: "chat-1", lastMessageAt: 990 }))
+    const kanna = () => flattenVisibleProjectGroups(data.projectGroups).find((project) => project.projectId === "project-a")
+    expect(kanna()?.mostRecentChatId).toBe("chat-2")
+    data.projectGroups[0]!.chats.push(makeChatRow({ chatId: "mine", title: "Release notes", parentChatId: "chat-1", adopted: true, lastMessageAt: 995 }))
+    expect(kanna()?.mostRecentChatId).toBe("mine")
+  })
+
   test("sorts by most recent chat activity, descending", () => {
     // project-a's newest chat is at 900, project-b's at 600.
     const projects = flattenVisibleProjectGroups(makeSidebarData().projectGroups)

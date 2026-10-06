@@ -1203,6 +1203,61 @@ describe("ws-router", () => {
     expect(wsB.sent).toHaveLength(1)
   })
 
+  test("a chat that starts waiting on a subagent is pushed once, to the sidebar and to the chat", async () => {
+    const state = createEmptyState()
+    state.projectsById.set("project-1", { id: "project-1", localPath: "/tmp/project", title: "Project", createdAt: 1, updatedAt: 1 })
+    state.chatsById.set("chat-1", {
+      id: "chat-1",
+      projectId: "project-1",
+      title: "Chat",
+      createdAt: 1,
+      updatedAt: 1,
+      unread: false,
+      provider: null,
+      planMode: false,
+      autoPlan: false,
+      sessionToken: null,
+      lastTurnOutcome: null,
+    })
+    // No turn is in flight throughout: only the wider read knows of the wait.
+    const waiting = new Map<string, "waiting_on_subagent">()
+    const router = createTestRouter({
+      store: createFakeStore({
+        state,
+        getChat: (chatId: string) => state.chatsById.get(chatId) ?? null,
+        getClientTranscript: () => ({ messages: [], startIndex: 0, readAnchor: null }),
+      }),
+      agent: {
+        getActiveStatuses: () => new Map(),
+        getChatStatuses: () => new Map(waiting),
+        getDrainingChatIds: () => new Set(),
+      } as never,
+    })
+    const ws = new FakeWebSocket()
+    router.handleOpen(ws as never)
+    ws.data.subscriptions.set("sidebar-1", { type: "sidebar" })
+    ws.data.subscriptions.set("chat-1", { type: "chat", chatId: "chat-1" })
+    const change = { sidebar: true, chatIds: ["chat-1"] }
+    const statuses = () => JSON.stringify(ws.sent).match(/"status":"[a-z_]+"/g) ?? []
+
+    await router.broadcastChatChange(change)
+    expect(ws.sent).toHaveLength(2)
+    expect(new Set(statuses())).toEqual(new Set(['"status":"idle"']))
+
+    waiting.set("chat-1", "waiting_on_subagent")
+    await router.broadcastChatChange(change)
+    expect(ws.sent).toHaveLength(4)
+    for (const message of ws.sent.slice(2)) expect(JSON.stringify(message)).toContain('"status":"waiting_on_subagent"')
+
+    // Nothing moved, so nothing is sent: the status is part of what is compared.
+    await router.broadcastChatChange(change)
+    expect(ws.sent).toHaveLength(4)
+
+    waiting.clear()
+    await router.broadcastChatChange(change)
+    expect(ws.sent).toHaveLength(6)
+  })
+
   test("subscribes to project git snapshots independently from chat snapshots", async () => {
     const state = createEmptyState()
     state.projectsById.set("project-1", {

@@ -52,6 +52,12 @@ export interface ChatViewerState {
    * the file the list reopens on.
    */
   reviewPath?: string
+  /**
+   * The chat preview this replaced, and the width it had. A file or an image
+   * opened while a chat is in the previewer is a look at something, and
+   * closing it goes back to the chat instead of shutting the pane on it.
+   */
+  returnTo?: { item: Extract<ViewerItem, { kind: "chat" | "graph" }>; widthPx?: number }
 }
 
 interface RightSidebarState {
@@ -164,13 +170,19 @@ export function migrateRightSidebarStore(persistedState: unknown, version = 0) {
  * What of the chats' viewers outlives the page. A chart is data from the
  * transcript and a `blob:` attachment lives only in this page, so neither
  * would come back; nor does the viewer of a page with no chat. A review
- * is kept at the file it was scrolled to, which is where it reopens.
+ * is kept at the file it was scrolled to, which is where it reopens. A chat
+ * preview is kept as the chat's id, and subscribes again when it reopens.
  */
 export function persistedChatViewers(chatViewers: Record<string, ChatViewerState>) {
   const kept: Record<string, ChatViewerState> = {}
   for (const [chatKey, viewer] of Object.entries(chatViewers)) {
     const { item } = viewer
-    if (!chatKey || item.kind === "chart" || (item.kind === "attachment" && item.attachment.url.startsWith("blob:"))) continue
+    if (!chatKey) continue
+    if (item.kind === "chart" || (item.kind === "attachment" && item.attachment.url.startsWith("blob:"))) {
+      // What it was opened over does come back: the chat preview under it.
+      if (viewer.returnTo) kept[chatKey] = { ...viewer.returnTo, expanded: viewer.expanded }
+      continue
+    }
     kept[chatKey] = settledChatViewer(viewer)
   }
   return kept

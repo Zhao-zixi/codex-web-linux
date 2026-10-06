@@ -17,6 +17,7 @@ import type { ProjectRepoLabel } from "./worktree-probe"
 import type { ChatRecord, StoreState, TouchedFile } from "./events"
 import { resolveLocalPath } from "./paths"
 import { SERVER_PROVIDERS } from "./provider-catalog"
+import { isSubChat } from "../shared/sub-chat"
 import { buildTranscriptOutline } from "../shared/transcript-window"
 import type { TranscriptOutlineEntry } from "../shared/types"
 
@@ -32,6 +33,10 @@ function getFolderModifiedAt(localPath: string) {
 }
 
 export function deriveStatus(chat: ChatRecord, activeStatus?: KannaStatus): KannaStatus {
+  // A failed turn outranks the wait. What it handed off may still be going,
+  // but the failure is the user's to look at now, and a chat that reads as
+  // waiting is one they leave alone.
+  if (activeStatus === "waiting_on_subagent" && chat.lastTurnOutcome === "failed") return "failed"
   if (activeStatus) return activeStatus
   if (chat.lastTurnOutcome === "failed") return "failed"
   return "idle"
@@ -287,6 +292,7 @@ export function deriveSidebarData(
           hasAutomation: false,
           canFork: canForkChat(chat, activeStatuses, drainingChatIds) || undefined,
           ...(chat.parentChatId ? { parentChatId: chat.parentChatId } : {}),
+          ...(chat.parentChatId && chat.adopted ? { adopted: true as const } : {}),
         }
       })
   }
@@ -297,7 +303,7 @@ export function deriveSidebarData(
     const chats = toSidebarChatRows(project, chatsByProjectId.get(project.id) ?? [])
     const archivedChats = toSidebarChatRows(project, archivedChatsByProjectId.get(project.id) ?? [])
     // The lists a project shows leave sub-chats out; `chats` keeps them for lookups.
-    const listedChats = chats.filter((chat) => !chat.parentChatId)
+    const listedChats = chats.filter((chat) => !isSubChat(chat))
     const { previewChats, olderChats } = getSidebarChatBuckets(listedChats, nowMs)
 
     return {
@@ -451,6 +457,8 @@ export function deriveChatSnapshot(
     planMode: chat.planMode,
     autoPlan: chat.autoPlan,
     sessionToken: chat.sessionToken,
+    ...(chat.parentChatId ? { parentChatId: chat.parentChatId } : {}),
+    ...(chat.parentChatId && chat.adopted ? { adopted: true as const } : {}),
     ...(subagents?.length ? { subagents: [...subagents] } : {}),
     ...(schedules.length ? { schedules } : {}),
   }

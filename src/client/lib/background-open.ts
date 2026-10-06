@@ -13,3 +13,14 @@ export function isBackgroundOpenClick() {
   const isMac = /Mac|iPhone|iPad/.test(navigator.platform)
   return isMac ? event.metaKey : event.ctrlKey
 }
+
+/**
+ * Whether the click being handled asks for a tab of its own instead of
+ * whatever a plain click on the thing does: the modifier above, or the middle
+ * button. What a click on a chat link reads, to skip the previewer. The same
+ * caveat: only meaningful called from inside a click or auxclick handler.
+ */
+export function isNewTabClick() {
+  const event = typeof window === "undefined" ? undefined : window.event
+  return isBackgroundOpenClick() || (event instanceof MouseEvent && event.button === 1)
+}

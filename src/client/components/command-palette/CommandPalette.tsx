@@ -24,6 +24,7 @@ import {
   Lock,
   LockOpen,
   Moon,
+  Network,
   PanelRight,
   Paperclip,
   Plus,
@@ -67,6 +68,7 @@ import { setFocusMode, useFocusModeEnabled } from "../../stores/focusModeStore"
 import { useSidebarStore } from "../../stores/sidebarStore"
 import { useTerminalLayoutStore } from "../../stores/terminalLayoutStore"
 import { useTerminalPreferencesStore } from "../../stores/terminalPreferencesStore"
+import { useChatViewer, useViewerStore } from "../../stores/viewerStore"
 import { PROVIDER_ICONS } from "../chat-ui/ChatPreferenceControls"
 import { UsageSection } from "../../app/settings/UsageSection"
 import { getOpenAppItems, openAppValue, OpenAppIcon, useInstalledEditors, useInstalledTerminals } from "../open-external-menu"
@@ -273,6 +275,12 @@ export function CommandPalette({ state }: { state: KannaState }) {
   const isMac = (state.localProjects?.machine.platform ?? "darwin") === "darwin"
   // Reactive so the action's label flips between Focus and Exit Focus Mode.
   const focusModeEnabled = useFocusModeEnabled()
+  // The graph is shown in the previewer's pane, so only where a page has one
+  // (the same count a sub-chat's click reads: `chatPreviewHosts`).
+  const canShowGraph = useViewerStore((store) => store.chatPreviewHosts > 0)
+  // Reactive so the label says what choosing it will do. A chat picked from
+  // the graph has taken the graph's place, so the graph is not "shown" then.
+  const graphShown = useChatViewer()?.item.kind === "graph"
   // The active chat's row plus the project group that owns it (for the
   // "Hide <project>" action, which needs the group key + title).
   const currentChat = useMemo(() => {
@@ -718,6 +726,22 @@ export function CommandPalette({ state }: { state: KannaState }) {
       }
     }
 
+    if (state.activeChatId && canShowGraph) {
+      const graphChatId = state.activeChatId
+      list.push({
+        id: "show-graph",
+        title: graphShown ? "Hide Graph" : "Show Graph",
+        keywords: ["graph", "tree", "map", "overview", "sub-chats", "subchats", "sub chats", "delegation", "agents", "children", "show", "hide"],
+        icon: <Network className={ICON_CLASS} />,
+        run: () => {
+          close()
+          // The tree this chat is in, from its root down, beside the chat.
+          if (graphShown) useViewerStore.getState().close()
+          else useViewerStore.getState().open({ kind: "graph", chatId: graphChatId })
+        },
+      })
+    }
+
     if (state.activeChatId) {
       list.push({
         id: "share-chat",
@@ -923,6 +947,8 @@ export function CommandPalette({ state }: { state: KannaState }) {
     editorCommandTemplate,
     editorPreset,
     focusModeEnabled,
+    canShowGraph,
+    graphShown,
     installedEditors,
     installedTerminals,
     isMac,

@@ -69,7 +69,7 @@ export function ExitPlanModeMessage({ message, onConfirm, isLatest }: Props) {
       {isComplete ? (
         <div className="flex justify-end mx-2">
           <span
-            className="pl-4 inline text-sm font-medium bg-background text-foreground/60 border border-border py-1.5 px-3 rounded-[20px] leading-relaxed max-w-[85%] sm:max-w-[80%]"
+            className="pl-4 inline text-sm font-medium bg-surface text-foreground/60 border border-border py-1.5 px-3 rounded-[20px] leading-relaxed max-w-[85%] sm:max-w-[80%]"
           >
             <em>{
               isDiscarded ? "Discarded"

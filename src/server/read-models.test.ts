@@ -38,6 +38,47 @@ describe("read models", () => {
     expect([...group.previewChats, ...group.olderChats].map((row) => row.chatId)).toEqual(["parent"])
   })
 
+  test("a chat waiting on a subagent reads so in the sidebar and its snapshot, unless its last turn failed", () => {
+    const state = createEmptyState()
+    state.projectsById.set("p", { id: "p", localPath: "/tmp/p", title: "P", createdAt: 1, updatedAt: 1 })
+    const outcomes = { waiting: "success", failed: "failed", resting: "success" } as const
+    for (const [id, lastTurnOutcome] of Object.entries(outcomes)) {
+      state.chatsById.set(id, {
+        id, projectId: "p", title: id, createdAt: 1, updatedAt: 1, unread: true, provider: null,
+        planMode: false, autoPlan: false, sessionToken: null, hasMessages: true, lastMessageAt: 1, lastTurnOutcome,
+      })
+    }
+    const statuses = new Map([["waiting", "waiting_on_subagent"], ["failed", "waiting_on_subagent"]] as const)
+
+    const rows = deriveSidebarData(state, statuses).projectGroups[0]!.chats
+    expect(Object.fromEntries(rows.map((row) => [row.chatId, row.status]))).toEqual({
+      waiting: "waiting_on_subagent",
+      // The failure is what the user has to look at, whatever is still going.
+      failed: "failed",
+      resting: "idle",
+    })
+    const snapshot = (chatId: string) => deriveChatSnapshot(state, statuses, new Set(), chatId, () => ({ messages: [], startIndex: 0, readAnchor: null }))
+    expect(snapshot("waiting")?.runtime.status).toBe("waiting_on_subagent")
+    expect(snapshot("failed")?.runtime.status).toBe("failed")
+    expect(snapshot("resting")?.runtime.status).toBe("idle")
+  })
+
+  test("a sub-chat's snapshot names its parent, and a chat of the user's own names none", () => {
+    const state = createEmptyState()
+    state.projectsById.set("p", { id: "p", localPath: "/tmp/p", title: "P", createdAt: 1, updatedAt: 1 })
+    for (const [id, parentChatId] of [["parent", undefined], ["child", "parent"]] as const) {
+      state.chatsById.set(id, {
+        id, projectId: "p", title: id, createdAt: 1, updatedAt: 1, unread: false, provider: null,
+        planMode: false, autoPlan: false, sessionToken: null, hasMessages: true, lastMessageAt: 1, lastTurnOutcome: null,
+        ...(parentChatId ? { parentChatId } : {}),
+      })
+    }
+    const runtime = (chatId: string) => deriveChatSnapshot(state, new Map(), new Set(), chatId, () => ({ messages: [], startIndex: 0, readAnchor: null }))?.runtime
+
+    expect(runtime("child")?.parentChatId).toBe("parent")
+    expect(runtime("parent")).not.toHaveProperty("parentChatId")
+  })
+
   test("a chat's snapshot carries the schedules to do with it", () => {
     const state = createEmptyState()
     state.projectsById.set("p", { id: "p", localPath: "/tmp/p", title: "P", createdAt: 1, updatedAt: 1 })

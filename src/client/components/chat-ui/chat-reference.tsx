@@ -21,7 +21,13 @@ export interface ChatReferenceActions {
   editorLabel: string
   menu: ThreadRowMenuActions
   card: SidebarChatCardActions
+  /**
+   * Opens a chat the way a click on it should: in the previewer when it has
+   * a parent, in the main view otherwise (`useOpenChat`).
+   */
   onOpenChat: (chatId: string) => void
+  /** Opens it in the main view whatever it is: as a tab, with chat tabs on. */
+  onOpenChatInTab: (chatId: string) => void
 }
 
 const ChatReferenceContext = createContext<ChatReferenceActions | null>(null)

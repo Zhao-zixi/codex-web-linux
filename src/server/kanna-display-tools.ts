@@ -3,20 +3,10 @@ import { mkdir, open, copyFile, rm } from "node:fs/promises"
 import { constants } from "node:fs"
 import path from "node:path"
 import { fileTypeFromBuffer } from "file-type"
-import { CHART_COLORS, resolveChartKeys, type ChartToolPayload, type DisplayAttachment } from "../shared/display-tools"
+import { type DisplayAttachment } from "../shared/display-tools"
+import { SHOW_VISUALIZATION_TOOL } from "./kanna-visualization-tool"
 import { buildTranscriptMediaUrl, getTranscriptMediaDir } from "./transcript-media"
 import type { KannaToolDefinition } from "./kanna-tools"
-
-const chartSchema = z.strictObject({
-  title: z.string().min(1),
-  description: z.string(),
-  type: z.enum(["bar", "line", "area", "pie"]),
-  data: z.array(z.record(z.string(), z.union([z.string(), z.number(), z.null()]))).min(1).max(5000),
-  xKey: z.string().optional(), yKeys: z.array(z.string()).optional(),
-  xAxisKey: z.string().optional(), dataKeys: z.array(z.string()).optional(),
-  config: z.record(z.string(), z.strictObject({ label: z.string().optional(), color: z.enum(CHART_COLORS).optional() })).optional(),
-  stacked: z.boolean().optional(),
-})
 
 const attachmentSchema = z.strictObject({
   attachments: z.array(z.strictObject({
@@ -68,20 +58,7 @@ export async function storeLocalAttachment(
 }
 
 export const DISPLAY_TOOLS: readonly KannaToolDefinition[] = [
-  {
-    name: "show_chart",
-    description: "Show a chart in the chat. Supports bar, line, area, and pie charts, series labels, and stacked bars or areas. Supply numeric series and a category column. Series colors: #00a6f5, #615fff, #f6339a, #fe9900, #00bd7c.",
-    schema: chartSchema,
-    async execute(input) {
-      const chart = input as unknown as ChartToolPayload
-      const { keys } = resolveChartKeys(chart)
-      if (!keys.length) throw new Error("The chart needs at least one numeric series other than its category column.")
-      if (chart.type === "pie" && chart.data.some(row => typeof row[keys[0]!] === "number" && Number(row[keys[0]!]) < 0)) {
-        throw new Error("Pie chart values must not be negative.")
-      }
-      return { content: [{ type: "text", text: "Chart displayed." }], structuredContent: { displayed: true } }
-    },
-  },
+  SHOW_VISUALIZATION_TOOL,
   {
     name: "send_attachments",
     description: "Show images, videos, and file links in the chat. Supply local paths or HTTP/HTTPS URLs. Local files are copied into the chat so they remain available after the source changes. Images and videos appear inline; other files appear as download links.",

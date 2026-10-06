@@ -11,6 +11,7 @@ import {
   getRelevantThreads,
   getReviewThreads,
   isSubChat,
+  isUnreadForUser,
   listedThreads,
   mergeRelevantThreads,
   RECENT_THREADS_LIMIT,
@@ -43,6 +44,35 @@ describe("sub-chats", () => {
     // With none to drop, the same array comes back, so nothing downstream re-derives.
     const plain = flattenSidebarThreads(makeSidebarData())
     expect(listedThreads(plain)).toBe(plain)
+  })
+
+  test("a chat an agent adopted stays in every list, whoever started it", () => {
+    const data = makeSidebarData()
+    data.projectGroups[0]!.chats.push(
+      makeChatRow({ chatId: "mine", title: "Release notes", parentChatId: "chat-1", adopted: true, lastMessageAt: 960 }),
+      makeChatRow({ chatId: "child", title: "Parser audit", parentChatId: "chat-1", lastMessageAt: 950 }),
+    )
+    const listed = listedThreads(flattenSidebarThreads(data)).map((thread) => thread.chatId)
+    expect(listed).toContain("mine")
+    expect(listed).not.toContain("child")
+    expect(isSubChat(data.projectGroups[0]!.chats.find((chat) => chat.chatId === "mine")!)).toBe(false)
+  })
+})
+
+describe("isUnreadForUser", () => {
+  // One rule for every count of chats that want you: the window title, the
+  // chime, the notification and a channel's badge.
+  test("counts an unread chat at rest, and no sub-chat or chat still working", () => {
+    const unread = (overrides: Partial<SidebarChatRow> = {}) => makeChatRow({ chatId: "c", title: "C", unread: true, ...overrides })
+    expect(isUnreadForUser(unread())).toBe(true)
+    expect(isUnreadForUser(unread({ status: "failed" }))).toBe(true)
+    expect(isUnreadForUser(unread({ status: "waiting_for_user" }))).toBe(true)
+    expect(isUnreadForUser(unread({ parentChatId: "parent" }))).toBe(false)
+    // An adopted chat is in the lists, so its mark is the user's to hear about.
+    expect(isUnreadForUser(unread({ parentChatId: "parent", adopted: true }))).toBe(true)
+    expect(isUnreadForUser(unread({ status: "waiting_on_subagent" }))).toBe(false)
+    expect(isUnreadForUser(unread({ status: "running" }))).toBe(false)
+    expect(isUnreadForUser(unread({ unread: false }))).toBe(false)
   })
 })
 
@@ -225,6 +255,19 @@ describe("computeThreadSections", () => {
     expect(sections.review).toHaveLength(0)
     // Oldest first; running/starting always win the In Progress section.
     expect(sections.inProgress.map((thread) => thread.chatId)).toEqual(["running-unread", "running"])
+  })
+
+  test("a chat waiting on a subagent is in progress, however unread its last reply", () => {
+    // Its turn ended, which marked it unread, but the work it handed off will
+    // start another: it is not ready for review until that is in.
+    const data = makeData([
+      makeChatRow({ chatId: "waiting", title: "Waiting", status: "waiting_on_subagent", unread: true, lastMessageAt: 300 }),
+      makeChatRow({ chatId: "done", title: "Done", unread: true, lastMessageAt: 600 }),
+    ])
+    const sections = computeThreadSections(flattenSidebarThreads(data))
+    expect(sections.inProgress.map((thread) => thread.chatId)).toEqual(["waiting"])
+    expect(sections.review.map((thread) => thread.chatId)).toEqual(["done"])
+    expect(sections.recent).toHaveLength(0)
   })
 
   test("recents excludes review and in-progress chats and hides empty new chats", () => {

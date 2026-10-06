@@ -3,7 +3,7 @@ import { ChevronDown, SquarePen } from "lucide-react"
 import type { SidebarProjectGroup } from "../../../shared/types"
 import { computeChannelSections, getChannelPeekGroups, type ChannelPeekGroup } from "../../lib/channel-sections"
 import { getThreadDetailLabel } from "../../lib/thread-detail-label"
-import type { SidebarThread } from "../../lib/thread-sections"
+import { isSubChat, isUnreadForUser, type SidebarThread } from "../../lib/thread-sections"
 import { isBackgroundOpenClick } from "../../lib/background-open"
 import { getPathBasename } from "../../lib/formatters"
 import { cn, normalizeChatId } from "../../lib/utils"
@@ -222,15 +222,19 @@ interface ChannelRowProps {
 const ChannelRow = memo(function ChannelRow({ group, active, menuPinned, pinned, actions, onSelect }: ChannelRowProps) {
   // A sub-chat finishing is its parent's news, not the channel's, so its
   // unread mark is not counted. One that stops to ask you something still is.
-  const unread = group.chats.some((chat) => chat.unread && !chat.parentChatId)
+  // Nor is the mark of a chat still working, which the window's title and
+  // the notifications leave out for the same reason (`isUnreadForUser`).
+  const unread = group.chats.some(isUnreadForUser)
   // Chats that want you: unread, or waiting on an answer. One chat counts
   // once even when it is both.
-  const attentionCount = group.chats.filter((chat) => (chat.unread && !chat.parentChatId) || chat.status === "waiting_for_user").length
+  const attentionCount = group.chats.filter((chat) => isUnreadForUser(chat) || chat.status === "waiting_for_user").length
   // The mark is the status of the channel's most pressing chat, drawn as that
-  // chat's own row draws it: running, then waiting on you, then unread.
+  // chat's own row draws it: running, then waiting on you, then waiting on a
+  // subagent, then unread.
   const leadChat = group.chats.find((chat) => chat.status === "running" || chat.status === "starting")
     ?? group.chats.find((chat) => chat.status === "waiting_for_user")
-    ?? group.chats.find((chat) => chat.unread && !chat.parentChatId)
+    ?? group.chats.find((chat) => chat.status === "waiting_on_subagent" && !isSubChat(chat))
+    ?? group.chats.find(isUnreadForUser)
   const statusMark = leadChat ? renderChatStatusDot(leadChat) : null
 
   return (

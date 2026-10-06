@@ -89,7 +89,7 @@ function Checkbox({
         multiSelect ? "rounded" : "rounded-full",
         selected
           ? "border-slate-500/0 bg-foreground"
-          : "border-muted-foreground/50 bg-background",
+          : "border-muted-foreground/50 bg-surface",
         onClick && selected && "cursor-pointer"
       )}
     >
@@ -111,7 +111,7 @@ function OptionRow({
   onClick?: () => void
   isLast?: boolean
 }) {
-  const baseClasses = "w-full text-left p-3 pt-2.5 pl-4 pr-5 bg-background"
+  const baseClasses = "w-full text-left p-3 pt-2.5 pl-4 pr-5 bg-surface"
   const borderClass = !isLast ? "border-b border-border" : ""
 
   if (onClick) {
@@ -281,7 +281,7 @@ export function AskUserQuestionMessage({ message, onSubmit, isLatest }: Props) {
               <div
                 key={getQuestionKey(question)}
                 className={cn(
-                  "w-full p-3 pt-2.5 pl-4 pr-5 bg-background flex items-center justify-between gap-3",
+                  "w-full p-3 pt-2.5 pl-4 pr-5 bg-surface flex items-center justify-between gap-3",
                   !isLast && "border-b border-border"
                 )}
               >
@@ -312,7 +312,7 @@ export function AskUserQuestionMessage({ message, onSubmit, isLatest }: Props) {
             <div
               key={getQuestionKey(question)}
               className={cn(
-                "w-full p-3 pt-2.5 pl-4 pr-5 bg-background flex items-center justify-between gap-3",
+                "w-full p-3 pt-2.5 pl-4 pr-5 bg-surface flex items-center justify-between gap-3",
                 index < questions.length - 1 && "border-b border-border",
               )}
             >
@@ -364,7 +364,7 @@ export function AskUserQuestionMessage({ message, onSubmit, isLatest }: Props) {
         ))}
 
         {/* Custom input */}
-        <div className="transition-all bg-background">
+        <div className="transition-all bg-surface">
           <div className="flex pr-5 items-center justify-between gap-3">
             <input
               type="text"

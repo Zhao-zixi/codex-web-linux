@@ -24,6 +24,9 @@ interface ChatInputDockProps {
   onCancel: () => void
   onEditModels: () => void
   onListSkills?: (provider: AgentProvider) => Promise<ChatSkillsSnapshot>
+  /** See `ChatInput`: the previewed chat's composer passes both. */
+  placeholder?: string
+  secondary?: boolean
 }
 
 export const ChatInputDock = memo(function ChatInputDock({
@@ -46,6 +49,8 @@ export const ChatInputDock = memo(function ChatInputDock({
   onCancel,
   onEditModels,
   onListSkills,
+  placeholder,
+  secondary,
 }: ChatInputDockProps) {
   return (
     <div className="absolute bottom-0 left-0 right-0 z-20 pointer-events-none">
@@ -55,8 +60,10 @@ export const ChatInputDock = memo(function ChatInputDock({
             later positioned sibling and can't be raised with z-index). It has
             to be a layer rather than a background on this wrapper: the wrapper
             stays full width so the composer inside it remains centred on the
-            card, not on the card minus the gutter. */}
-        <div className="absolute inset-y-0 left-0 right-[var(--transcript-scrollbar-w,0px)] bg-gradient-to-t from-background via-background to-background/10 md:to-background/0 pointer-events-none" />
+            card, not on the card minus the gutter. In `surface`, not the
+            page's background: the dock also sits in the viewer's card, which
+            is another colour in dark mode. */}
+        <div className="absolute inset-y-0 left-0 right-[var(--transcript-scrollbar-w,0px)] bg-gradient-to-t from-surface via-surface to-surface/10 md:to-surface/0 pointer-events-none" />
         <div className="relative">
           <ChatInput
             ref={chatInputRef}
@@ -77,6 +84,8 @@ export const ChatInputDock = memo(function ChatInputDock({
             previousPrompt={previousPrompt}
             onEditModels={onEditModels}
             onListSkills={onListSkills}
+            placeholder={placeholder}
+            secondary={secondary}
           />
         </div>
       </div>

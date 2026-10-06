@@ -204,6 +204,15 @@ interface Props {
   onEditModels?: () => void
   /** Enumerates the selected harness's invocable skills for the "/" menu. */
   onListSkills?: (provider: AgentProvider) => Promise<ChatSkillsSnapshot>
+  /** Said in place of "Build in <project>": whose composer this is, when the page has two. */
+  placeholder?: string
+  /**
+   * A second composer on the page, beside the main one: the previewed
+   * chat's. It does not take focus when it mounts, so what you type next
+   * still goes where it was going, and it leaves page-wide requests (the
+   * command palette's "Attach Files") to the main one.
+   */
+  secondary?: boolean
 }
 
 export interface ChatInputHandle {
@@ -237,6 +246,8 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
   previousPrompt = null,
   onEditModels,
   onListSkills,
+  placeholder: placeholderOverride,
+  secondary = false,
 }, forwardedRef) {
   // Actions only. Selecting the whole store re-rendered this component on
   // every keystroke in any composer, and on every attachment change anywhere.
@@ -314,7 +325,7 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
   // or ellipsize the way a span would: a long path runs past the pill. Keep
   // the path short enough to fit the narrowest composer (a phone) instead.
   const projectLabel = projectRepoLabel ?? (projectPath ? abbreviatePathHead(formatPathWithTilde(projectPath), 40) : null)
-  const placeholder = projectLabel ? `Build in ${projectLabel}` : "Build something..."
+  const placeholder = placeholderOverride ?? (projectLabel ? `Build in ${projectLabel}` : "Build something...")
 
   const activeContextWindow = useMemo(() => {
     if (providerPrefs.provider !== "claude") {
@@ -536,8 +547,8 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
   }, [attachments.length, onLayoutChange, uploadError])
 
   useEffect(() => {
-    textareaRef.current?.focus()
-  }, [chatId])
+    if (!secondary) textareaRef.current?.focus()
+  }, [chatId, secondary])
 
   useEffect(() => {
     latestChatIdRef.current = chatId ?? null
@@ -777,13 +788,14 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
 
   // The command palette's "Attach Files" action opens the hidden picker.
   useEffect(() => {
+    if (secondary) return
     function handleAttachRequest() {
       paletteFileInputRef.current?.click()
     }
 
     window.addEventListener(REQUEST_ATTACH_FILES_EVENT, handleAttachRequest)
     return () => window.removeEventListener(REQUEST_ATTACH_FILES_EVENT, handleAttachRequest)
-  }, [])
+  }, [secondary])
 
   /** The composer's current prefs, the way a send carries them. */
   function buildSubmitOptions(attachmentsForSubmit: ChatAttachment[], steer = shouldSteerSubmit(submitWhileRunning, false)) {
@@ -1152,7 +1164,7 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
               ref={setTextareaRefs}
               placeholder={placeholder}
               value={value}
-              autoFocus
+              autoFocus={!secondary}
               {...{ [CHAT_INPUT_ATTRIBUTE]: "" }}
               rows={1}
               onChange={(event) => {

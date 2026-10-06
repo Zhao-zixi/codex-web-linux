@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test"
 import type { SidebarChatRow, SidebarData, SidebarProjectGroup } from "../../shared/types"
-import { getSidebarProjectGroups, findSidebarChat, useSidebarStore } from "./sidebarStore"
+import { getSidebarProjectGroups, findSidebarChat, parentChatIdOf, useSidebarStore } from "./sidebarStore"
 
 function row(chatId: string, overrides: Partial<SidebarChatRow> = {}): SidebarChatRow {
   return {
@@ -111,5 +111,19 @@ describe("sidebarStore", () => {
 
     expect(findSidebarChat("a")?.unread).toBe(true)
     expect(findSidebarChat("missing")).toBeNull()
+  })
+
+  test("reads a chat's parent from its row, archived or not", () => {
+    const snapshot = data([
+      group("p1", [row("parent"), row("child", { parentChatId: "parent" })]),
+      { ...group("p2", [row("other")]), archivedChats: [row("put-away", { parentChatId: "other" })] },
+    ])
+
+    expect(parentChatIdOf(snapshot, "child")).toBe("parent")
+    expect(parentChatIdOf(snapshot, "put-away")).toBe("other")
+    // A chat of the user's own, a chat the snapshot does not hold, and no chat at all.
+    expect(parentChatIdOf(snapshot, "parent")).toBeNull()
+    expect(parentChatIdOf(snapshot, "missing")).toBeNull()
+    expect(parentChatIdOf(snapshot, null)).toBeNull()
   })
 })

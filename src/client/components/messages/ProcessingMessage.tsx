@@ -9,6 +9,7 @@ const STATUS_LABELS: Record<string, string> = {
   starting: "Starting...",
   running: "Running...",
   waiting_for_user: "Waiting...",
+  waiting_on_subagent: "Waiting on a subagent...",
   failed: "Failed",
 }
 

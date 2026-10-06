@@ -178,6 +178,8 @@ export interface ModelListResponse {
 
 export interface ThreadSummary {
   id: string
+  /** Set on a thread an agent spawned: the thread that spawned it. */
+  parentThreadId?: string | null
 }
 
 export interface ThreadStartResponse {
@@ -220,6 +222,16 @@ export interface TurnStartResponse {
 
 export interface ThreadStartedNotification {
   thread: ThreadSummary
+}
+
+export interface ThreadStatusChangedNotification {
+  threadId: string
+  /** `active` while a turn runs. `idle` between turns, and for a moment before a new thread's first. */
+  status: { type: "notLoaded" | "idle" | "systemError" | "active" }
+}
+
+export interface ThreadClosedNotification {
+  threadId: string
 }
 
 export interface TurnStartedNotification {
@@ -466,8 +478,8 @@ export interface DynamicToolCallItem {
 export interface CollabAgentToolCallItem {
   type: "collabAgentToolCall"
   id: string
-  tool: "spawnAgent" | "sendInput" | "resumeAgent" | "wait" | "closeAgent"
-  status: "inProgress" | "completed" | "failed"
+  tool: "spawnAgent" | "sendInput" | "resumeAgent" | "wait" | "closeAgent" | "sendMessage" | "followupTask" | "interruptAgent" | "listAgents"
+  status: "inProgress" | "completed" | "failed" | "interrupted"
   senderThreadId: string
   receiverThreadIds: string[]
   prompt?: string | null
@@ -509,6 +521,21 @@ export interface ErrorItem {
   message: string
 }
 
+/**
+ * How newer Codex announces an agent a thread spawned, in place of a
+ * `collabAgentToolCall` for `spawnAgent`. It arrives on the spawning thread:
+ * `started` with the new thread's id, and later `completed` or `interrupted`
+ * for each turn that agent ends, which can be after the turn that spawned it.
+ */
+export interface SubAgentActivityItem {
+  type: "subAgentActivity"
+  id: string
+  kind: "started" | "interacted" | "interrupted" | "completed"
+  agentThreadId: string
+  /** The agent's name under its parent, as a path: `/root/audit_parser`. */
+  agentPath: string
+}
+
 export type ThreadItem =
   | UserMessageItem
   | ReasoningItem
@@ -518,6 +545,7 @@ export type ThreadItem =
   | McpToolCallItem
   | DynamicToolCallItem
   | CollabAgentToolCallItem
+  | SubAgentActivityItem
   | WebSearchItem
   | FileChangeItem
   | ErrorItem
@@ -572,6 +600,8 @@ export interface GetAccountRateLimitsResponse {
 
 export type ServerNotification =
   | { method: "thread/started"; params: ThreadStartedNotification }
+  | { method: "thread/status/changed"; params: ThreadStatusChangedNotification }
+  | { method: "thread/closed"; params: ThreadClosedNotification }
   | { method: "thread/tokenUsage/updated"; params: ThreadTokenUsageUpdatedNotification }
   | { method: "turn/started"; params: TurnStartedNotification }
   | { method: "turn/completed"; params: TurnCompletedNotification }
@@ -604,6 +634,8 @@ export function isServerNotification(value: unknown): value is ServerNotificatio
   const candidate = value as Record<string, unknown>
   if (typeof candidate.method !== "string" || "id" in candidate) return false
   return candidate.method === "thread/started"
+    || candidate.method === "thread/status/changed"
+    || candidate.method === "thread/closed"
     || candidate.method === "thread/tokenUsage/updated"
     || candidate.method === "turn/started"
     || candidate.method === "turn/completed"

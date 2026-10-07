@@ -36,6 +36,7 @@ import { buildChatJumpLocationState } from "../../lib/chat-navigation"
 import { snapshotDroppedFiles } from "../../lib/snapshotDroppedFiles"
 import { useRightSidebarStore, useWidgetsOpen } from "../../stores/rightSidebarStore"
 import { ViewerLayer, usePresentedViewer, useViewerShown } from "../../components/viewer/ViewerLayer"
+import { resolveViewerSplitMove, viewerPaneState, type ViewerPaneState } from "../../lib/viewer-split"
 import { opensInViewer, projectRelativePath } from "../../components/viewer/localLinks"
 import type { OpenLocalLinkTarget } from "../../components/messages/shared"
 import { shouldOpenLocalFileLinkInEditor } from "../../lib/pathUtils"
@@ -1150,7 +1151,28 @@ export function ChatPage({ view = "transcript" }: { view?: ChatPageView }) {
   const viewerSplitGroupRef = useRef<GroupImperativeHandle | null>(null)
   const viewerSplitElementRef = useRef<HTMLDivElement | null>(null)
   const viewerSplitAnimationRef = useRef<number | null>(null)
-  const viewerSplitStateRef = useRef<{ group: GroupImperativeHandle | null; open: boolean; chatKey: string }>({ group: null, open: false, chatKey: "" })
+  const viewerSplitStateRef = useRef<{ group: GroupImperativeHandle | null; state: ViewerPaneState; chatKey: string }>({ group: null, state: "closed", chatKey: "" })
+  // The split a docked pane takes for what's open: the width you dragged it
+  // to, else the one for its kind.
+  const dockedViewerSplit = (): [number, number] => {
+    const splitWidth = viewerSplitElementRef.current?.clientWidth ?? 0
+    if (splitWidth <= 0) return [100, 0]
+    const pageWidth = layoutRootRef.current?.clientWidth ?? 0
+    const chatMinPx = pageWidth * (CHAT_MIN_WORKSPACE_SIZE_PERCENT / 100)
+    const draggedWidthPx = getChatViewer()?.widthPx
+    const paneWidthPx = Math.min(
+      splitWidth - chatMinPx,
+      draggedWidthPx ?? (
+        viewerWidth === "review"
+          ? Infinity
+          : viewerWidth === "chat"
+            ? Math.min(VIEWER_CHAT_PANE_MAX_WIDTH_PX, Math.max(VIEWER_CHAT_PANE_MIN_WIDTH_PX, splitWidth / 2))
+            : VIEWER_PREVIEW_PANE_WIDTH_PX
+      ),
+    )
+    const panePercent = Math.max(0, (paneWidthPx / splitWidth) * 100)
+    return [100 - panePercent, panePercent]
+  }
   // What's on screen, which outlives a close by its exit animation. The
   // placement follows it, so a viewer closing over the chat leaves from
   // there rather than dropping into the pane.
@@ -1191,7 +1213,10 @@ export function ChatPage({ view = "transcript" }: { view?: ChatPageView }) {
       return
     }
 
-    const paneLeftPx = splitWidth * ((group.getLayout().chatColumn ?? 100) / 100)
+    // Collapsing lands in the pane as it is about to be: one opened straight
+    // to expanded has no pane yet, and the split takes its docked width in
+    // this same commit (below), after this has run.
+    const paneLeftPx = splitWidth * ((presentedExpanded ? group.getLayout().chatColumn ?? 100 : dockedViewerSplit()[0]) / 100)
     if (presentedExpanded) {
       viewerExpandAnimationRef.current = layer.animate(
         [{ left: `${fromLeftPx ?? paneLeftPx}px` }, { left: "0px" }],
@@ -1221,48 +1246,38 @@ export function ChatPage({ view = "transcript" }: { view?: ChatPageView }) {
   // around the viewer, which stays on screen for it (usePresentedViewer).
   // Another chat, or a group that's new (another project, a phone turned
   // desktop), takes its layout without the slide, as does reduced motion.
-  // Stepping between files of one kind, and expanding, leave the split as it
-  // is. A width you dragged the pane to is the chat's, and it opens at it
-  // again.
+  // Stepping between files of one kind leaves the split as it is. A width
+  // you dragged the pane to is the chat's, and it opens at it again.
+  //
+  // Expanded over the chat, the split is left alone, and coming out of
+  // expanded it's set in one step behind the card: the chat's width is
+  // layout, not worth moving where it can't be seen (`lib/viewer-split`).
   useLayoutEffect(() => {
     const group = viewerSplitGroupRef.current
     const previous = viewerSplitStateRef.current
-    viewerSplitStateRef.current = { group, open: viewerPaneOpen, chatKey: viewerChatKey }
+    const state = viewerPaneState(viewerPaneOpen, viewerExpanded)
+    viewerSplitStateRef.current = { group, state, chatKey: viewerChatKey }
     if (!group) return
+    const move = resolveViewerSplitMove(
+      previous.state,
+      state,
+      previous.group === group && previous.chatKey === viewerChatKey && !prefersReducedMotion(),
+    )
+    // A slide already under way goes on to where it was headed.
+    if (move.to === "hold") return
     if (viewerSplitAnimationRef.current !== null) {
       window.cancelAnimationFrame(viewerSplitAnimationRef.current)
       viewerSplitAnimationRef.current = null
     }
 
-    const splitWidth = viewerSplitElementRef.current?.clientWidth ?? 0
-    const pageWidth = layoutRootRef.current?.clientWidth ?? 0
-    const chatMinPx = pageWidth * (CHAT_MIN_WORKSPACE_SIZE_PERCENT / 100)
-    const draggedWidthPx = getChatViewer()?.widthPx
-    const paneWidthPx = Math.min(
-      splitWidth - chatMinPx,
-      draggedWidthPx ?? (
-        viewerWidth === "review"
-          ? Infinity
-          : viewerWidth === "chat"
-            ? Math.min(VIEWER_CHAT_PANE_MAX_WIDTH_PX, Math.max(VIEWER_CHAT_PANE_MIN_WIDTH_PX, splitWidth / 2))
-            : VIEWER_PREVIEW_PANE_WIDTH_PX
-      ),
-    )
-    const target: [number, number] = viewerPaneOpen && splitWidth > 0
-      ? (() => {
-          const panePercent = Math.max(0, (paneWidthPx / splitWidth) * 100)
-          return [100 - panePercent, panePercent]
-        })()
-      : [100, 0]
-    const animate = (viewerPaneOpen || previous.open) && previous.group === group
-      && previous.chatKey === viewerChatKey && !prefersReducedMotion()
-    if (!animate) {
+    const target: [number, number] = move.to === "docked" ? dockedViewerSplit() : [100, 0]
+    if (!move.animate) {
       group.setLayout({ chatColumn: target[0], viewerPane: target[1] })
       return
     }
 
     const current = group.getLayout()
-    const from: [number, number] = previous.open
+    const from: [number, number] = previous.state === "docked"
       ? [current.chatColumn ?? 100, current.viewerPane ?? 0]
       : [100, 0]
     const startTime = performance.now()
@@ -1274,7 +1289,7 @@ export function ChatPage({ view = "transcript" }: { view?: ChatPageView }) {
       viewerSplitAnimationRef.current = progress < 1 ? window.requestAnimationFrame(step) : null
     }
     viewerSplitAnimationRef.current = window.requestAnimationFrame(step)
-  }, [projectId, shouldRenderDesktopRightSidebarLayout, viewerChatKey, viewerPaneOpen, viewerWidth])
+  }, [projectId, shouldRenderDesktopRightSidebarLayout, viewerChatKey, viewerExpanded, viewerPaneOpen, viewerWidth])
 
   useEffect(() => () => {
     if (viewerSplitAnimationRef.current !== null) window.cancelAnimationFrame(viewerSplitAnimationRef.current)

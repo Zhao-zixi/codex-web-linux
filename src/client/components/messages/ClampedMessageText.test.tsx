@@ -138,7 +138,8 @@ describe("the surface a folded message opens from", () => {
     const html = queued({ content: report, source: { kind: "report", chatIds: ["abc"] } })
     const surface = html.indexOf(`${FOLD_SURFACE_ATTRIBUTE}=""`)
     // The quote comes before the bubble opens, and Remove after it closes.
-    expect(html.indexOf(">Replied to<")).toBeLessThan(surface)
+    expect(html.indexOf(">Sub-chat<")).toBeGreaterThan(-1)
+    expect(html.indexOf(">Sub-chat<")).toBeLessThan(surface)
     const remove = html.indexOf('aria-label="Remove from queue"')
     // From inside the bubble's own tag to Remove, one more box closes than
     // opens: the bubble itself. So Remove is outside it.

@@ -52,14 +52,14 @@ describe("SourcedMessage", () => {
 
   test("the quote sits over the bubble, outside it, with a line joining them", () => {
     const html = renderToStaticMarkup(<SourcedMessage content="hello" source={{ kind: "agent", chatId: "parent" }} />)
-    const quote = html.indexOf(">Replied to<")
+    const quote = html.indexOf(">Another agent<")
     const line = html.indexOf(LINE)
     const bubble = html.indexOf("rounded-2xl")
     // Quote, then the line, then the bubble, and the bubble holds the text and nothing else.
     expect(quote).toBeGreaterThan(-1)
     expect(quote).toBeLessThan(line)
     expect(line).toBeLessThan(bubble)
-    expect(html.slice(bubble)).not.toContain("Replied to")
+    expect(html.slice(bubble)).not.toContain("Another agent")
     expect(html.slice(bubble)).toContain("hello")
     expect(count(html, LINE)).toBe(1)
     // A straight line and nothing else: no drawn bend, and not something to read or press.
@@ -106,7 +106,27 @@ describe("SourcedMessage", () => {
     )
     expect(count(html, LINE)).toBe(2)
     expect(count(html, "rounded-2xl")).toBe(2)
-    expect(count(html, ">Replied to<")).toBe(2)
+    expect(count(html, ">Sub-chat<")).toBe(2)
+  })
+
+  // The line under a quote's title, where there is one.
+  const CAPTION = "truncate pl-[26px] text-xs leading-4 text-muted-foreground"
+
+  test("a quote with nothing to add is one line: the chat, and no words under it", () => {
+    for (const html of [
+      renderToStaticMarkup(<SourcedMessage content="hello" source={{ kind: "agent", chatId: "parent" }} />),
+      renderToStaticMarkup(<SourcedMessage content="all clear" source={{ kind: "report", chatIds: ["child"] }} />),
+    ]) {
+      expect(html).not.toContain(CAPTION)
+      expect(html).not.toContain("Replied to")
+    }
+  })
+
+  test("what a quote is, is said to a reader who cannot see where it sits", () => {
+    const html = renderToStaticMarkup(<SourcedMessage content="hello" source={{ kind: "agent", chatId: "parent" }} />)
+    // Ahead of the title, and out of the drawn row.
+    expect(html).toContain('<span class="sr-only">Message from </span>')
+    expect(html.indexOf("Message from")).toBeLessThan(html.indexOf(">Another agent<"))
   })
 
   test("the mid-turn mark stands beside the bubble, after the quote", () => {
@@ -139,16 +159,18 @@ describe("reports that are not a sub-chat's last word", () => {
 
   test("an interim reply says so in its quote, and the final one after it does not", () => {
     const first = render(interim)
-    expect(first).toContain(">Replied to · Not final<")
+    expect(first).toContain(">Not final<")
     expect(first).toContain("Started the legwork.")
     // Nothing of the header reaches the reader.
     expect(first).not.toContain("Not its last word")
     expect(first).not.toContain("Legwork")
     expect(first).not.toContain("chat id")
 
+    // The last word has nothing to add, so its quote is the chat's row alone.
     const last = render(final)
-    expect(last).toContain(">Replied to<")
+    expect(last).toContain(">Sub-chat<")
     expect(last).not.toContain("Not final")
+    expect(last).not.toContain("truncate pl-[26px]")
   })
 
   test("the mark comes before what the sub-chat was asked, which is the part that gets cut", () => {
@@ -156,7 +178,7 @@ describe("reports that are not a sub-chat's last word", () => {
     const html = renderToStaticMarkup(
       <SourcedMessage content={interim} source={{ kind: "report", chatIds: ["abc"] }} delegations={[{ chatId: "abc", call }]} />,
     )
-    expect(html).toContain(">Replied to · Not final · coordinate the audit<")
+    expect(html).toContain(">Not final · coordinate the audit<")
   })
 
   test("a report from a sub-chat that set itself a schedule draws as any other, with the schedule kept from the reader", () => {
@@ -168,7 +190,7 @@ describe("reports that are not a sub-chat's last word", () => {
       "",
       "Deployed. Checking back in an hour.",
     ].join("\n"))
-    expect(html).toContain(">Replied to<")
+    expect(html).toContain(">Sub-chat<")
     expect(html).toContain("Deployed. Checking back in an hour.")
     expect(html).not.toContain("Deploy check")
     expect(html).not.toContain("It set itself")
@@ -185,7 +207,7 @@ describe("a sub-chat adopted by another chat", () => {
     expect(html).toContain(" was adopted by ")
     expect(html).toContain("another chat")
     expect(html).toContain("Its result will not arrive here.")
-    expect(html).not.toContain("Replied to")
+    expect(html).not.toContain("Message from")
     expect(html).not.toContain("rounded-2xl")
     // No one is quoted, so there is nothing for a line to join.
     expect(html).not.toContain("h-[14px] w-[3px]")

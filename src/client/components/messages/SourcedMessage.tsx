@@ -144,8 +144,8 @@ function ChatName({ chatId, fallback }: { chatId: string | null | undefined; fal
  * The news that a sub-chat this chat was waiting on now reports to another:
  * the part of a report with `status: "adopted"`.
  *
- * A line, not a bubble. The sub-chat said nothing here, and a "Replied to"
- * over an empty bubble would claim it had. But the line has to be there: the
+ * A line, not a bubble. The sub-chat said nothing here, and its quote over
+ * an empty bubble would claim it had. But the line has to be there: the
  * chat was waiting on a result, and without it the wait just ends, with
  * nothing on the page to say why. Both chats are named so either can be
  * opened, the adopter because that is where the result went.

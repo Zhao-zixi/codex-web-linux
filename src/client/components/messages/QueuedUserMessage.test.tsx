@@ -90,7 +90,7 @@ describe("QueuedUserMessage", () => {
     expect(before(sent, 'aria-label="Send now"', "all clear")).toBe(true)
 
     // What it will show once delivered: its sender quoted.
-    expect(sent).toContain(">Replied to<")
+    expect(sent).toContain(">Sub-chat<")
     // Each waits at the limit it will have once sent, so neither changes
     // height on the way in: 5 lines for this one, 25 for the user's own.
     expect(sent).toContain("max-height:5lh")
@@ -108,7 +108,7 @@ describe("QueuedUserMessage", () => {
       createdAt: 0,
       source: { kind: "report", chatIds: ["abc"] },
     })
-    expect(html).toContain(">Replied to<")
+    expect(html).toContain(">Sub-chat<")
     expect(html).toContain(">Queued<")
     expect(html).toContain('aria-label="Send now"')
     expect(html).toContain('aria-label="Remove from queue"')
@@ -135,11 +135,11 @@ describe("QueuedUserMessage", () => {
   test("a queued message has its quote and line over the dashed bubble, as it will once delivered", () => {
     const html = render({ id: "q6", content: report, attachments: [], createdAt: 0, source: { kind: "report", chatIds: ["abc"] } })
     // Quote, then the dashed bubble, then Remove on that bubble's corner.
-    const quote = html.indexOf(">Replied to<")
+    const quote = html.indexOf(">Sub-chat<")
     const bubble = html.indexOf("border-dashed")
     expect(quote).toBeGreaterThan(-1)
     expect(quote).toBeLessThan(bubble)
-    expect(html.slice(bubble)).not.toContain("Replied to")
+    expect(html.slice(bubble)).not.toContain("Sub-chat")
     expect(html.indexOf('aria-label="Remove from queue"')).toBeGreaterThan(bubble)
     // The same line as over a delivered bubble. Its 20px keep the quote, which
     // can reach over the corner Remove is on, well clear of Remove.
@@ -160,7 +160,7 @@ describe("QueuedUserMessage", () => {
     })
     const count = (text: string) => html.split(text).length - 1
     expect(count("border-dashed")).toBe(2)
-    expect(count(">Replied to<")).toBe(2)
+    expect(count(">Sub-chat<")).toBe(2)
     expect(count('aria-label="Remove from queue"')).toBe(1)
     expect(count('aria-label="Send now"')).toBe(1)
     // Remove on the first bubble, Send now in the last.
@@ -178,7 +178,7 @@ describe("QueuedUserMessage", () => {
       createdAt: 0,
       source: { kind: "report", chatIds: ["abc"] },
     })
-    expect(html).toContain(">Replied to · Not final<")
+    expect(html).toContain(">Not final<")
     expect(html).toContain("halfway")
     expect(html).not.toContain("Not its last word")
   })
@@ -194,8 +194,8 @@ describe("QueuedUserMessage", () => {
     expect(html).toContain(" was adopted by ")
     expect(html).toContain("border-dashed")
     expect(html).toContain("items-start")
-    // The line is the news. It is not a reply, and not a placeholder.
-    expect(html).not.toContain("Replied to")
+    // The line is the news. It is not a quoted message, and not a placeholder.
+    expect(html).not.toContain("Message from")
     expect(html).not.toContain("h-[14px] w-[3px]")
     expect(html).not.toContain(">Queued<")
     expect(html).toContain('aria-label="Send now"')

@@ -397,7 +397,7 @@ Please check the latest error first.`,
     const html = renderTranscript([started, report("user-1", 5)])
     // The card where the call sits says what the call did. The quote on the
     // report says what the report is to, in the words that call used.
-    const quote = ">Replied to · audit the parser<"
+    const quote = ">audit the parser<"
     expect(html.split("Started a sub-chat · audit the parser").length - 1).toBe(1)
     expect(html.split(quote).length - 1).toBe(1)
     expect(html.indexOf("Started a sub-chat")).toBeLessThan(html.indexOf(quote))
@@ -410,12 +410,14 @@ Please check the latest error first.`,
       report("user-2", 9),
     ])
     const second = followUp.slice(followUp.indexOf('id="msg-user-2"'))
-    expect(second).toContain(">Replied to · now the lexer<")
+    expect(second).toContain(">now the lexer<")
     expect(second).not.toContain("audit the parser")
 
-    // With the call outside what is loaded, the quote is the same with no excerpt.
+    // With the call outside what is loaded, the quote is the chat's row and
+    // nothing under it.
     const alone = renderTranscript([report("user-1", 5)])
-    expect(alone).toContain(">Replied to<")
+    expect(alone).toContain(">Sub-chat<")
+    expect(alone).not.toContain("truncate pl-[26px]")
     expect(alone).toContain("all clear")
   })
 
@@ -446,7 +448,9 @@ Please check the latest error first.`,
     // The rule that divided them in one bubble has nothing to divide in two.
     expect(report).not.toContain("<hr")
     // In order: the first sub-chat's call, its words, then the second with no call to quote.
-    const order = [">Replied to · tell a joke<", "Why did the scarecrow", ">Replied to<", "credentials expired"].map((text) => report.indexOf(text))
+    const words = report.indexOf("Why did the scarecrow")
+    // The second quote is its chat's row alone: it is found after the first sub-chat's words.
+    const order = [report.indexOf(">tell a joke<"), words, report.indexOf(">Sub-chat<", words), report.indexOf("credentials expired")]
     expect(order.every((position) => position >= 0)).toBe(true)
     expect([...order].sort((a, b) => a - b)).toEqual(order)
   })
@@ -456,11 +460,11 @@ Please check the latest error first.`,
     const fromAgent = renderTranscript([
       { id: "user-1", kind: "user_prompt", content: "audit the parser", source: { kind: "agent", chatId: "parent" }, timestamp },
     ])
-    // Dated by the boundary, and attributed by the quote in its bubble: the
-    // same "Replied to" the sender draws on what comes back.
+    // Dated by the boundary, and attributed by the quote over its bubble: the
+    // same row the sender draws on what comes back.
     expect(fromAgent).toContain(`>${formatPromptTimestamp(timestamp)}<`)
     expect(fromAgent).toContain("Another agent")
-    expect(fromAgent).toContain(">Replied to<")
+    expect(fromAgent).not.toContain("Replied to")
     // The boundary comes before the message it introduces.
     expect(fromAgent.indexOf(formatPromptTimestamp(timestamp))).toBeLessThan(fromAgent.indexOf("audit the parser"))
 

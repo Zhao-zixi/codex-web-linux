@@ -10,9 +10,9 @@ import { REPLY_QUOTE_WIDTH_CLASS } from "./SourcedMessage"
  *
  * A sub-chat is in no list of chats (`isSubChat`), so the way back to its
  * parent has to be in its own transcript. It is: the message that started the
- * sub-chat came from the parent's agent, and its bubble quotes the parent's
- * row under "Replied to", the same quote the parent draws on the report that
- * comes back (`ChatReplyQuote`).
+ * sub-chat came from the parent's agent, and over its bubble is the parent's
+ * row, the same quote the parent draws on the report that comes back
+ * (`ChatReplyQuote`).
  *
  * That message is not always there to carry it. A chat opens on its last
  * stretch, and in a long one the opening message is pages above, not loaded.
@@ -53,10 +53,10 @@ export function ParentChatLink({ parentChatId }: { parentChatId: string }) {
   return (
     <div className={REPLY_QUOTE_WIDTH_CLASS}>
       {parent
-        ? <ChatReplyQuote chatId={parentChatId} title="Parent chat" />
+        ? <ChatReplyQuote chatId={parentChatId} title="Parent chat" said="Parent chat:" />
         // An archived parent is still a row and still opens. One the sidebar
-        // no longer has was deleted, and "Replied to" over nothing would
-        // promise a way back that is not there.
+        // no longer has was deleted, and a row with nothing behind it would
+        // promise a way back that is not there. So this one says what it is.
         : <ChatCard chatId={null} title="Parent chat" caption="No longer available" quote />}
     </div>
   )

@@ -96,33 +96,39 @@ export function inlineChatToolExcerpt(message: ChatToolCall): string | null {
   return sent ? toMessagePreview(sent) : null
 }
 
-/** The label on every quote of a chat a message is tied to. See `ChatReplyQuote`. */
-export const REPLY_LABEL = "Replied to"
-
 /**
  * A chat's row as the quote over a message: the link between two
  * chats, drawn one way from both ends.
  *
  * A parent sends a sub-chat its task, and the sub-chat's report comes back.
- * Each of those messages quotes the chat at the other end under the same
- * "Replied to", so a reader who has met the link in one chat knows it in the
- * other. In the sub-chat it is also the way back to the parent, which no list
- * of chats offers (ParentChatLink).
+ * Each of those messages quotes the chat at the other end with the same row,
+ * so a reader who has met the link in one chat knows it in the other. In the
+ * sub-chat it is also the way back to the parent, which no list of chats
+ * offers (ParentChatLink).
+ *
+ * The row has no label of its own. Where it sits, over a message and joined
+ * to it, is what says the message is tied to that chat, and a line of words
+ * saying so again under every title was most of what a transcript of reports
+ * had to read. A second line appears only when there is something to add
+ * (`replyCaption`). `said` is the same statement for a reader who cannot see
+ * where the row sits.
  *
  * `excerpt` is what was said to the quoted chat, where this transcript holds
  * the call that said it.
  */
-export function ChatReplyQuote({ chatId, title, excerpt, interim = false }: {
+export function ChatReplyQuote({ chatId, title, excerpt, interim = false, said = "Message from" }: {
   chatId: string | null
   /** What to call the chat while the sidebar cannot say. */
   title: string
   excerpt?: string | null
   /** The message under the quote is what the chat had to say so far, with more to follow. */
   interim?: boolean
+  /** What the quote is, read out ahead of the chat's title and not drawn. */
+  said?: string
 }) {
   const thread = useSidebarThread(chatId)
   const currentProjectId = useContext(ReplyQuoteProjectContext)
-  return <ChatCard chatId={chatId} title={title} caption={replyCaption(thread, currentProjectId, excerpt, interim)} quote />
+  return <ChatCard chatId={chatId} title={title} caption={replyCaption(thread, currentProjectId, excerpt, interim)} said={said} quote />
 }
 
 /**
@@ -141,24 +147,25 @@ export const INTERIM_REPLY_NOTE = "Not final"
 export const ReplyQuoteProjectContext = createContext<string | null>(null)
 
 /**
- * The line under a quoted chat's title: the label, then the things that are
- * not what a reader would assume, then what the chat was told. The other chat
- * is usually in this project and usually still open, and a reply is usually
- * its last word. The excerpt comes last because it is the part that can run
- * long and be cut.
+ * The line under a quoted chat's title, or null when the title is all there
+ * is to say and the quote is one line. It holds the things that are not what
+ * a reader would assume, then what the chat was told. The other chat is
+ * usually in this project and usually still open, and a reply is usually its
+ * last word. The excerpt comes last because it is the part that can run long
+ * and be cut.
  */
 export function replyCaption(
   thread: (Pick<SidebarThread, "archived" | "projectId"> & { projectLabel: Pick<SidebarThread["projectLabel"], "text"> }) | null,
   currentProjectId: string | null,
   excerpt?: string | null,
   interim = false,
-): string {
-  const parts = [REPLY_LABEL]
+): string | null {
+  const parts: string[] = []
   if (thread && currentProjectId && thread.projectId !== currentProjectId) parts.push(thread.projectLabel.text)
   if (thread?.archived) parts.push("Archived")
   if (interim) parts.push(INTERIM_REPLY_NOTE)
   if (excerpt) parts.push(excerpt)
-  return parts.join(" · ")
+  return parts.length > 0 ? parts.join(" · ") : null
 }
 
 /**
@@ -166,7 +173,7 @@ export function replyCaption(
  * use. The other, as a quote, is the chat at the far end of a message
  * (`ChatReplyQuote`).
  */
-export function ChatCard({ chatId, title, caption, pending = false, quote = false }: {
+export function ChatCard({ chatId, title, caption, pending = false, quote = false, said }: {
   chatId: string | null
   /** What to call the chat while the sidebar cannot say. */
   title: string
@@ -174,6 +181,8 @@ export function ChatCard({ chatId, title, caption, pending = false, quote = fals
   /** The call that makes the chat has not returned. */
   pending?: boolean
   quote?: boolean
+  /** Read out ahead of the title and not drawn: what the card is, where only its place on the page says so. */
+  said?: string
 }) {
   const actions = useChatReferenceActions()
   const thread = useSidebarThread(chatId)
@@ -184,6 +193,8 @@ export function ChatCard({ chatId, title, caption, pending = false, quote = fals
   const threads = useMemo(() => (thread ? [thread] : []), [thread])
   const classes = toolCardClasses(quote)
   const captionLine = caption ? <p className={TOOL_CARD_CAPTION_CLASS}>{caption}</p> : null
+  // Out of the layout, so the row's gap does not count it.
+  const saidFirst = said ? <span className="sr-only">{said} </span> : null
 
   // Before the call returns there is no chat to show yet, and after it one
   // the sidebar has not heard of (a snapshot behind, or deleted since). Both
@@ -192,6 +203,7 @@ export function ChatCard({ chatId, title, caption, pending = false, quote = fals
     return (
       <div className={cn(classes.box, classes.width)}>
         <div className="flex min-w-0 items-center gap-2.5">
+          {saidFirst}
           {pending
             ? <Loader2 className="size-3.5 shrink-0 animate-spin text-logo" />
             : <MessageCircle className="size-4 shrink-0 text-muted-foreground" />}
@@ -238,6 +250,7 @@ export function ChatCard({ chatId, title, caption, pending = false, quote = fals
           )}
         >
           <div className="flex min-w-0 items-center gap-2.5">
+            {saidFirst}
             <ThreadRowContent
               thread={thread}
               showStatus

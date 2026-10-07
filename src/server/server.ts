@@ -40,6 +40,7 @@ import { clearGitHubRepoCache } from "./github"
 import { readLlmProviderSnapshot, validateLlmProviderCredentials, writeLlmProviderSnapshot } from "./llm-provider"
 import { handleTranscribe } from "./transcribe"
 import { handleChatWindow } from "./chat-window-route"
+import { handleVisualizationHeights } from "./visualization-heights"
 import { applyPiFaveModels } from "./provider-catalog"
 import { createProcessAuthDeps, ProviderAuthManager } from "./provider-auth"
 import { fetchLatestPackageVersion } from "./cli-runtime"
@@ -717,6 +718,11 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
           const attachmentContentResponse = await handleAttachmentContent(req, url, store)
           if (attachmentContentResponse) {
             return withOriginAgentCluster(attachmentContentResponse)
+          }
+
+          const visualizationHeightsResponse = await handleVisualizationHeights(req, url, store)
+          if (visualizationHeightsResponse) {
+            return withOriginAgentCluster(visualizationHeightsResponse)
           }
 
           const transcriptMediaResponse = await handleTranscriptMediaContent(req, url, store)

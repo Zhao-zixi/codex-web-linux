@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { Maximize2, Shapes } from "lucide-react"
 import { hasOpenLayer, resolveEscapePress } from "../../lib/escape-key"
+import { fetchVisualizationHeights, pickVisualizationHeight, recordVisualizationHeight, rememberedVisualizationHeights, rememberVisualizationHeights } from "../../lib/visualization-heights"
 import { openViewer } from "../../stores/viewerStore"
 import { ViewerSurface } from "../viewer/ViewerSurface"
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip"
-import { type VisualizationArtifact, VISUALIZATION_EXPAND_BUTTON, visualizationHeight, visualizationLink, visualizationDownload } from "../../../shared/visualization"
+import { type VisualizationArtifact, VISUALIZATION_EXPAND_BUTTON, visualizationHeight, visualizationLink, visualizationDownload, visualizationWidthBucket } from "../../../shared/visualization"
 import { prepareVisualizationDocument, type VisualizationTheme } from "../../../shared/visualization-host"
 
 /** Read actual host tokens, rather than deriving dark mode from the OS. This also
@@ -27,10 +28,20 @@ export function visualizationTheme(): VisualizationTheme {
   return { appearance: root.classList.contains("dark") ? "dark" : "light", variables }
 }
 
+/** A page is still for this long before its height is taken as the one it settled at. */
+const SETTLE_MS = 400
+/** After this long loaded, a change of height is the reader's doing (a row opened, a toggle), not the page's. */
+const SETTLED_FOR_GOOD_MS = 5000
+
 /**
  * The saved document in its sandboxed frame, as tall as its content. Inline
  * and at full size are the same frame, same sandbox, same document; only
  * what is around it differs.
+ *
+ * The frame starts at the height the page last measured at this width, in
+ * this browser or another (`lib/visualization-heights`), and holds that box
+ * while the document loads, so nothing under it moves when the page comes
+ * in. With none measured it starts at the height the agent declared.
  */
 function VisualizationFrame({ artifact, onLoaded, onEscape }: {
   artifact: VisualizationArtifact
@@ -42,14 +53,57 @@ function VisualizationFrame({ artifact, onLoaded, onEscape }: {
   const onEscapeRef = useRef(onEscape)
   onEscapeRef.current = onEscape
   const [document, setDocument] = useState<string>()
-  const [height, setHeight] = useState(artifact.height)
   const [failed, setFailed] = useState(false)
+  const box = useRef<HTMLDivElement>(null)
+  const [width, setWidth] = useState<number>()
+  const [measured, setMeasured] = useState<number>()
+  const [known, setKnown] = useState(() => rememberedVisualizationHeights(artifact.url))
+  // What the message handler below reads: it is set up once, for the frame's life.
+  const live = useRef({ url: artifact.url, declared: artifact.height, width, measured, known, loadedAt: 0, recordedBucket: 0 })
+  Object.assign(live.current, { url: artifact.url, declared: artifact.height, width, measured, known })
+  const settleTimer = useRef<number | undefined>(undefined)
+  const knownFor = useRef(artifact.url)
+  const height = measured ?? (width === undefined ? null : pickVisualizationHeight(known, width)) ?? artifact.height
+
+  // Before first paint, so the box is the right height from the start.
+  useLayoutEffect(() => {
+    const element = box.current
+    if (!element) return
+    setWidth(element.clientWidth)
+    if (typeof ResizeObserver === "undefined") return
+    const observer = new ResizeObserver(([entry]) => { if (entry) setWidth(entry.contentRect.width) })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
+
+  // Another browser may have measured this width. Asked once, and only when this one has not.
+  const widthKnown = width !== undefined
+  useEffect(() => {
+    const { width, known } = live.current
+    if (width === undefined || known.some(([measuredWidth]) => measuredWidth === visualizationWidthBucket(width))) return
+    const controller = new AbortController()
+    void fetchVisualizationHeights(artifact.url, controller.signal).then((fromServer) => {
+      if (controller.signal.aborted || fromServer.length === 0) return
+      // What this browser measured itself stands; the server fills in the other widths.
+      const own = new Set(live.current.known.map(([measuredWidth]) => measuredWidth))
+      const merged = [...live.current.known, ...fromServer.filter(([measuredWidth]) => !own.has(measuredWidth))].sort((left, right) => left[0] - right[0])
+      rememberVisualizationHeights(artifact.url, merged)
+      setKnown(merged)
+    })
+    return () => controller.abort()
+  }, [artifact.url, widthKnown])
+
+  useEffect(() => () => window.clearTimeout(settleTimer.current), [])
 
   useEffect(() => {
     const controller = new AbortController()
     setDocument(undefined)
     setFailed(false)
-    setHeight(artifact.height)
+    setMeasured(undefined)
+    // Another document in the same frame (its callers key by URL, so not today) starts from its own heights.
+    if (knownFor.current !== artifact.url) setKnown(rememberedVisualizationHeights(artifact.url))
+    knownFor.current = artifact.url
+    Object.assign(live.current, { loadedAt: 0, recordedBucket: 0 })
     fetch(artifact.url, { signal: controller.signal }).then(async response => {
       if (!response.ok) throw new Error("Visualization unavailable")
       const [html, { visualizationFontCss }] = await Promise.all([response.text(), import("./visualization-fonts")])
@@ -71,7 +125,24 @@ function VisualizationFrame({ artifact, onLoaded, onEscape }: {
       if (event.data?.type === "kanna:escape") onEscapeRef.current?.(event.data.repeat === true)
       if (event.data?.type === "kanna:resize") {
         const next = visualizationHeight(event.data.height)
-        if (next !== null) setHeight(next)
+        const state = live.current
+        // The shell opens by reporting the declared height, before the page
+        // has measured anything. Taken as a measurement, it would move a
+        // frame that started at its real height away from it and back.
+        const opening = next === state.declared && state.measured === undefined
+          && state.width !== undefined && pickVisualizationHeight(state.known, state.width) !== null
+        if (next === null || opening) return
+        setMeasured(next)
+        window.clearTimeout(settleTimer.current)
+        settleTimer.current = window.setTimeout(() => {
+          const { width, loadedAt, recordedBucket, url, known } = live.current
+          if (width === undefined || loadedAt === 0) return
+          const bucket = visualizationWidthBucket(width)
+          if (recordedBucket === bucket && performance.now() - loadedAt > SETTLED_FOR_GOOD_MS) return
+          live.current.recordedBucket = bucket
+          const recorded = recordVisualizationHeight(url, known, width, next)
+          if (recorded !== known) setKnown(recorded)
+        }, SETTLE_MS)
       }
       if (event.data?.type === "kanna:download") {
         const download = visualizationDownload(event.data.download)
@@ -97,20 +168,26 @@ function VisualizationFrame({ artifact, onLoaded, onEscape }: {
   }, [])
 
   if (failed) return <p role="alert" className="text-sm text-muted-foreground">This visualization could not be loaded.</p>
-  if (!document) return <p className="text-sm text-muted-foreground">Loading visualization...</p>
-  return <iframe
-    ref={frame}
-    title={artifact.title}
-    srcDoc={document}
-    sandbox="allow-scripts"
-    referrerPolicy="no-referrer"
-    className="block w-full min-w-0 border-0 bg-transparent"
-    style={{ height, colorScheme: visualizationTheme().appearance }}
-    onLoad={() => {
-      frame.current?.contentWindow?.postMessage({ type: "kanna:theme", theme: visualizationTheme() }, "*")
-      onLoaded?.()
-    }}
-  />
+  return (
+    <div ref={box} className="min-w-0" style={{ height }}>
+      {document ? (
+        <iframe
+          ref={frame}
+          title={artifact.title}
+          srcDoc={document}
+          sandbox="allow-scripts"
+          referrerPolicy="no-referrer"
+          className="block size-full min-w-0 border-0 bg-transparent"
+          style={{ colorScheme: visualizationTheme().appearance }}
+          onLoad={() => {
+            live.current.loadedAt = performance.now()
+            frame.current?.contentWindow?.postMessage({ type: "kanna:theme", theme: visualizationTheme() }, "*")
+            onLoaded?.()
+          }}
+        />
+      ) : <p className="text-sm text-muted-foreground">Loading visualization...</p>}
+    </div>
+  )
 }
 
 /**

@@ -33,6 +33,14 @@ export interface KannaToolDefinition {
   execute: (input: Record<string, unknown>, context: KannaToolContext) => Promise<KannaToolResult & { transcriptContent?: unknown }>
 }
 
+/**
+ * The most a tool's description can be. Claude Code cuts every MCP tool
+ * description at this many characters (`Sx=2048` in the CLI the Agent SDK
+ * ships, 0.3.277) and ends it "[truncated]". What a tool has to say past
+ * this goes in the session instructions (`harness-instructions.ts`).
+ */
+export const KANNA_TOOL_DESCRIPTION_LIMIT = 2048
+
 // Add tools here. Every provider registers the same definitions and calls the same handlers.
 export const KANNA_TOOLS: readonly KannaToolDefinition[] = [...DISPLAY_TOOLS, GENERATE_IMAGES_TOOL, ...ORCHESTRATION_TOOLS]
 

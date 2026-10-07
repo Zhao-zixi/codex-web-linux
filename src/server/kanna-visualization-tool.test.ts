@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { KannaToolRuntime } from "./kanna-tools"
+import { externalResource } from "./kanna-visualization-tool"
 import { readVisualizationArtifact, visualizationHeight, visualizationLink } from "../shared/visualization"
 import { copyTranscriptMedia, getTranscriptMediaDir, parseTranscriptMediaUrl, retargetEntryMediaUrls } from "./transcript-media"
 import type { TranscriptEntry } from "../shared/types"
@@ -32,6 +33,19 @@ test("snapshots local HTML and keeps forked visualizations after the source is r
   const html = await readFile(path.join(getTranscriptMediaDir(dir, 'fork'), parseTranscriptMediaUrl(fork.url)!.name), 'utf8')
   expect(html).toContain('Calculate')
   expect(html).toContain('sandbox="allow-scripts"')
+})
+
+test("refuses a document that loads something external, and says what to do instead", async () => {
+  const runtime = new KannaToolRuntime({ chatId: 's', cwd: dir, dataDir: dir, emit: async () => {}, requestInput: async () => ({}) })
+  const refused = await runtime.execute('show_visualization', { title: 'CDN', html: '<script src="https://cdn.jsdelivr.net/npm/d3@7"></script><svg></svg>' })
+  expect(refused.isError).toBe(true)
+  expect(refused.content[0]!.text).toContain("a script from https://cdn.jsdelivr.net/npm/d3@7")
+  expect(refused.content[0]!.text).toContain("Inline the script")
+  expect(externalResource('<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter">')).toContain("a stylesheet from")
+  expect(externalResource('<style>@import url("https://fonts.googleapis.com/css");</style>')).toContain("a stylesheet from")
+  expect(externalResource('<img alt="" src="https://example.com/a.png">')).toBe("an image from https://example.com/a.png")
+  // Links out, inline scripts that mention a URL, namespaces and data: images all load nothing.
+  expect(externalResource('<script>const src = "https://example.com"</script><a href="https://example.com">x</a><svg xmlns="http://www.w3.org/2000/svg"></svg><img src="data:image/png;base64,AAAA">')).toBeNull()
 })
 
 test("rejects oversized UTF-8 and directories", async () => {

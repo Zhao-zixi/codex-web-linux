@@ -80,6 +80,22 @@ const CLAUDE_TASK_TYPES: Record<string, string> = {
   remote_agent: "cloud session",
 }
 
+/**
+ * The kinds of task that are work handed to another agent: it does the work
+ * and its result comes back to the chat. Only these make a chat read as
+ * waiting on a subagent. A shell is not one, though it also runs on after the
+ * turn: a dev server left running is not something the chat is waiting for.
+ * Nor is a monitor, which watches for something rather than works toward an
+ * end, or an MCP task, which is one tool call running long, or the CLI's own
+ * housekeeping (`dream`, `auto-mode scan`). A kind not listed here is not
+ * known to be an agent, and a status that sticks is worse than one missing.
+ */
+const DELEGATED_TASK_TYPES = new Set(["subagent", "workflow", "teammate", "cloud session"])
+
+export function isDelegatedTask(type: string) {
+  return DELEGATED_TASK_TYPES.has(type)
+}
+
 /** Bounds the one field in a task report that is free text of any length. */
 const SUMMARY_LIMIT = 400
 /** Per workflow agent, so a 50-agent run stays a few KB on the wire. */

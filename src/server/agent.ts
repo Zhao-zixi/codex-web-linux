@@ -87,6 +87,7 @@ import { timestamped } from "./transcript"
 import {
   findWorkflowOf,
   finishActivity,
+  isDelegatedTask,
   linkWorkflowAgents,
   normalizeClaudeTaskMessage,
   pruneTaskLog,
@@ -1253,18 +1254,16 @@ export class AgentCoordinator {
    * What the sidebar and the chat page show: the turns in flight, plus every
    * chat whose own turn has ended while work it handed off is still going.
    *
-   * Read off the task log, so it agrees with the Tasks widget: a chat is
-   * waiting exactly while a row there is running and no turn is. That covers
-   * a monitor, which `hasBackgroundWork` leaves out. The two answer different
-   * questions. A monitor can wake the chat, so the chat is not at rest, but it
-   * can also outlive every piece of work, so nothing may wait for it to end.
+   * Read off the task log, but not every running row there counts: a chat is
+   * waiting on work it gave another agent (`hasDelegatedWork`), not on a
+   * shell or a monitor it left running, which the Tasks widget still lists.
    */
   getChatStatuses() {
     const statuses = this.getActiveStatuses()
     for (const [chatId, byId] of this.subagents) {
       if (statuses.has(chatId)) continue
       for (const activity of byId.values()) {
-        if (activity.status !== "running") continue
+        if (activity.status !== "running" || !isDelegatedTask(activity.type)) continue
         statuses.set(chatId, "waiting_on_subagent")
         break
       }
@@ -1273,7 +1272,7 @@ export class AgentCoordinator {
     // rest (queues, reports on their way) and finds the chats above them.
     const unsettled = new Set([...this.activeTurns.keys(), ...this.startingTurns.keys(), ...this.drainingStreams.keys()])
     for (const chatId of this.subagents.keys()) {
-      if (this.hasBackgroundWork(chatId)) unsettled.add(chatId)
+      if (this.hasDelegatedWork(chatId)) unsettled.add(chatId)
     }
     for (const chatId of this.orchestration?.getChatsWaitingOnSubchats(unsettled) ?? []) {
       if (!statuses.has(chatId)) statuses.set(chatId, "waiting_on_subagent")
@@ -1316,17 +1315,30 @@ export class AgentCoordinator {
   }
 
   /**
-   * The provider's own background work still going (subagents, shells,
-   * workflows), or its stream still open. A monitor does not count: it
-   * watches for something rather than works toward an end, and can run for
-   * as long as the session does.
+   * Work the chat handed to another agent of its provider's is still going: a
+   * subagent, a workflow, a Codex agent. This is what the chat is waiting on
+   * once its own turn is over (`isDelegatedTask`).
    */
-  hasBackgroundWork(chatId: string) {
-    if (this.isDraining(chatId)) return true
+  hasDelegatedWork(chatId: string) {
     for (const activity of this.subagents.get(chatId)?.values() ?? []) {
-      if (activity.status === "running" && activity.type !== "monitor") return true
+      if (activity.status === "running" && isDelegatedTask(activity.type)) return true
     }
     return false
+  }
+
+  /**
+   * The kinds of task still running here that the chat is not waiting on: a
+   * shell, a monitor. The other half of the task log from `hasDelegatedWork`,
+   * and for a different question. A chat with only these is at rest, but any
+   * of them can start another turn in it (a shell by ending, a monitor each
+   * time it fires), and that turn is still one its parent is owed.
+   */
+  getLeftRunning(chatId: string) {
+    const types = new Set<string>()
+    for (const activity of this.subagents.get(chatId)?.values() ?? []) {
+      if (activity.status === "running" && !isDelegatedTask(activity.type)) types.add(activity.type)
+    }
+    return [...types]
   }
 
   /** Whether the chat is read-only right now. */

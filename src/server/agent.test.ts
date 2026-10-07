@@ -3296,9 +3296,9 @@ describe("waiting on a subagent", () => {
   test("it ends the wait however the task ends", () => {
     for (const end of [{ failed: true }, { failed: false, stopped: true }]) {
       const agent = coordinator()
-      agent.applySubagentActivity("chat-1", { kind: "started", id: "sh1", type: "shell", label: "bun test" }, 1000)
+      agent.applySubagentActivity("chat-1", { kind: "started", id: "a1", type: "subagent", label: "explore" }, 1000)
       expect(agent.getChatStatuses().get("chat-1")).toBe("waiting_on_subagent")
-      agent.applySubagentActivity("chat-1", { kind: "stopped", id: "sh1", ...end }, 2000)
+      agent.applySubagentActivity("chat-1", { kind: "stopped", id: "a1", ...end }, 2000)
       expect(agent.getChatStatuses().has("chat-1")).toBe(false)
     }
     // A task killed with no end event is closed by the next sweep.
@@ -3308,11 +3308,61 @@ describe("waiting on a subagent", () => {
     expect(agent.getChatStatuses().has("chat-1")).toBe(false)
   })
 
-  test("a monitor holds the status, though nothing waits for a monitor to end", () => {
+  test("a shell left running is not a wait, though the Tasks widget still lists it", () => {
+    // A dev server never ends. The chat that started one has finished.
+    const agent = coordinator()
+    agent.applySubagentActivity("chat-1", { kind: "started", id: "sh1", type: "shell", label: "bun run dev", stoppable: true }, 1000)
+    expect(agent.getChatStatuses().has("chat-1")).toBe(false)
+    expect(agent.hasDelegatedWork("chat-1")).toBe(false)
+    expect(agent.getSubagents("chat-1")).toMatchObject([{ id: "sh1", type: "shell", status: "running", stoppable: true }])
+    // It can still give the chat another turn, which is a different question.
+    expect(agent.getLeftRunning("chat-1")).toEqual(["shell"])
+  })
+
+  test("a shell beside a real subagent leaves the chat waiting on the subagent alone", () => {
+    const agent = coordinator()
+    agent.applySubagentActivity("chat-1", { kind: "started", id: "sh1", type: "shell", label: "bun run dev" }, 1000)
+    agent.applySubagentActivity("chat-1", { kind: "started", id: "a1", type: "subagent", label: "explore" }, 1000)
+    expect(agent.getChatStatuses().get("chat-1")).toBe("waiting_on_subagent")
+
+    agent.applySubagentActivity("chat-1", { kind: "stopped", id: "a1", failed: false }, 2000)
+    expect(agent.getChatStatuses().has("chat-1")).toBe(false)
+    expect(agent.getSubagents("chat-1").find((task) => task.id === "sh1")).toMatchObject({ status: "running" })
+  })
+
+  test("only work handed to another agent is a wait", () => {
+    const waits = (type: string) => {
+      const agent = coordinator()
+      agent.applySubagentActivity("chat-1", { kind: "started", id: "t1", type, label: type }, 1000)
+      return agent.getChatStatuses().get("chat-1") === "waiting_on_subagent"
+    }
+    for (const type of ["subagent", "workflow", "teammate", "cloud session"]) expect([type, waits(type)]).toEqual([type, true])
+    // Not an agent, or the CLI's own housekeeping, or a kind nothing here knows.
+    for (const type of ["shell", "monitor", "MCP task", "dream", "auto-mode scan", "task", "something_new"]) expect([type, waits(type)]).toEqual([type, false])
+  })
+
+  test("a monitor left running is not a wait either, though the Tasks widget still lists it", () => {
+    // It watches for something rather than works toward an end, and nobody
+    // handed it work that is coming back.
+    const agent = coordinator()
+    agent.applySubagentActivity("chat-1", { kind: "started", id: "m1", type: "monitor", label: "Watch CI", stoppable: true }, 1000)
+    expect(agent.getChatStatuses().has("chat-1")).toBe(false)
+    expect(agent.hasDelegatedWork("chat-1")).toBe(false)
+    expect(agent.getSubagents("chat-1")).toMatchObject([{ id: "m1", type: "monitor", status: "running", stoppable: true }])
+    expect(agent.getLeftRunning("chat-1")).toEqual(["monitor"])
+  })
+
+  test("a monitor beside a real subagent leaves the chat waiting on the subagent alone", () => {
     const agent = coordinator()
     agent.applySubagentActivity("chat-1", { kind: "started", id: "m1", type: "monitor", label: "Watch CI" }, 1000)
+    agent.applySubagentActivity("chat-1", { kind: "started", id: "a1", type: "subagent", label: "explore" }, 1000)
     expect(agent.getChatStatuses().get("chat-1")).toBe("waiting_on_subagent")
-    expect(agent.hasBackgroundWork("chat-1")).toBe(false)
+    // Only what it left running, not what it is waiting on.
+    expect(agent.getLeftRunning("chat-1")).toEqual(["monitor"])
+
+    agent.applySubagentActivity("chat-1", { kind: "stopped", id: "a1", failed: false }, 2000)
+    expect(agent.getChatStatuses().has("chat-1")).toBe(false)
+    expect(agent.getSubagents("chat-1").find((task) => task.id === "m1")).toMatchObject({ status: "running" })
   })
 
   test("a Claude turn that ends with a task in the background leaves the chat waiting", async () => {

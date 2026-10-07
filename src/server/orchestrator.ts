@@ -74,7 +74,10 @@ const CLOSE_OUT_GRACE_MS = 60_000
 export interface OrchestratorAgent {
   isBusy(chatId: string): boolean
   isDraining(chatId: string): boolean
-  hasBackgroundWork(chatId: string): boolean
+  /** Work handed to another agent of the provider's is still going. What a chat waits on. */
+  hasDelegatedWork(chatId: string): boolean
+  /** The kinds of task it left running that it is not waiting on: `shell`, `monitor`. */
+  getLeftRunning(chatId: string): string[]
   isPlanning(chatId: string): boolean
   getActiveStatuses(): Map<string, KannaStatus>
   getPendingTool(chatId: string): PendingToolSnapshot | null
@@ -97,8 +100,10 @@ interface OrchestratorArgs {
 /**
  * A chat's state as an agent should read it. `running` covers queued work.
  * The two waiting states are a chat whose own turn ended while work it handed
- * off is still going: `waiting_on_subagent` for the provider's own background
- * tasks, `waiting_on_subchats` for chats it started.
+ * off is still going: `waiting_on_subagent` for its provider's own agents (a
+ * subagent, a workflow), `waiting_on_subchats` for chats it started. A shell
+ * or a monitor it left running is neither: that chat reads as its last turn
+ * ended.
  *
  * They are one state to the user (`KannaStatus`), and two here because an
  * agent can act on one and not the other: a sub-chat can be read, messaged
@@ -114,6 +119,15 @@ export type AgentChatStatus =
   | "completed"
   | "failed"
   | "cancelled"
+
+/** "a shell", "a shell and a monitor": what a chat left running, as a report says it. Null for nothing. */
+function describeLeftRunning(types: string[]) {
+  const names = [...new Set(types.map((type) => (
+    type === "shell" ? "a shell" : type === "monitor" ? "a monitor" : "a background task"
+  )))]
+  if (names.length <= 1) return names[0] ?? null
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`
+}
 
 /** The chat, or something under it, is still working. Its result is not in yet. */
 function isStillGoing(status: AgentChatStatus) {
@@ -215,6 +229,20 @@ export class ChatOrchestrator {
   private readonly reporting = new Set<string>()
   /** The last report delivery under way per parent, for the next one to follow. */
   private readonly deliveries = new Map<string, Promise<void>>()
+  /**
+   * Sub-chats whose report is in, with a shell or a monitor of their own still
+   * running. Such a chat is not waiting on anything, so it owes nothing and
+   * holds nobody. But a shell can give it another turn when it ends, and a
+   * monitor each time it fires, and that turn is its parent's to hear of: a
+   * turn starting in one of these owes a report again. When that turn's
+   * report goes with the monitor still running, the chat is watched again.
+   * The value is the timer that drops the entry, set once nothing is left
+   * running (see `handleChatSettled`).
+   *
+   * In memory only. A restart ends the provider's session and its tasks with
+   * it, so there is no later turn left to watch for.
+   */
+  private readonly laterTurns = new Map<string, ReturnType<typeof setTimeout> | null>()
   /** Sub-chats waiting out `closeOutGraceMs` before their last report. See `closeOutDue`. */
   private readonly closeOuts = new Map<string, { ready: boolean; timer?: ReturnType<typeof setTimeout> }>()
   private readonly closeOutGraceMs: number
@@ -262,6 +290,7 @@ export class ChatOrchestrator {
     this.schedules.dispose()
     if (this.bootSweep) clearTimeout(this.bootSweep)
     for (const chatId of [...this.closeOuts.keys()]) this.cancelCloseOut(chatId)
+    for (const chatId of [...this.laterTurns.keys()]) this.forgetLaterTurn(chatId)
   }
 
   private sweepReports() {
@@ -299,9 +328,14 @@ export class ChatOrchestrator {
     return queued > 0 && chat.lastTurnOutcome !== "cancelled"
   }
 
-  /** The chat itself has nothing running and nothing about to run. Says nothing of its sub-chats. */
+  /**
+   * The chat itself has nothing running and nothing about to run. Says nothing
+   * of its sub-chats. A shell or a monitor it left running does not keep it
+   * from this: neither is work the chat is waiting on (`laterTurns` covers
+   * what they may wake).
+   */
   private isSelfSettled(chat: ChatRecord) {
-    return !this.hasTurnInFlight(chat) && !this.agent.hasBackgroundWork(chat.id)
+    return !this.hasTurnInFlight(chat) && !this.agent.hasDelegatedWork(chat.id)
   }
 
   /** A chat this one started is still going, or has a report on its way here. */
@@ -379,7 +413,7 @@ export class ChatOrchestrator {
   private statusOf(chat: ChatRecord): AgentChatStatus {
     if (this.agent.getActiveStatuses().get(chat.id) === "waiting_for_user") return "needs_input"
     if (this.hasTurnInFlight(chat)) return "running"
-    if (this.agent.hasBackgroundWork(chat.id)) return "waiting_on_subagent"
+    if (this.agent.hasDelegatedWork(chat.id)) return "waiting_on_subagent"
     if (this.hasLiveSubchats(chat.id)) return "waiting_on_subchats"
     if (chat.lastTurnOutcome === "success") return "completed"
     if (chat.lastTurnOutcome === "failed") return "failed"
@@ -953,8 +987,12 @@ export class ChatOrchestrator {
         delivered.push(chatId)
         // Still waiting on work of its own: the caller has this turn's reply,
         // and is owed the next one's.
-        if (!isStillGoing(status)) await this.store.setReportOwed(chatId, false)
-        else if (chat.reportOwed) await this.store.setReportedThrough(chatId, chat.lastTurnEndedAt ?? 0)
+        if (isStillGoing(status)) {
+          if (chat.reportOwed) await this.store.setReportedThrough(chatId, chat.lastTurnEndedAt ?? 0)
+        } else {
+          if (chat.reportOwed) this.watchForLaterTurn(chatId)
+          await this.store.setReportOwed(chatId, false)
+        }
       }
       await this.dropQueuedReports(actorChatId, delivered)
       return { timedOut: timedOut && !satisfied(), chats: outcomes }
@@ -976,7 +1014,10 @@ export class ChatOrchestrator {
     if (chatId === actorChatId) throw new Error("This would stop your own turn. Finish your reply instead.")
     const target = this.requireChat(chatId)
     // Whoever stops a sub-chat of its own already knows it ended, so no report.
-    if (this.isParentOf(target.id, actorChatId)) await this.store.setReportOwed(target.id, false)
+    if (this.isParentOf(target.id, actorChatId)) {
+      this.forgetLaterTurn(target.id)
+      await this.store.setReportOwed(target.id, false)
+    }
     await this.commands.cancel(target.id)
     this.push({ sidebar: true, chatIds: [target.id] })
     return this.summarize(this.requireChat(target.id))
@@ -1253,6 +1294,16 @@ export class ChatOrchestrator {
   /** A chat ran out of turns. Wakes waits on it and reports it, and any ancestor it was holding up. */
   handleChatSettled(chatId: string) {
     for (const waiter of [...this.waiters]) waiter.check()
+    // What a reported sub-chat was watched for is over. Its end is not a
+    // turn's start: a provider about to answer it has not begun to, so the
+    // watch runs on for as long as a closing report would wait.
+    if (this.laterTurns.get(chatId) === null && this.agent.getLeftRunning(chatId).length === 0) {
+      const timer = setTimeout(() => {
+        if (this.laterTurns.get(chatId) === timer) this.laterTurns.delete(chatId)
+      }, this.closeOutGraceMs)
+      timer.unref?.()
+      this.laterTurns.set(chatId, timer)
+    }
     const changed: string[] = []
     const seen = new Set<string>()
     let current = this.store.getChat(chatId)
@@ -1272,6 +1323,16 @@ export class ChatOrchestrator {
    * above it that was at rest is waiting on it from now.
    */
   handleTurnStarted(chatId: string) {
+    if (this.laterTurns.has(chatId)) {
+      // The turn a sub-chat's shell was watched for, or one someone gave it
+      // meanwhile. Either way its parent has not heard what it says.
+      this.forgetLaterTurn(chatId)
+      if (this.store.getChat(chatId)?.parentChatId) {
+        void this.store.setReportOwed(chatId, true).catch((error) => {
+          this.onError(`could not mark sub-chat ${chatId} as owing a report: ${errorMessage(error)}`)
+        })
+      }
+    }
     this.pushChatsAbove(chatId)
   }
 
@@ -1302,6 +1363,7 @@ export class ChatOrchestrator {
    */
   handleChatStopped(chatId: string) {
     for (const child of this.childrenOf(chatId)) {
+      this.forgetLaterTurn(child.id)
       if (child.adopted) {
         // Not this chat's to stop: its turn may be the user's. It only stops
         // owing a report, for the reason the others report nothing.
@@ -1428,6 +1490,12 @@ export class ChatOrchestrator {
       const lines = [`Sub-chat ${outcome.status}: [${chat.title}](${chatLink(chat.id)}) (chat id ${chat.id})`]
       const interim = this.interimNote(chat, outcome.status)
       if (interim) lines.push(interim)
+      // Not waiting on anything, so this is its answer. What it left running
+      // may still give it something to add (`laterTurns`).
+      else {
+        const left = describeLeftRunning(this.agent.getLeftRunning(chat.id))
+        if (left) lines.push(`It left ${left} running in the background, which it is not waiting on. If that gives it another turn, that turn is reported here too.`)
+      }
       for (const schedule of this.followUpSchedules(chat.id)) {
         lines.push(`It set itself the schedule "${schedule.name}", which next runs at ${iso(schedule.nextRunAt!)}. The turn each run starts is reported here too.`)
       }
@@ -1450,7 +1518,7 @@ export class ChatOrchestrator {
     if (status === "running") return "It has started another turn since. Its report follows when that turn ends."
     if (!isStillGoing(status)) return null
     const waitingOn = status === "waiting_on_subagent"
-      ? "background work of its own (a subagent, a shell or a workflow)"
+      ? "work it handed to agents of its own (a subagent or a workflow)"
       : `chats under it: ${this.childrenOf(chat.id).filter((child) => this.holdsParent(child)).map((child) => `"${child.title}"`).join(", ")}`
     return `Not its last word. Its turn ended, and it is still waiting on ${waitingOn}. What follows is its reply so far. It reports again when its next turn ends.`
   }
@@ -1514,8 +1582,12 @@ export class ChatOrchestrator {
     this.reporting.add(chatId)
     try {
       // Written before the send, so a failure cannot leave it to be sent twice.
-      if (waiting) await this.store.setReportedThrough(chatId, through)
-      else await this.store.setReportOwed(chatId, false)
+      if (waiting) {
+        await this.store.setReportedThrough(chatId, through)
+      } else {
+        await this.store.setReportOwed(chatId, false)
+        this.watchForLaterTurn(chatId)
+      }
       await this.deliverInTurn(parentChatId, chatId)
     } catch (error) {
       this.onError(`could not report sub-chat ${chatId} to its parent: ${errorMessage(error)}`)
@@ -1547,6 +1619,18 @@ export class ChatOrchestrator {
     entry.timer.unref?.()
     this.closeOuts.set(chatId, entry)
     return false
+  }
+
+  /** See `laterTurns`. Only a chat with something of its own still running has a later turn to watch for. */
+  private watchForLaterTurn(chatId: string) {
+    this.forgetLaterTurn(chatId)
+    if (this.agent.getLeftRunning(chatId).length > 0) this.laterTurns.set(chatId, null)
+  }
+
+  private forgetLaterTurn(chatId: string) {
+    const timer = this.laterTurns.get(chatId)
+    if (timer) clearTimeout(timer)
+    this.laterTurns.delete(chatId)
   }
 
   private cancelCloseOut(chatId: string) {

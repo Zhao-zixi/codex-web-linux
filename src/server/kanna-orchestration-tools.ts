@@ -42,7 +42,7 @@ const listChats = z.strictObject({
   projectId: z.string().optional().describe("Only chats in this project."),
   query: z.string().optional().describe("Text to find in titles and each chat's latest messages."),
   status: z.enum(["idle", "running", "needs_input", "waiting_on_subagent", "waiting_on_subchats", "completed", "failed", "cancelled"]).optional()
-    .describe("waiting_on_subagent and waiting_on_subchats are a chat whose own turn ended while work it handed off is still going: its provider's background tasks, or chats it started."),
+    .describe("waiting_on_subagent and waiting_on_subchats are a chat whose own turn ended while work it handed off is still going: its provider's own subagents, or chats it started. A shell or a monitor left running in the background is not a wait."),
   parentChatId: z.string().optional().describe("Only sub-chats of this chat."),
   includeArchived: z.boolean().optional(),
   limit: z.number().int().min(1).max(100).optional().describe("Default 30."),

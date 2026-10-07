@@ -1044,9 +1044,11 @@ export function isNightlyVersion(version: string): boolean {
 
 /**
  * `waiting_on_subagent` is a chat whose own turn has ended while work it
- * handed off is still going: a task of the provider's (a subagent, a
- * backgrounded shell, a monitor, a workflow) or a Kanna sub-chat. Any of them
- * can start the chat's next turn when it ends, so the chat has not finished.
+ * handed to another agent is still going: its provider's (a subagent, a
+ * workflow) or a Kanna sub-chat. That work comes back and starts the chat's
+ * next turn, so the chat has not finished. A shell or a monitor it left
+ * running is not that: a dev server is not something a chat is waiting for,
+ * and such a chat reads as its last turn ended.
  * A chat whose turn is still running reads `running`, whatever it handed off.
  */
 export type KannaStatus =
@@ -2503,12 +2505,13 @@ export type HydratedTranscriptMessage =
   | ({ id: string; messageId?: string; hidden?: boolean } & HydratedToolCall)
 
 /**
- * One unit of work a chat is still waiting on after the main agent stopped
- * talking: a subagent, a backgrounded shell, a monitor, a workflow.
+ * One task still going after the main agent stopped talking: a subagent, a
+ * backgrounded shell, a monitor, a workflow. The Tasks widget lists them all.
  *
- * A turn is not over while any of these is `running`. The main agent's result
- * arrives as soon as *it* is done, so without this the chat read as finished
- * while the work it delegated was still going.
+ * Only the ones that are work handed to another agent (a subagent, a
+ * workflow, a sub-chat) keep the chat from reading as finished: the main
+ * agent's result arrives as soon as *it* is done, and without them the chat
+ * read as finished while the work it delegated was still going.
  */
 export interface SubagentActivity {
   /** The provider's own id: Claude's task id (a subagent's `agent_id`), or the spawning tool call id. */

@@ -420,6 +420,15 @@ function addDays(ms: number, days: number): number {
   return date.getTime()
 }
 
+/**
+ * Local midnight at the start of the day `days` calendar days before the one
+ * `nowMs` falls in: 0 is today's. For a window counted in whole days, which
+ * a chat then leaves at midnight and not at the minute it was last touched.
+ */
+export function startOfDayDaysAgo(nowMs: number, days: number): number {
+  return addDays(startOfDay(nowMs), -days)
+}
+
 /** Monday 00:00 of the week containing the given day start (weeks start Monday). */
 function mondayOfWeek(dayStartMs: number): number {
   const offset = (new Date(dayStartMs).getDay() + 6) % 7

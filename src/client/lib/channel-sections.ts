@@ -4,18 +4,27 @@ import {
   flattenSidebarThreads,
   listedThreads,
   mergeRelevantThreads,
+  startOfDayDaysAgo,
   type DraftStartTimes,
   type PendingSendTimes,
   type SidebarThread,
 } from "./thread-sections"
 
 /**
- * The Channels sidebar's sections: the Chats view's own sections, holding
- * projects instead of chats. React-free for tests.
+ * The Channels sidebar's sections: the Chats view's own sections down to
+ * Relevant, holding projects instead of chats, then two by age. React-free
+ * for tests.
  */
 
+/**
+ * How many calendar days "Recent" covers, today included: today and the
+ * six before it, by this browser's clock. The iOS app's channel list uses the
+ * same window.
+ */
+export const RECENT_CHANNEL_DAYS = 7
+
 export interface ChannelSection {
-  /** The chat section's key: "pinned", "in-progress", "relevant", a date bucket's, or "quiet". */
+  /** "pinned", "in-progress", "relevant", "recent", "older" or "quiet". */
   key: string
   label: string
   /** In Progress has no toggle, as in the Chats view. */
@@ -27,9 +36,16 @@ export interface ChannelSection {
 /**
  * Each project goes to the section of its highest-priority chat: the sections
  * are walked in display order, and a project lands where it is first met. So
- * one with a chat from yesterday and one from last week sits under Yesterday,
+ * one with a chat from yesterday and one from last month sits under Recent,
  * and one with a chat from today and a relevant one sits under Relevant.
- * Within a section projects keep the order of the chats that put them there.
+ * Within a section projects keep the order of the chats that put them there,
+ * which below Relevant is newest first.
+ *
+ * Below Relevant there are two sections by age, not the Chats view's date
+ * buckets. Those were cut for chats, which a section holds many of. There are
+ * about a tenth as many projects, so three day sections and three more for
+ * weeks left most headers over one or two rows, saying no more than the order
+ * of the rows already does.
  *
  * Pinned holds the channels pinned in their own right (`pinnedAt`, kept by
  * the server with the project) and nothing else. A
@@ -68,6 +84,13 @@ export function computeChannelSections(
   }
   const projectIdsOf = (threads: readonly SidebarThread[]) => threads.map((thread) => thread.projectId)
 
+  // Every chat the Chats view files by date, newest first, whichever bucket
+  // it put each in. A project is as recent as the first of its chats here.
+  const dated = sections.buckets
+    .flatMap((bucket) => bucket.threads)
+    .sort((left, right) => right.lastActivityAt - left.lastActivityAt)
+  const recentFrom = startOfDayDaysAgo(nowMs, RECENT_CHANNEL_DAYS - 1)
+
   // In the order they were pinned, which the server records with the project.
   const pinnedChannelIds = projectGroups
     .filter((group) => group.pinnedAt != null)
@@ -96,13 +119,20 @@ export function computeChannelSections(
       defaultExpanded: true,
       groups: take(projectIdsOf(relevant)),
     },
-    ...sections.buckets.map((bucket) => ({
-      key: bucket.key,
-      label: bucket.label,
+    {
+      key: "recent",
+      label: "Recent",
       collapsible: true,
-      defaultExpanded: bucket.defaultExpanded,
-      groups: take(projectIdsOf(bucket.threads)),
-    })),
+      defaultExpanded: true,
+      groups: take(projectIdsOf(dated.filter((thread) => thread.lastActivityAt >= recentFrom))),
+    },
+    {
+      key: "older",
+      label: "Older",
+      collapsible: true,
+      defaultExpanded: false,
+      groups: take(projectIdsOf(dated)),
+    },
     {
       key: "quiet",
       label: "No Recent Chats",

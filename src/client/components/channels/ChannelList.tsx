@@ -298,7 +298,8 @@ const ChannelRow = memo(function ChannelRow({ group, active, menuPinned, pinned,
 
 /**
  * The sidebar's Channels view: every project, and nothing under it (a
- * project's chats are in its channel), grouped into the Chats view's sections.
+ * project's chats are in its channel), grouped into the Chats view's sections
+ * down to Relevant and then by age.
  * See `computeChannelSections` for which section a project lands in.
  */
 export function ChannelList({
@@ -318,7 +319,7 @@ export function ChannelList({
   actions: ChannelActions
   projectGroups: SidebarProjectGroup[]
   activeProjectId: string | null
-  /** Anchor for the date buckets, as in the Chats view. */
+  /** Anchor for the week a channel counts as recent in, and for a channel card's date buckets. */
   nowMs: number
   /** The open chat, highlighted in a channel's hover card. Normalized. */
   activeChatId: string | null

@@ -48,7 +48,7 @@ test("client accepts only saved or exported visualization artifacts and bounded 
   expect(readVisualizationArtifact([{ ...base, url: './attachments/visualization-abc.html' }])).not.toBeNull()
   expect(visualizationHeight(NaN)).toBeNull()
   expect(visualizationHeight(-1)).toBeNull()
-  expect(visualizationHeight(99999)).toBe(2400)
+  expect(visualizationHeight(99999)).toBe(2000)
   expect(visualizationLink('file:///etc/passwd')).toBeNull()
   expect(visualizationLink('https://example.com/report')).toBe('https://example.com/report')
 })

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Script, runInNewContext } from "node:vm"
 import { buildVisualizationDocument, VISUALIZATION_CONTENT_CSP } from "./visualization-document"
-import { prepareVisualizationDocument, VISUALIZATION_BASE_SIZE_CSS } from "../shared/visualization-host"
+import { prepareVisualizationDocument, VISUALIZATION_BASE_SIZE_CSS, VISUALIZATION_HIDDEN_SCROLLBAR_CSS, VISUALIZATION_SHELL_FIT_CSS } from "../shared/visualization-host"
 
 async function parse(html: string) {
   const frames: Array<Record<string, string | null>> = []
@@ -59,7 +59,7 @@ describe("visualization document isolation", () => {
     message(child, { type: 'kanna:link', url: 'https://user:secret@example.com' })
     expect(forwarded).toEqual([])
     message(child, { type: 'kanna:resize', height: 99999 })
-    expect(frame.style.height).toBe('2400px')
+    expect(frame.style.height).toBe('2000px')
     message(child, { type: 'kanna:resize', height: 190.2 })
     expect(frame.style.height).toBe('191px')
     message(parent, { type: 'kanna:theme', theme: { appearance: 'dark' } })
@@ -133,6 +133,20 @@ describe("visualization document isolation", () => {
     expect(sent).toEqual([])
     events.keydown!({ key: 'Escape', defaultPrevented: false, isComposing: false, repeat: true })
     expect(sent).toEqual([{ type: 'kanna:escape', repeat: true }])
+  })
+
+  test("a page taller than its frame scrolls with no scrollbar, in new documents and old", async () => {
+    const saved = buildVisualizationDocument('<p>Example</p>', 'Example', 360)
+    expect(decode((await parse(saved)).frames[0]!.srcdoc!)).toContain(VISUALIZATION_HIDDEN_SCROLLBAR_CSS)
+    // One saved before the rule, and under the old 2,400 cap: the rule is
+    // added at load, and its frame is held to the height the host gives.
+    const older = saved.replace(VISUALIZATION_HIDDEN_SCROLLBAR_CSS, "").replaceAll("2000", "2400")
+    expect(older).toContain("Math.min(2400,")
+    const loaded = prepareVisualizationDocument(older, { appearance: 'light', variables: {} }, '')
+    expect(decode((await parse(loaded)).frames[0]!.srcdoc!)).toContain(VISUALIZATION_HIDDEN_SCROLLBAR_CSS)
+    expect(loaded.slice(0, loaded.indexOf("<iframe"))).toContain(`<style>${VISUALIZATION_SHELL_FIT_CSS}</style>`)
+    // Scrolling itself is untouched: nothing sets overflow on the authored page.
+    expect(VISUALIZATION_HIDDEN_SCROLLBAR_CSS).not.toContain("overflow")
   })
 
   test("the host's segmented control and tabs are styled from their aria state", async () => {

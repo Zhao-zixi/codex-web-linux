@@ -1,6 +1,10 @@
 export const VISUALIZATION_TOOL_NAME = "show_visualization"
 export const VISUALIZATION_MAX_BYTES = 2 * 1024 * 1024
-export const VISUALIZATION_MAX_HEIGHT = 2400
+/**
+ * The tallest a frame gets, asked for or measured. Content past it scrolls
+ * inside the frame. The iOS app has the same number (`VisualizationArtifact.maxHeight`).
+ */
+export const VISUALIZATION_MAX_HEIGHT = 2000
 
 /**
  * The expand button the web client lays over an inline visualization's

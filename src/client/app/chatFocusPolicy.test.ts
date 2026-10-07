@@ -9,6 +9,7 @@ import {
   hasActiveTextSelection,
   isTextEntryTarget,
   resolveChatFocusAction,
+  shouldComposerClaimFocus,
 } from "./chatFocusPolicy"
 
 class FakeElement {
@@ -28,12 +29,14 @@ class FakeElement {
   }
 
   closest(selector: string) {
-    const attributeMatch = selector.match(/^\[(.+)\]$/)
+    const attributeMatch = selector.match(/^\[([^=\]]+)(?:='(.*)')?\]$/)
     if (!attributeMatch) return null
-    const attribute = attributeMatch[1]
+    const [, attribute, value] = attributeMatch
     let current: FakeElement | null = this
     while (current) {
-      if (current.attributes.has(attribute)) return current as unknown as Element
+      if (value === undefined ? current.attributes.has(attribute) : current.attributes.get(attribute) === value) {
+        return current as unknown as Element
+      }
       current = current.parent
     }
     return null
@@ -297,5 +300,39 @@ describe("chatFocusPolicy", () => {
       canCancel: false,
       defaultPrevented: true,
     })).toBe("none")
+  })
+
+  test("an arriving chat's composer takes focus from nowhere and from a button", () => {
+    const { chat, button } = createTree()
+
+    expect(shouldComposerClaimFocus({ target: null, fallback: chat, hasActiveOverlay: false })).toBe(true)
+    expect(shouldComposerClaimFocus({ target: button, fallback: chat, hasActiveOverlay: false })).toBe(true)
+  })
+
+  test("an arriving chat's composer leaves focus where it was asked for", () => {
+    const { chat, otherInput, custom, overlay } = createTree()
+    const viewer = new FakeElement("div", { attributes: { [FOCUS_FALLBACK_IGNORE_ATTRIBUTE]: "" } })
+    const viewerButton = new FakeElement("button", { parent: viewer, tabIndex: 0 }) as unknown as Element
+    const menu = new FakeElement("div", { attributes: { "data-state": "open" } })
+    const menuItem = new FakeElement("div", { parent: menu, tabIndex: 0 }) as unknown as Element
+    const closedMenu = new FakeElement("div", { attributes: { "data-state": "closed" } })
+    const closedMenuItem = new FakeElement("div", { parent: closedMenu, tabIndex: 0 }) as unknown as Element
+    const overlayButton = new FakeElement("button", { parent: overlay, tabIndex: 0 }) as unknown as Element
+
+    expect(shouldComposerClaimFocus({ target: chat, fallback: chat, hasActiveOverlay: false })).toBe(false)
+    expect(shouldComposerClaimFocus({ target: otherInput, fallback: chat, hasActiveOverlay: false })).toBe(false)
+    expect(shouldComposerClaimFocus({ target: custom, fallback: chat, hasActiveOverlay: false })).toBe(false)
+    expect(shouldComposerClaimFocus({ target: viewerButton, fallback: chat, hasActiveOverlay: false })).toBe(false)
+    expect(shouldComposerClaimFocus({ target: menuItem, fallback: chat, hasActiveOverlay: false })).toBe(false)
+    expect(shouldComposerClaimFocus({ target: overlayButton, fallback: chat, hasActiveOverlay: true })).toBe(false)
+    // A menu on its way out is no longer somewhere to be.
+    expect(shouldComposerClaimFocus({ target: closedMenuItem, fallback: chat, hasActiveOverlay: false })).toBe(true)
+  })
+
+  test("an arriving chat's composer claims nothing while it is disabled", () => {
+    const { button } = createTree()
+
+    expect(shouldComposerClaimFocus({ target: button, fallback: { disabled: true }, hasActiveOverlay: false })).toBe(false)
+    expect(shouldComposerClaimFocus({ target: button, fallback: null, hasActiveOverlay: false })).toBe(false)
   })
 })

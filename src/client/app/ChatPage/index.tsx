@@ -819,6 +819,8 @@ export function ChatPage({ view = "transcript" }: { view?: ChatPageView }) {
     fallbackRef: chatInputElementRef,
     enabled: state.hasSelectedProject,
     canCancel: state.canCancel,
+    // Every navigation has its own key, one to the chat already open too.
+    arrivalKey: location.key,
   })
 
   // The viewer takes focus when it opens (and the chat is inert under it

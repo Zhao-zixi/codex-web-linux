@@ -87,7 +87,18 @@ export function useTerminalToggleAnimation({
   const previousShouldRenderTerminalLayoutRef = useRef(false)
   const previousShowTerminalPaneRef = useRef(false)
   const previousFocusedTerminalVisibilityRef = useRef(false)
-  const [terminalFocusRequestVersion, setTerminalFocusRequestVersion] = useState(0)
+  // A request is for the terminals on screen when it was made, so it ends
+  // when `projectId` moves on. That switch mounts the next project's panes,
+  // and a pane answers whatever request is standing when it mounts: with a
+  // plain counter, once a terminal had been opened anywhere, going to a chat
+  // in a project whose terminal is showing took focus from the composer a
+  // frame after it got there. Reset while rendering, so those panes mount
+  // with none.
+  const [focusRequest, setFocusRequest] = useState({ projectId, version: 0 })
+  if (focusRequest.projectId !== projectId) {
+    setFocusRequest({ projectId, version: 0 })
+  }
+  const terminalFocusRequestVersion = focusRequest.projectId === projectId ? focusRequest.version : 0
 
   useEffect(() => {
     const previousProjectId = previousProjectIdRef.current
@@ -99,7 +110,10 @@ export function useTerminalToggleAnimation({
       showTerminalPane,
       wasTerminalVisible: wasVisible,
     })) {
-      setTerminalFocusRequestVersion((current) => current + 1)
+      setFocusRequest((current) => ({
+        projectId,
+        version: (current.projectId === projectId ? current.version : 0) + 1,
+      }))
     }
 
     if (previousProjectId !== null && previousProjectId === projectId && !showTerminalPane && wasVisible) {

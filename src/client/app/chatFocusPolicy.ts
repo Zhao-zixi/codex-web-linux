@@ -70,6 +70,31 @@ export function focusNextChatInput(current: HTMLTextAreaElement | null, document
   return true
 }
 
+/**
+ * Whether focus that has landed on `target` while a chat is opening goes to
+ * the composer instead (see the arrival claim in `useStickyChatFocus`).
+ *
+ * It does unless it landed somewhere that is itself asking for it: a field to
+ * type in (a search box, a terminal), the viewer, or anything inside a layer
+ * that is up (a dialog, a menu, a hover card). Those last also trap focus, and
+ * taking it from one would only have it taken straight back.
+ */
+export function shouldComposerClaimFocus(args: {
+  target: Element | null
+  fallback: { disabled?: boolean } | null
+  hasActiveOverlay: boolean
+}): boolean {
+  const { target, fallback, hasActiveOverlay } = args
+
+  if (!fallback || fallback.disabled) return false
+  if (target === fallback) return false
+  if (hasActiveOverlay) return false
+  if (isTextEntryTarget(target)) return false
+  if (hasAttributeInTree(target, FOCUS_FALLBACK_IGNORE_ATTRIBUTE)) return false
+  if (target?.closest("[data-state='open']")) return false
+  return true
+}
+
 export function resolveChatFocusAction(args:
   | {
     trigger: "escape"

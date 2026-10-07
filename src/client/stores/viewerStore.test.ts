@@ -5,6 +5,7 @@ import { getChatViewer, openViewer, useViewerStore } from "./viewerStore"
 const FILE = { kind: "file", projectId: "p1", path: "README.md" } as const
 const DIFF = { kind: "diff", projectId: "p1", path: "src/a.ts" } as const
 const CHAT = { kind: "chat", chatId: "sub-1" } as const
+const VISUALIZATION = { kind: "visualization", artifact: { type: "visualization", version: 1, title: "Signups", height: 360, url: "/api/chats/chat-1/media/visualization-abc.html" } } as const
 const IMAGE = { kind: "attachment", attachment: { url: "/media/a.png", name: "a.png", mimeType: "image/png", size: 1 } } as const
 
 describe("viewerStore", () => {
@@ -115,6 +116,53 @@ describe("viewerStore", () => {
       "chat-1": { item: { kind: "chat", chatId: "sub-2", back: ["sub-1"] }, expanded: false, widthPx: 520 },
       "chat-2": { item: CHAT, expanded: true, widthPx: 480 },
     })
+  })
+
+  test("a visualization opens expanded and gives the pane back as it was", () => {
+    // From a closed pane: expanded, and closing leaves nothing behind.
+    openViewer(VISUALIZATION, { expanded: true })
+    expect(getChatViewer()).toEqual({ item: VISUALIZATION, expanded: true, expandedBefore: false })
+    useViewerStore.getState().close()
+    openViewer(FILE)
+    expect(getChatViewer()).toEqual({ item: FILE, expanded: false })
+    useViewerStore.getState().closeAll()
+
+    // Over a docked chat preview: closing goes back to the chat, docked, at its width.
+    openViewer(CHAT)
+    useViewerStore.getState().setWidth(520)
+    openViewer(VISUALIZATION, { expanded: true })
+    expect(getChatViewer()?.expanded).toBe(true)
+    useViewerStore.getState().close()
+    expect(getChatViewer()).toEqual({ item: CHAT, expanded: false, widthPx: 520 })
+
+    // Something else opened in its place is not left over the chat either.
+    openViewer(VISUALIZATION, { expanded: true })
+    openViewer(IMAGE)
+    expect(getChatViewer()).toMatchObject({ item: IMAGE, expanded: false })
+  })
+
+  test("collapsing or expanding a visualization yourself is the pane's setting from then on", () => {
+    openViewer(CHAT)
+    openViewer(VISUALIZATION, { expanded: true })
+    useViewerStore.getState().toggleExpanded()
+    expect(getChatViewer()).toMatchObject({ item: VISUALIZATION, expanded: false })
+    expect(getChatViewer()).not.toHaveProperty("expandedBefore")
+    useViewerStore.getState().toggleExpanded()
+    useViewerStore.getState().close()
+    expect(getChatViewer()).toMatchObject({ item: CHAT, expanded: true })
+  })
+
+  test("a pane already expanded stays so under a visualization, and it survives a reload", () => {
+    openViewer(FILE)
+    useViewerStore.getState().toggleExpanded()
+    openViewer(VISUALIZATION, { expanded: true })
+    expect(getChatViewer()).toEqual({ item: VISUALIZATION, expanded: true })
+    expect(persistedChatViewers({ "chat-1": { item: VISUALIZATION, expanded: true, expandedBefore: false } }))
+      .toEqual({ "chat-1": { item: VISUALIZATION, expanded: true, expandedBefore: false } })
+    // A chart does not come back, and the chat under it comes back docked.
+    expect(persistedChatViewers({
+      "chat-1": { item: { kind: "chart", payload: { title: "x", type: "bar", data: [] } }, expanded: true, expandedBefore: false, returnTo: { item: CHAT } },
+    })).toEqual({ "chat-1": { item: CHAT, expanded: false } })
   })
 
   test("a jump for the previewed chat is one-shot and dropped with the page's chat", () => {

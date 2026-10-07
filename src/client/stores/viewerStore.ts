@@ -1,6 +1,7 @@
 import { create } from "zustand"
 import type { ChartToolPayload, DisplayAttachment } from "../../shared/display-tools"
 import type { ChatAttachment } from "../../shared/types"
+import type { VisualizationArtifact } from "../../shared/visualization"
 import type { ChatJumpTarget } from "../lib/chat-navigation"
 import { generateUUID } from "../lib/utils"
 import { settledChatViewer, useRightSidebarStore, type ChatViewerState } from "./rightSidebarStore"
@@ -32,6 +33,8 @@ export type ViewerItem =
   | { kind: "file"; projectId: string; path: string; line?: number }
   | { kind: "attachment"; attachment: ViewerAttachment }
   | { kind: "chart"; payload: ChartToolPayload }
+  /** An inline visualization at full size. A second copy of the saved document, not the one in the transcript. */
+  | { kind: "visualization"; artifact: VisualizationArtifact }
   /**
    * Another chat, live, with a composer of its own: any chat the one the
    * page is on refers to (see `lib/chat-open`). `back` is the chats that lead back from
@@ -99,7 +102,8 @@ interface ViewerState {
   /** The chat a mounted previewer holds a subscription on; see `usePreviewedChatId`. */
   liveChatId: string | null
   setChat: (chatId: string | null) => void
-  open: (item: ViewerItem) => void
+  /** `expanded` opens it over the chat whatever the pane was, and only for as long as it is open. */
+  open: (item: ViewerItem, options?: { expanded?: boolean }) => void
   close: () => void
   closeAll: () => void
   setScrolledDiffPath: (path: string | null) => void
@@ -139,9 +143,11 @@ export const useViewerStore = create<ViewerState>()((set, get) => ({
     updateViewer(leaving, settledChatViewer)
     set({ chatKey, chatJump: null })
   },
-  open: (item) => {
+  open: (item, options) => {
     const { chatKey } = get()
     const current = currentViewer(chatKey)
+    // The pane's own setting, under an item that opened expanded.
+    const expanded = current ? current.expandedBefore ?? current.expanded : false
     // A dragged width holds while you look at things of one kind: a review,
     // a preview and a chat each open at their own width.
     const sameKind = current !== null && viewerWidthClass(current.item) === viewerWidthClass(item)
@@ -155,7 +161,8 @@ export const useViewerStore = create<ViewerState>()((set, get) => ({
         : current.returnTo
     useRightSidebarStore.getState().setChatViewer(chatKey, {
       item,
-      expanded: current?.expanded ?? false,
+      expanded: options?.expanded || expanded,
+      ...(options?.expanded && !expanded ? { expandedBefore: false } : {}),
       ...(sameKind && current.widthPx !== undefined ? { widthPx: current.widthPx } : {}),
       ...(returnTo ? { returnTo } : {}),
     })
@@ -171,7 +178,7 @@ export const useViewerStore = create<ViewerState>()((set, get) => ({
     const { item, widthPx } = current.returnTo
     useRightSidebarStore.getState().setChatViewer(chatKey, {
       item,
-      expanded: current.expanded,
+      expanded: current.expandedBefore ?? current.expanded,
       ...(widthPx !== undefined ? { widthPx } : {}),
     })
   },
@@ -182,7 +189,7 @@ export const useViewerStore = create<ViewerState>()((set, get) => ({
       ? viewer
       : { ...viewer, reviewPath: path ?? undefined }
   )),
-  toggleExpanded: () => updateViewer(get().chatKey, (viewer) => ({ ...viewer, expanded: !viewer.expanded })),
+  toggleExpanded: () => updateViewer(get().chatKey, ({ expandedBefore: _, ...viewer }) => ({ ...viewer, expanded: !viewer.expanded })),
   setWidth: (widthPx) => updateViewer(get().chatKey, (viewer) => (
     viewer.widthPx === widthPx ? viewer : { ...viewer, widthPx }
   )),
@@ -199,8 +206,8 @@ export const useViewerStore = create<ViewerState>()((set, get) => ({
   clearChatJump: (requestId) => set((state) => (state.chatJump?.requestId === requestId ? { chatJump: null } : state)),
 }))
 
-export function openViewer(item: ViewerItem) {
-  useViewerStore.getState().open(item)
+export function openViewer(item: ViewerItem, options?: { expanded?: boolean }) {
+  useViewerStore.getState().open(item, options)
 }
 
 /** What the page's chat has open in the viewer, and how, or null. */

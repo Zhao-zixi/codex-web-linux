@@ -8,6 +8,9 @@ import type { TranscriptEntry } from "../../../shared/types"
 import { AttachmentsCard, DisplayToolMessage } from "./DisplayToolMessage"
 import { ToolPayloadProvider } from "./tool-payload-context"
 import { csvCell } from "./ChartTool"
+import { VisualizationExpandButton } from "./Visualization"
+import { TooltipProvider } from "../ui/tooltip"
+import { VISUALIZATION_EXPAND_BUTTON } from "../../../shared/visualization"
 import { displayAttachments, resolveChartKeys, type ChartToolPayload } from "../../../shared/display-tools"
 
 test("display tools render outside collapsed groups with chart and attachment cards", () => {
@@ -72,6 +75,16 @@ test("chart aliases filter category columns and CSV escapes quotes", () => {
   const chart: ChartToolPayload = { title: "Sales", type: "line", data: [{ month: "Jan", value: 10 }], xAxisKey: "month", dataKeys: ["month", "value"] }
   expect(resolveChartKeys(chart)).toEqual({ xKey: "month", keys: ["value"] })
   expect(csvCell('A "quoted", value')).toBe('"A ""quoted"", value"')
+})
+
+test("the expand button is a circle in the corner, named for assistive tech, with no label of its own", () => {
+  const html = renderToStaticMarkup(<TooltipProvider><VisualizationExpandButton onClick={() => {}} /></TooltipProvider>)
+  const { size, inset } = VISUALIZATION_EXPAND_BUTTON
+  expect(html).toContain('aria-label="Expand"')
+  expect(html).toContain(`top:${inset}px;right:${inset}px;width:${size}px;height:${size}px`)
+  expect(html).toContain("visualization-expand absolute")
+  expect(html).toContain("rounded-full")
+  expect(html).not.toContain(">Expand<")
 })
 
 test("visualizations stay inline between Markdown messages without a tool card", () => {

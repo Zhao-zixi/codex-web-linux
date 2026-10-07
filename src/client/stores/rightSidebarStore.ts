@@ -43,6 +43,13 @@ export interface ChatViewerState {
   item: ViewerItem
   /** Widened over the chat, rather than in its pane beside it. */
   expanded: boolean
+  /**
+   * False while an item that opens expanded (a visualization) holds a pane
+   * that was not: what `expanded` goes back to when it closes onto `returnTo`
+   * or something else opens, so one look at a chart doesn't leave the pane
+   * over the chat. Gone once you expand or collapse it yourself.
+   */
+  expandedBefore?: boolean
   /** The pane's width once you've dragged it; until then, the default for what's open. */
   widthPx?: number
   /**
@@ -180,7 +187,7 @@ export function persistedChatViewers(chatViewers: Record<string, ChatViewerState
     if (!chatKey) continue
     if (item.kind === "chart" || (item.kind === "attachment" && item.attachment.url.startsWith("blob:"))) {
       // What it was opened over does come back: the chat preview under it.
-      if (viewer.returnTo) kept[chatKey] = { ...viewer.returnTo, expanded: viewer.expanded }
+      if (viewer.returnTo) kept[chatKey] = { ...viewer.returnTo, expanded: viewer.expandedBefore ?? viewer.expanded }
       continue
     }
     kept[chatKey] = settledChatViewer(viewer)

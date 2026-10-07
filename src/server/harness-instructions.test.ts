@@ -5,6 +5,7 @@ import { buildKannaSystemInstructions, buildKannaSystemMessage, KANNA_ORCHESTRAT
 import { KANNA_TOOL_NAMES } from "./kanna-tools"
 import { SHOW_VISUALIZATION_TOOL } from "./kanna-visualization-tool"
 import { KANNA_VISUALIZATION_SKILL_INSTRUCTIONS } from "./visualization-instructions"
+import { VISUALIZATION_EXPAND_BUTTON } from "../shared/visualization"
 
 const AGENT_ID = "claude/claude-opus-5"
 
@@ -49,6 +50,24 @@ test("visualization instructions reach tool-enabled harnesses and prefer native 
   expect(instructions).toContain("do not generate charts or diagrams as PNGs")
   expect(instructions).toContain(KANNA_VISUALIZATION_SKILL_INSTRUCTIONS)
   expect(SHOW_VISUALIZATION_TOOL.description).toContain(KANNA_VISUALIZATION_SKILL_INSTRUCTIONS)
+  // A chart's settings use the same control the prototype picker does, and
+  // the session instructions and the tool say so in the same words.
+  for (const text of [instructions, SHOW_VISUALIZATION_TOOL.description]) {
+    expect(text).toContain("kanna-segmented")
+    expect(text).toContain("kanna-tabs")
+    expect(text).toContain("16px")
+  }
+  expect(SHOW_VISUALIZATION_TOOL.description).not.toContain("<select aria-label")
+  // The corner the prompt keeps clear is the expand button's own, with a margin,
+  // and it is said before the authoring details that follow.
+  const { size, inset, clear } = VISUALIZATION_EXPAND_BUTTON
+  expect(clear).toBeGreaterThan(size + inset)
+  const description = SHOW_VISUALIZATION_TOOL.description
+  expect(description).toContain(`Keep the top-right ${clear}px by ${clear}px clear`)
+  expect(description).toContain(`${size}px expand button`)
+  expect(description.indexOf("Start with a header")).toBeLessThan(description.indexOf("Inline all data"))
+  expect(description).toContain(`<header style=\\"padding-right:${clear}px\\">`)
+  expect(instructions).toContain("keep its top-right corner clear")
   expect(buildKannaSystemMessage(AGENT_ID)).toContain(KANNA_VISUALIZATION_INSTRUCTIONS)
   expect(buildKannaSystemInstructions(AGENT_ID, { tools: false })).not.toContain("show_visualization")
 })

@@ -2,6 +2,14 @@ export const VISUALIZATION_TOOL_NAME = "show_visualization"
 export const VISUALIZATION_MAX_BYTES = 2 * 1024 * 1024
 export const VISUALIZATION_MAX_HEIGHT = 2400
 
+/**
+ * The expand button the web client lays over an inline visualization's
+ * top-right corner, in CSS px. `clear` is the square of that corner authored
+ * content keeps free: the inset, the button, and a margin. The tool
+ * description quotes it, so the button and the prompt cannot drift apart.
+ */
+export const VISUALIZATION_EXPAND_BUTTON = { size: 28, inset: 8, clear: 48 } as const
+
 export interface VisualizationArtifact {
   type: "visualization"
   version: 1

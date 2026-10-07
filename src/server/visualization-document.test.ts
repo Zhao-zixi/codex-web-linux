@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { Script, runInNewContext } from "node:vm"
 import { buildVisualizationDocument, VISUALIZATION_CONTENT_CSP } from "./visualization-document"
-import { prepareVisualizationDocument } from "../shared/visualization-host"
+import { prepareVisualizationDocument, VISUALIZATION_BASE_SIZE_CSS } from "../shared/visualization-host"
 
 async function parse(html: string) {
   const frames: Array<Record<string, string | null>> = []
@@ -90,12 +90,54 @@ describe("visualization document isolation", () => {
     // This load-time bootstrap also repairs the original shell, which did not
     // apply theme updates to its own root. It must reject messages from children.
     const style = { colorScheme: '' }, parent = {}, events: Record<string, (event: any) => void> = {}
-    runInNewContext(shell.scripts[0]!, { document: { documentElement: { style } }, parent, window: {},
+    const child = {}, passed: unknown[] = []
+    Object.assign(parent, { postMessage: (value: unknown) => passed.push(value) })
+    runInNewContext(shell.scripts[0]!, { document: { documentElement: { style }, getElementById: () => ({ contentWindow: child }) }, parent, window: {},
       addEventListener: (name: string, fn: any) => { events[name] = fn } })
     expect(style.colorScheme).toBe('dark')
     events.message!({ source: {}, data: { type: 'kanna:theme', theme: { appearance: 'light' } } })
     expect(style.colorScheme).toBe('dark')
     events.message!({ source: parent, data: { type: 'kanna:theme', theme: { appearance: 'light' } } })
     expect(style.colorScheme).toBe('light')
+    // Escape comes up from the authored frame only, and as nothing but itself.
+    events.message!({ source: {}, data: { type: 'kanna:escape' } })
+    events.message!({ source: child, data: { type: 'kanna:close-everything' } })
+    expect(passed).toEqual([])
+    events.message!({ source: child, data: { type: 'kanna:escape', repeat: 'yes', extra: 1 } })
+    expect(passed).toEqual([{ type: 'kanna:escape', repeat: false }])
+  })
+
+  test("body text is 16px, in a new document and in one saved before it was", async () => {
+    const saved = buildVisualizationDocument('<p>Prose</p>', 'Example', 360)
+    const inner = decode((await parse(saved)).frames[0]!.srcdoc!)
+    expect(inner).toContain("font-size:16px;line-height:1.5")
+    expect(inner).not.toContain("font-size:14px;line-height:1.5")
+    // An older document keeps its own 14px rule. The rule added at load comes
+    // after it and before anything authored, so an authored size still wins.
+    const older = saved.replace("font-size:16px;line-height:1.5", "font-size:14px;line-height:1.5")
+    const loaded = decode((await parse(prepareVisualizationDocument(older, { appearance: 'light', variables: {} }, ''))).frames[0]!.srcdoc!)
+    expect(loaded.indexOf("font-size:14px;line-height:1.5")).toBeLessThan(loaded.indexOf(VISUALIZATION_BASE_SIZE_CSS))
+    expect(loaded.indexOf(VISUALIZATION_BASE_SIZE_CSS)).toBeLessThan(loaded.indexOf("<p>Prose</p>"))
+  })
+
+  test("the frame hands Escape up unless the visualization used it", async () => {
+    const saved = buildVisualizationDocument('<p>Example</p>', 'Example', 360)
+    const shell = await parse(prepareVisualizationDocument(saved, { appearance: 'light', variables: {} }, ''))
+    const content = await parse(decode(shell.frames[0]!.srcdoc!))
+    const added = content.scripts.find(code => code.includes("kanna:escape"))!
+    const sent: unknown[] = [], events: Record<string, (event: any) => void> = {}
+    runInNewContext(added, { parent: { postMessage: (value: unknown) => sent.push(value) }, addEventListener: (name: string, fn: any) => { events[name] = fn } })
+    events.keydown!({ key: 'a', defaultPrevented: false, isComposing: false, repeat: false })
+    events.keydown!({ key: 'Escape', defaultPrevented: true, isComposing: false, repeat: false })
+    events.keydown!({ key: 'Escape', defaultPrevented: false, isComposing: true, repeat: false })
+    expect(sent).toEqual([])
+    events.keydown!({ key: 'Escape', defaultPrevented: false, isComposing: false, repeat: true })
+    expect(sent).toEqual([{ type: 'kanna:escape', repeat: true }])
+  })
+
+  test("the host's segmented control and tabs are styled from their aria state", async () => {
+    const inner = decode((await parse(buildVisualizationDocument('<p>Example</p>', 'Example', 360))).frames[0]!.srcdoc!)
+    expect(inner).toContain(".kanna-segmented>:is([aria-checked=true],[aria-selected=true],[aria-pressed=true])")
+    expect(inner).toContain(".kanna-tabs>:is([aria-selected=true],[aria-checked=true],[aria-pressed=true])")
   })
 })

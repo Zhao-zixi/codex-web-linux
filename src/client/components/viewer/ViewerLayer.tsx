@@ -13,6 +13,7 @@ import { ViewerPlacementProvider, type ViewerPlacement } from "./ViewerSurface"
 const DiffViewer = lazy(() => import("../chat-ui/git/DiffViewer").then((m) => ({ default: m.DiffViewer })))
 const AttachmentViewer = lazy(() => import("./AttachmentViewer").then((m) => ({ default: m.AttachmentViewer })))
 const ChartFullView = lazy(() => import("../messages/ChartTool").then((m) => ({ default: m.ChartFullView })))
+const VisualizationFullView = lazy(() => import("../messages/Visualization").then((m) => ({ default: m.VisualizationFullView })))
 const FileViewer = lazy(() => import("./FileViewer").then((m) => ({ default: m.FileViewer })))
 // Its parts are the chat page's own, already loaded there. Lazy all the same:
 // the export viewer mounts this layer too, and never shows a chat.
@@ -98,6 +99,8 @@ export function ViewerLayer({ diff, chat, className, onOpenLocalLink, placement,
             <FileViewer key={`${item.path}:${item.line ?? ""}`} projectId={item.projectId} path={item.path} line={item.line} context={diff} onClose={close} />
           ) : item.kind === "chart" ? (
             <ChartFullView payload={item.payload} onClose={close} />
+          ) : item.kind === "visualization" ? (
+            <VisualizationFullView key={item.artifact.url} artifact={item.artifact} onClose={close} />
           ) : (item.kind === "graph" || (item.kind === "chat" && item.graph)) && chat ? (
             // The graph, and a chat picked from it: one view for both, so the
             // graph stays where it was under the chat and Back finds it there.

@@ -735,6 +735,23 @@
   /* Attachment rows show their scrollbar thumb only while the card is hovered.
      Both forms are needed: browsers that support scrollbar-color ignore the
      ::-webkit-scrollbar rules above. */
+  /* The expand button over an inline visualization. Where a pointer hovers it
+     shows only with the pointer over the visualization: `:hover` holds on the
+     wrapper while the pointer is over the frame inside it, though the frame
+     keeps the events themselves. Not `:focus-within`, which a click into the
+     frame would hold on. A touch screen has no hover, and a tap on the frame
+     never reaches the page to count as one, so there it is always shown. */
+  @media (hover: hover) and (pointer: fine) {
+    .visualization-expand {
+      opacity: 0;
+      transition: opacity 150ms ease-out;
+    }
+    .visualization:hover > .visualization-expand,
+    .visualization-expand:focus-visible {
+      opacity: 1;
+    }
+  }
+
   .group:not(:hover) > .attachments-scroller {
     scrollbar-color: transparent transparent;
   }

@@ -6,15 +6,29 @@ import { AppSettingsManager, readAppSettingsSnapshot } from "./app-settings"
 import type { AppSettingsSnapshot } from "../shared/types"
 
 let tempDirs: string[] = []
+const diagnosticsEnabled = process.env.KANNA_CI_TEST_DIAG === "1"
+
+function diag(label: string) {
+  if (diagnosticsEnabled) console.error(`[ci-diag app-settings] ${label}`)
+}
 
 afterEach(async () => {
-  await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })))
+  const count = tempDirs.length
+  diag(`cleanup begin count=${count}`)
+  await Promise.all(tempDirs.map(async (dir, index) => {
+    diag(`cleanup rm begin index=${index} count=${count}`)
+    await rm(dir, { recursive: true, force: true })
+    diag(`cleanup rm done index=${index} count=${count}`)
+  }))
   tempDirs = []
+  diag("cleanup done")
 })
 
 async function createTempFilePath() {
+  diag(`mkdtemp start index=${tempDirs.length}`)
   const dir = await mkdtemp(path.join(tmpdir(), "kanna-settings-"))
   tempDirs.push(dir)
+  diag(`mkdtemp done index=${tempDirs.length - 1}`)
   return path.join(dir, "settings.json")
 }
 
@@ -364,56 +378,81 @@ describe("AppSettingsManager", () => {
   test("does not rewrite a settings file that already carries the composer default", async () => {
     // Every field the file payload has must be in the comparison too, or the
     // file is rewritten on every launch for no change.
+    diag("test13 createTemp start")
     const filePath = await createTempFilePath()
+    diag("test13 createTemp done")
     const first = new AppSettingsManager(filePath)
+    diag("test13 first initialize start")
     await first.initialize()
+    diag("test13 first initialize done")
+    diag("test13 writePatch start")
     await first.writePatch({ submitWhileRunning: "steer" })
+    diag("test13 writePatch done")
     first.dispose()
+    diag("test13 readFile first start")
     const written = await readFile(filePath, "utf8")
+    diag("test13 readFile first done")
 
     const second = new AppSettingsManager(filePath)
+    diag("test13 second initialize start")
     await second.initialize()
+    diag("test13 second initialize done")
     second.dispose()
 
+    diag("test13 readFile second start")
     expect(await readFile(filePath, "utf8")).toBe(written)
+    diag("test13 readFile second done")
   })
 
   test("normalizes GPT-5.6 reasoning levels when settings are written", async () => {
+    diag("test14 createTemp start")
     const filePath = await createTempFilePath()
+    diag("test14 createTemp done")
     const manager = new AppSettingsManager(filePath)
+    diag("test14 initialize start")
     await manager.initialize()
+    diag("test14 initialize done")
 
+    diag("test14 writePatch sol start")
     const sol = await manager.writePatch({
       providerDefaults: {
         codex: { model: "gpt-5.6-sol", modelOptions: { reasoningEffort: "ultra" } },
       },
     })
+    diag("test14 writePatch sol done")
     expect(sol.providerDefaults.codex.modelOptions.reasoningEffort).toBe("ultra")
 
+    diag("test14 writePatch terra start")
     const terra = await manager.writePatch({
       providerDefaults: {
         codex: { model: "gpt-5.6-terra", modelOptions: { reasoningEffort: "max" } },
       },
     })
+    diag("test14 writePatch terra done")
     expect(terra.providerDefaults.codex.modelOptions.reasoningEffort).toBe("max")
 
+    diag("test14 writePatch luna start")
     const luna = await manager.writePatch({
       providerDefaults: {
         codex: { model: "gpt-5.6-luna", modelOptions: { reasoningEffort: "ultra" } },
       },
     })
+    diag("test14 writePatch luna done")
     expect(luna.providerDefaults.codex.modelOptions.reasoningEffort).toBe("max")
 
+    diag("test14 writePatch legacy start")
     const legacy = await manager.writePatch({
       providerDefaults: {
         codex: { model: "gpt-5.5", modelOptions: { reasoningEffort: "xhigh" } },
       },
     })
+    diag("test14 writePatch legacy done")
     expect(legacy.providerDefaults.codex).toMatchObject({
       model: "gpt-5.5",
       modelOptions: { reasoningEffort: "xhigh", fastMode: false },
     })
 
     manager.dispose()
+    diag("test14 dispose done")
   })
 })

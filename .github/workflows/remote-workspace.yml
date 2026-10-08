@@ -23,9 +23,57 @@ jobs:
           bun-version: 1.3.5
       - run: bun install --frozen-lockfile
       - run: bun run check
-      - run: |
+      - name: Run unit tests with stall diagnostics
+        run: |
+          set -uo pipefail
           export no_proxy="$NO_PROXY"
-          bun test
+          export KANNA_CI_TEST_DIAG=1
+          bun test &
+          test_pid=$!
+
+          (
+            sleeper_pid=""
+            stop_sleeper() {
+              if [ -n "$sleeper_pid" ]; then
+                kill "$sleeper_pid" 2>/dev/null || true
+              fi
+            }
+            trap stop_sleeper EXIT TERM
+            sleep 300 &
+            sleeper_pid=$!
+            wait "$sleeper_pid" || exit 0
+            sleeper_pid=""
+            state="$(awk '{print $3}' "/proc/$test_pid/stat" 2>/dev/null || true)"
+            if kill -0 "$test_pid" 2>/dev/null && [ "$state" != Z ]; then
+              echo "[ci-diag watchdog] bun test exceeded 300 seconds; process metadata follows" >&2
+              ps -T -p "$test_pid" -o pid,tid,stat,comm,wchan >&2 || true
+              for task in /proc/"$test_pid"/task/*; do
+                [ -d "$task" ] || continue
+                tid="${task##*/}"
+                state="$(awk '$1 == "State:" { print $2 }' "$task/status" 2>/dev/null || true)"
+                comm="$(cat "$task/comm" 2>/dev/null || true)"
+                wchan="$(cat "$task/wchan" 2>/dev/null || true)"
+                printf '[ci-diag watchdog] tid=%s state=%s comm=%s wchan=%s\n' "$tid" "$state" "$comm" "$wchan" >&2
+              done
+              fd_count="$(find "/proc/$test_pid/fd" -mindepth 1 -maxdepth 1 -type l 2>/dev/null | wc -l | tr -d ' ')"
+              printf '[ci-diag watchdog] fd_count=%s\n' "$fd_count" >&2
+              kill -TERM "$test_pid" 2>/dev/null || true
+              sleep 5
+              if kill -0 "$test_pid" 2>/dev/null; then
+                kill -KILL "$test_pid" 2>/dev/null || true
+              fi
+            fi
+          ) &
+          watchdog_pid=$!
+
+          if wait "$test_pid"; then
+            test_status=0
+          else
+            test_status=$?
+          fi
+          kill "$watchdog_pid" 2>/dev/null || true
+          wait "$watchdog_pid" 2>/dev/null || true
+          exit "$test_status"
 
   docker-ssh-mutagen-e2e:
     runs-on: ubuntu-latest

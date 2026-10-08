@@ -19,13 +19,14 @@ async function startPasswordServer(options: { trustProxy?: boolean; port?: numbe
   tempDirs.push(dataDir)
   const server = await startKannaServer({
     dataDir,
-    port: options.port ?? 4320,
+    port: options.port ?? 0,
     strictPort: true,
     password: "secret",
     keybindingsPath: path.join(dataDir, "keybindings.json"),
     trustProxy: options.trustProxy ?? false,
     hostedWorkspace: options.hostedWorkspace ?? { enabled: false },
   })
+  expect(server.port).toBeGreaterThan(0)
   const project = await server.store.openProject(projectDir, "Project")
   return { server, projectDir, project }
 }

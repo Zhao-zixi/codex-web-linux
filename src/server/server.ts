@@ -798,6 +798,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
           },
         },
       })
+      actualPort = server.port ?? actualPort
       break
     } catch (err: unknown) {
       const isAddrInUse =

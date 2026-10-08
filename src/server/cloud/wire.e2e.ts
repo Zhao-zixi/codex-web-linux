@@ -273,6 +273,7 @@ describe.if(missing.length === 0)("kanna ↔ kanna-site wire e2e (named tunnels)
 
     const server = await startKannaServer({
       dataDir,
+      keybindingsPath: path.join(dataDir, "keybindings.json"),
       port: KANNA_PORT,
       strictPort: true,
       cloud: cloudRuntime,
@@ -451,6 +452,7 @@ describe.if(missing.length === 0)("kanna ↔ kanna-site wire e2e (named tunnels)
 
     const server = await startKannaServer({
       dataDir: devboxDataDir,
+      keybindingsPath: path.join(devboxDataDir, "keybindings.json"),
       port: DEVBOX_KANNA_PORT,
       strictPort: true,
       cloud: devboxRuntime,

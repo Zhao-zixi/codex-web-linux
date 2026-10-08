@@ -182,6 +182,33 @@ describe("readAppSettingsSnapshot", () => {
   })
 })
 
+describe("hosted provider default", () => {
+  test("uses hosted defaults only when no user choice is stored", async () => {
+    const filePath = await createTempFilePath()
+    const hosted = new AppSettingsManager(filePath, { hosted: true })
+    await hosted.initialize()
+    try {
+      expect(hosted.getSnapshot().defaultProvider).toBe("codex")
+      expect(hosted.getSnapshot().newProjectsDirectory).toBe("/workspace")
+      await hosted.writePatch({ defaultProvider: "claude", newProjectsDirectory: "/workspace/custom" })
+    } finally {
+      hosted.dispose()
+    }
+
+    const reopenedHosted = new AppSettingsManager(filePath, { hosted: true })
+    await reopenedHosted.initialize()
+    expect(reopenedHosted.getSnapshot().defaultProvider).toBe("claude")
+    expect(reopenedHosted.getSnapshot().newProjectsDirectory).toBe("/workspace/custom")
+    reopenedHosted.dispose()
+
+    const local = new AppSettingsManager(await createTempFilePath())
+    await local.initialize()
+    expect(local.getSnapshot().defaultProvider).toBe("last_used")
+    expect(local.getSnapshot().newProjectsDirectory).toBe("~/Kanna")
+    local.dispose()
+  })
+})
+
 describe("AppSettingsManager", () => {
   test("creates a settings file with analytics enabled and a stable anonymous id", async () => {
     const filePath = await createTempFilePath()

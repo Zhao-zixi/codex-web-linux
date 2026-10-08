@@ -32,6 +32,7 @@ import {
   type ChatSoundPreference,
 } from "../../stores/chatSoundPreferencesStore"
 import { requestChatBrowserNotificationPermission } from "../../lib/chatBrowserNotifications"
+import { RemoteWorkspaceSection } from "./RemoteWorkspaceSection"
 import {
   DEFAULT_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES,
   MAX_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES,
@@ -657,6 +658,7 @@ export function GeneralSection({
             />
           </SettingsRow>
         </SettingsGroup>
+        <RemoteWorkspaceSection />
       </SettingsGroups>
       <Dialog open={analyticsDialogOpen} onOpenChange={setAnalyticsDialogOpen}>
         <DialogContent size="lg">

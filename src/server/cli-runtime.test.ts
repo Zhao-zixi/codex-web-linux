@@ -1,10 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import path from "node:path"
 import { compareVersions, classifyInstallVersionFailure, parseArgs, runCli } from "./cli-runtime"
 import { CLI_SUPPRESS_OPEN_ONCE_ENV_VAR } from "./restart"
 
 const originalRuntimeProfile = process.env.KANNA_RUNTIME_PROFILE
 const originalSuppressOpen = process.env[CLI_SUPPRESS_OPEN_ONCE_ENV_VAR]
 const originalDisableSelfUpdate = process.env.KANNA_DISABLE_SELF_UPDATE
+const originalPasswordFile = process.env.KANNA_PASSWORD_FILE
+const originalTrustProxy = process.env.KANNA_TRUST_PROXY
 
 beforeEach(() => {
   // Every test assumes the open-once suppression flag is unset; the parent
@@ -16,6 +21,8 @@ beforeEach(() => {
   // exports it in their shell, and leaving it set would silently skip the
   // update path these tests are here to cover.
   delete process.env.KANNA_DISABLE_SELF_UPDATE
+  delete process.env.KANNA_PASSWORD_FILE
+  delete process.env.KANNA_TRUST_PROXY
 })
 
 afterEach(() => {
@@ -34,6 +41,10 @@ afterEach(() => {
   } else {
     process.env[CLI_SUPPRESS_OPEN_ONCE_ENV_VAR] = originalSuppressOpen
   }
+  if (originalPasswordFile === undefined) delete process.env.KANNA_PASSWORD_FILE
+  else process.env.KANNA_PASSWORD_FILE = originalPasswordFile
+  if (originalTrustProxy === undefined) delete process.env.KANNA_TRUST_PROXY
+  else process.env.KANNA_TRUST_PROXY = originalTrustProxy
 })
 
 function createDeps(overrides: Partial<Parameters<typeof runCli>[1]> = {}) {
@@ -246,6 +257,44 @@ describe("parseArgs", () => {
   test("--password without a value throws", () => {
     expect(() => parseArgs(["--password"])).toThrow("Missing value for --password")
     expect(() => parseArgs(["--password", "--no-open"])).toThrow("Missing value for --password")
+  })
+
+  test("reads a non-empty password file without exposing the path in errors", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "kanna-password-"))
+    const file = path.join(directory, "secret")
+    const previousPasswordFile = process.env.KANNA_PASSWORD_FILE
+    try {
+      writeFileSync(file, "safe secret\n")
+      process.env.KANNA_PASSWORD_FILE = file
+      expect(parseArgs([])).toMatchObject({ kind: "run", options: { password: "safe secret" } })
+      delete process.env.KANNA_PASSWORD_FILE
+      expect(parseArgs(["--password-file", file])).toMatchObject({ kind: "run", options: { password: "safe secret" } })
+      process.env.KANNA_PASSWORD_FILE = file
+      writeFileSync(file, "\n")
+      expect(() => parseArgs([])).toThrow("Password file must not be empty")
+      process.env.KANNA_PASSWORD_FILE = path.join(directory, "missing")
+      expect(() => parseArgs([])).toThrow("Unable to read password file")
+    } finally {
+      if (previousPasswordFile === undefined) delete process.env.KANNA_PASSWORD_FILE
+      else process.env.KANNA_PASSWORD_FILE = previousPasswordFile
+      rmSync(directory, { recursive: true, force: true })
+    }
+  })
+
+  test("trusts the TLS proxy header only when explicitly enabled", () => {
+    const previousTrustProxy = process.env.KANNA_TRUST_PROXY
+    try {
+      delete process.env.KANNA_TRUST_PROXY
+      const defaultOptions = parseArgs([])
+      expect(defaultOptions.kind).toBe("run")
+      if (defaultOptions.kind === "run") expect(defaultOptions.options.trustProxy).toBeUndefined()
+      expect(parseArgs(["--trust-proxy"])).toMatchObject({ kind: "run", options: { trustProxy: true } })
+      process.env.KANNA_TRUST_PROXY = "1"
+      expect(parseArgs([])).toMatchObject({ kind: "run", options: { trustProxy: true } })
+    } finally {
+      if (previousTrustProxy === undefined) delete process.env.KANNA_TRUST_PROXY
+      else process.env.KANNA_TRUST_PROXY = previousTrustProxy
+    }
   })
 
   test("--cloudflared without a token throws", () => {
@@ -941,4 +990,3 @@ describe("runCli with the Mac app", () => {
     if (result.kind === "started") await result.stop()
   })
 })
-

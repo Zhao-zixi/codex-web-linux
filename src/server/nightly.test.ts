@@ -107,6 +107,7 @@ describe("installNightlyBuild", () => {
       workDir,
       bunGlobalDir,
       fetchImpl,
+      hasCommand: () => true,
       runCommand: async (command, args, cwd, env): Promise<RunCommandResult> => {
         commands.push({ command, args, cwd, env })
         if (command === "tar") {
@@ -181,6 +182,7 @@ describe("installNightlyBuild", () => {
       workDir,
       bunGlobalDir,
       fetchImpl,
+      hasCommand: () => true,
       runCommand: async (command, args, cwd): Promise<RunCommandResult> => {
         if (command === "tar") {
           const extract = spawnSync(command, args, { cwd, stdio: "ignore" })
@@ -220,6 +222,7 @@ describe("installNightlyBuild", () => {
       workDir,
       bunGlobalDir: path.join(tempDir, "bun-global"),
       fetchImpl,
+      hasCommand: () => true,
       runCommand: async (command, args, cwd): Promise<RunCommandResult> => {
         commands.push([command, ...args].join(" "))
         if (command === "tar") {
@@ -261,6 +264,7 @@ describe("installNightlyBuild", () => {
     const result = await installNightlyBuild({
       workDir,
       fetchImpl,
+      hasCommand: () => true,
       runCommand: async (command, args, cwd): Promise<RunCommandResult> => {
         commands.push([command, ...args].join(" "))
         if (command === "tar") {
@@ -295,6 +299,7 @@ describe("installNightlyBuild", () => {
     const result = await installNightlyBuild({
       workDir,
       fetchImpl,
+      hasCommand: () => true,
       runCommand: async (command, args, cwd): Promise<RunCommandResult> => {
         if (command === "tar") {
           const extract = spawnSync(command, args, { cwd, stdio: "ignore" })
@@ -321,10 +326,29 @@ describe("installNightlyBuild", () => {
     const result = await installNightlyBuild({
       workDir: path.join(tempDir, "nightly"),
       fetchImpl,
+      hasCommand: () => true,
       runCommand: async () => ({ ok: true, output: "" }),
     })
 
     expect(result.ok).toBe(false)
     expect(result.userMessage).toContain("502")
+  })
+
+  test("keeps the missing Bun error when command discovery reports Bun absent", async () => {
+    tempDir = mkdtempSync(path.join(tmpdir(), "kanna-nightly-"))
+    const checked: string[] = []
+    const result = await installNightlyBuild({
+      workDir: path.join(tempDir, "nightly"),
+      hasCommand: (command) => {
+        checked.push(command)
+        return command === "tar"
+      },
+      fetchImpl: (async () => { throw new Error("fetch must not run without Bun") }) as unknown as typeof fetch,
+      runCommand: async () => { throw new Error("commands must not run without Bun") },
+    })
+
+    expect(checked).toEqual(["tar", "bun"])
+    expect(result.ok).toBe(false)
+    expect(result.userMessage).toBe("Kanna could not find Bun to build the nightly version.")
   })
 })

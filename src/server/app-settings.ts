@@ -236,7 +236,9 @@ function toSnapshot(
 
 function normalizeAppSettings(
   value: unknown,
-  filePath = getSettingsFilePath(homedir())
+  filePath = getSettingsFilePath(homedir()),
+  defaultProviderFallback: DefaultProviderPreference = "last_used",
+  defaultNewProjectsDirectory = DEFAULT_NEW_PROJECTS_DIRECTORY
 ): NormalizedAppSettings {
   const source = value && typeof value === "object" && !Array.isArray(value)
     ? value as AppSettingsFile
@@ -272,7 +274,7 @@ function normalizeAppSettings(
   const rawNewProjectsDirectory = typeof source?.newProjectsDirectory === "string"
     ? source.newProjectsDirectory.trim()
     : ""
-  const newProjectsDirectory = rawNewProjectsDirectory || DEFAULT_NEW_PROJECTS_DIRECTORY
+  const newProjectsDirectory = rawNewProjectsDirectory || defaultNewProjectsDirectory
   if (source?.newProjectsDirectory !== undefined && !rawNewProjectsDirectory) {
     warnings.push("newProjectsDirectory must be a non-empty string")
   }
@@ -308,7 +310,9 @@ function normalizeAppSettings(
       widgets: normalizePaneVisibilityScope(source?.paneVisibility?.widgets),
       terminal: normalizePaneVisibilityScope(source?.paneVisibility?.terminal),
     },
-    defaultProvider: normalizeDefaultProvider(source?.defaultProvider),
+    defaultProvider: source?.defaultProvider === undefined
+      ? defaultProviderFallback
+      : normalizeDefaultProvider(source.defaultProvider),
     providerDefaults: normalizeProviderDefaults(source?.providerDefaults),
     newSidebarEnabled,
     ...(source?.projectIconsInChats === false ? { projectIconsInChats: false } : {}),
@@ -419,13 +423,17 @@ export class AppSettingsManager {
   readonly filePath: string
   private watcher: FSWatcher | null = null
   private state: AppSettingsState
+  private defaultProviderFallback: DefaultProviderPreference
+  private defaultNewProjectsDirectory: string
   private readonly listeners = new Set<(snapshot: AppSettingsSnapshot) => void>()
   /** Server-computed snapshot fields — never read from or written to the file. */
   private extras: SnapshotExtras
 
-  constructor(filePath = getSettingsFilePath(homedir()), extras: { devbox?: boolean } = {}) {
+  constructor(filePath = getSettingsFilePath(homedir()), extras: { devbox?: boolean; hosted?: boolean } = {}) {
     this.filePath = filePath
-    this.state = normalizeAppSettings(undefined, filePath).payload
+    this.defaultProviderFallback = extras.hosted ? "codex" : "last_used"
+    this.defaultNewProjectsDirectory = extras.hosted ? "/workspace" : DEFAULT_NEW_PROJECTS_DIRECTORY
+    this.state = normalizeAppSettings(undefined, filePath, this.defaultProviderFallback, this.defaultNewProjectsDirectory).payload
     this.extras = { devbox: extras.devbox === true, installedEditors: null, installedTerminals: null }
   }
 
@@ -505,7 +513,7 @@ export class AppSettingsManager {
     try {
       const text = await file.text()
       const hasText = text.trim().length > 0
-      const normalized = normalizeAppSettings(hasText ? JSON.parse(text) : undefined, this.filePath)
+      const normalized = normalizeAppSettings(hasText ? JSON.parse(text) : undefined, this.filePath, this.defaultProviderFallback, this.defaultNewProjectsDirectory)
       if (options?.persistNormalized && (!hasText || normalized.shouldWrite)) {
         await writeFile(this.filePath, `${JSON.stringify(toFilePayload(normalized.payload), null, 2)}\n`, "utf8")
       }
@@ -518,7 +526,7 @@ export class AppSettingsManager {
         throw error
       }
 
-      const normalized = normalizeAppSettings(undefined, this.filePath)
+      const normalized = normalizeAppSettings(undefined, this.filePath, this.defaultProviderFallback, this.defaultNewProjectsDirectory)
       if (options?.persistNormalized) {
         await writeFile(this.filePath, `${JSON.stringify(toFilePayload(normalized.payload), null, 2)}\n`, "utf8")
       }

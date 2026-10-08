@@ -1,4 +1,5 @@
 import process from "node:process"
+import { readFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { hasCommand, spawnDetached } from "./process-utils"
 import { APP_NAME, CLI_COMMAND, getDataDirDisplay, getDataRootDirDisplay, LOG_PREFIX, PACKAGE_NAME } from "../shared/branding"
@@ -29,6 +30,7 @@ export interface CliOptions {
   openBrowser: boolean
   share: ShareMode
   password: string | null
+  trustProxy?: boolean
   strictPort: boolean
   /** One-shot: skip bringing a paired machine online for this run. */
   noCloud: boolean
@@ -164,6 +166,8 @@ Options:
   --cloudflared <token>
                        Run a named Cloudflare tunnel from a token
   --password <secret>  Require a password before loading the app
+  --password-file <path>  Read the app password from a file
+  --trust-proxy        Trust X-Forwarded-Proto from a trusted TLS proxy
   --strict-port        Fail instead of trying another port
   --no-open            Don't open browser automatically
   --no-cloud           Skip bringing a paired machine online for this run
@@ -220,6 +224,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
   let openBrowser = true
   let share: ShareMode = false
   let password: string | null = null
+  let passwordFile: string | null = process.env.KANNA_PASSWORD_FILE || null
+  let trustProxy = process.env.KANNA_TRUST_PROXY === "1"
   let sawHost = false
   let sawRemote = false
   let strictPort = false
@@ -292,6 +298,17 @@ export function parseArgs(argv: string[]): ParsedArgs {
       index += 1
       continue
     }
+    if (arg === "--password-file") {
+      const next = argv[index + 1]
+      if (!next || next.startsWith("-")) throw new Error("Missing value for --password-file")
+      passwordFile = next
+      index += 1
+      continue
+    }
+    if (arg === "--trust-proxy") {
+      trustProxy = true
+      continue
+    }
     if (arg === "--strict-port") {
       strictPort = true
       continue
@@ -307,6 +324,16 @@ export function parseArgs(argv: string[]): ParsedArgs {
     host = "0.0.0.0"
   }
 
+  if (password !== null && passwordFile) throw new Error("Choose either --password or a password file")
+  if (passwordFile) {
+    try {
+      password = readFileSync(passwordFile, "utf8").replace(/\r?\n$/, "")
+    } catch {
+      throw new Error("Unable to read password file")
+    }
+    if (!password) throw new Error("Password file must not be empty")
+  }
+
   return {
     kind: "run",
     options: {
@@ -315,6 +342,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
       openBrowser,
       share,
       password,
+      ...(trustProxy ? { trustProxy: true } : {}),
       strictPort,
       noCloud,
       directCloud,
@@ -509,7 +537,7 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
 
   const started = await deps.startServer({
     ...runOptions,
-    trustProxy: isShareEnabled(runOptions.share) || cloudRuntime !== null,
+    trustProxy: runOptions.trustProxy === true || isShareEnabled(runOptions.share) || cloudRuntime !== null,
     cloud: cloudRuntime,
     // Unpaired but cloud-capable: the sidebar can claim this machine in one
     // click and the server attaches the runtime without a restart.

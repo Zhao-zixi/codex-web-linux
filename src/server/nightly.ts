@@ -4,7 +4,7 @@ import { homedir } from "node:os"
 import path from "node:path"
 import { LOG_PREFIX } from "../shared/branding"
 import type { UpdateInstallAttemptResult } from "./cli-runtime"
-import { hasCommand } from "./process-utils"
+import { hasCommand as defaultHasCommand } from "./process-utils"
 import { CLI_CHILD_MODE, CLI_CHILD_MODE_ENV_VAR } from "./restart"
 
 // Nightly channel: build the repo's main branch from source and install it as
@@ -29,6 +29,8 @@ export interface RunCommandResult {
 export interface NightlyBuildDeps {
   log?: (message: string) => void
   fetchImpl?: typeof fetch
+  /** Command discovery seam for deterministic tests; defaults to the login-shell probe. */
+  hasCommand?: (command: string) => boolean
   /** Command runner seam for tests; the default spawns with a hard timeout. */
   runCommand?: (command: string, args: string[], cwd: string, env?: Record<string, string>) => Promise<RunCommandResult>
   /** Working directory override for tests (default ~/.kanna/nightly). */
@@ -158,6 +160,7 @@ export async function installNightlyBuild(deps: NightlyBuildDeps = {}): Promise<
   const log = deps.log ?? (() => {})
   const fetchImpl = deps.fetchImpl ?? fetch
   const runCommand = deps.runCommand ?? runCommandWithTimeout
+  const hasCommand = deps.hasCommand ?? defaultHasCommand
 
   if (!hasCommand("tar")) {
     return failure("Kanna needs the `tar` command to unpack the nightly source.")

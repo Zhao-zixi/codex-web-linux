@@ -186,8 +186,13 @@ export function buildTerminalCommand(args: {
   preset?: TerminalPreset
   localPath: string
   platform: NodeJS.Platform
+  /** Runtime probes default to the host OS; injectable for cross-platform tests. */
+  canOpenMacApp?: typeof canOpenMacApp
+  hasCommand?: typeof hasCommand
 }): CommandSpec {
   const { localPath, platform } = args
+  const canOpenMacAppProbe = args.canOpenMacApp ?? canOpenMacApp
+  const hasCommandProbe = args.hasCommand ?? hasCommand
   const preset = args.preset ?? (platform === "darwin" ? "terminal" : undefined)
   if (!preset) {
     throw new Error("No terminal specified")
@@ -195,10 +200,10 @@ export function buildTerminalCommand(args: {
   const spec = TERMINAL_SPECS[preset]
 
   if (platform === "darwin") {
-    if (!canOpenMacApp(spec.macApp)) {
+    if (!canOpenMacAppProbe(spec.macApp)) {
       // Fall through to the CLI when one exists — a Homebrew install without
       // an app bundle still works.
-      if (!spec.cli || !hasCommand(spec.cli)) {
+      if (!spec.cli || !hasCommandProbe(spec.cli)) {
         throw new Error(`${spec.label} is not installed`)
       }
       return buildTerminalCliCommand(preset, spec.cli, localPath)

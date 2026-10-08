@@ -2,12 +2,13 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { mkdtemp, mkdir, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { applyUtf8Locale, TerminalManager, TerminalOutputLog } from "./terminal-manager"
+import { applyUtf8Locale, resolveShell, TerminalManager, TerminalOutputLog } from "./terminal-manager"
 
 const SHELL_START_TIMEOUT_MS = 5_000
 const COMMAND_TIMEOUT_MS = 5_000
 const FOCUS_IN_SEQUENCE = "\x1b[I"
-const RAW_READ_HEX_COMMAND = `python3 -c "exec('import os,sys,tty,termios,select\\nfd=sys.stdin.fileno()\\nold=termios.tcgetattr(fd)\\ntty.setraw(fd)\\ntry:\\n    sys.stdout.write(\"__RAW_READY__\\\\n\")\\n    sys.stdout.flush()\\n    r,_,_=select.select([fd],[],[],1)\\n    data=os.read(fd,8) if r else b\"\"\\n    print(data.hex() or \"__EMPTY__\")\\nfinally:\\n    termios.tcsetattr(fd, termios.TCSADRAIN, old)')"\r`
+const RAW_READ_HEX_COMMAND = `python3 -c 'import os,sys,tty,termios,select; fd=sys.stdin.fileno(); old=termios.tcgetattr(fd); tty.setraw(fd); print("__RAW_READY__", flush=True); r,_,_=select.select([fd],[],[],1); data=os.read(fd,8) if r else b""; print(data.hex() or "__EMPTY__", flush=True); termios.tcsetattr(fd,termios.TCSADRAIN,old)'\r`
+const RAW_READ_BYTE_COMMAND = `stty raw -echo; printf '__RAW_READY__\\n'; dd bs=1 count=1 2>/dev/null | od -An -tu1; stty sane; printf '%s%s\\n' '__RAW_' 'DONE'\r`
 
 const isSupportedPlatform = process.platform !== "win32" && typeof Bun.Terminal === "function"
 const describeIfSupported = isSupportedPlatform ? describe : describe.skip
@@ -98,6 +99,22 @@ async function waitForOutputToContain(getOutput: () => string, value: string, ti
 }
 
 describeIfSupported("TerminalManager", () => {
+  test("ignores an unknown detected shell and falls back to an executable SHELL", () => {
+    expect(resolveShell({ detectedShell: "unknown", envShell: "/bin/bash", platform: "linux" })).toBe("/bin/bash")
+  })
+
+  test("ignores non-executable shell candidates and uses the Unix fallback", () => {
+    expect(resolveShell({ detectedShell: "/missing/kanna-shell", envShell: "/missing/also-missing", platform: "linux" })).toBe("/bin/sh")
+  })
+
+  test("ignores Bun's unknown SHELL value", () => {
+    expect(resolveShell({ detectedShell: "unknown", envShell: "unknown", platform: "linux" })).toBe("/bin/sh")
+  })
+
+  test("keeps a detected executable shell ahead of SHELL", () => {
+    expect(resolveShell({ detectedShell: "/bin/sh", envShell: "/bin/bash", platform: "linux" })).toBe("/bin/sh")
+  })
+
   test("ctrl+c interrupts the foreground job and keeps the shell alive", async () => {
     const terminalId = "terminal-ctrl-c-foreground"
     const { manager, getOutput } = await createSession(terminalId)
@@ -132,6 +149,52 @@ describeIfSupported("TerminalManager", () => {
       const snapshot = manager.getSnapshot(terminalId)
       expect(snapshot?.status).toBe("running")
       expect(getOutput().length).toBeGreaterThan(before.length)
+    } finally {
+      manager.close(terminalId)
+    }
+  })
+
+  test("passes Ctrl-C as a byte to programs that put the PTY in raw mode", async () => {
+    if (process.platform !== "linux") return
+    const terminalId = "terminal-ctrl-c-raw-mode"
+    const { manager, getOutput } = await createSession(terminalId)
+
+    try {
+      manager.write(terminalId, RAW_READ_BYTE_COMMAND)
+      await waitForOutputToContain(getOutput, "__RAW_READY__")
+      manager.write(terminalId, "\x03")
+      await waitForOutputToContain(getOutput, "__RAW_DONE\r\n")
+
+      const cleanedOutput = getOutput().replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+      expect(cleanedOutput.split(/[\r\n]+/).some((line) => line.trim() === "3")).toBe(true)
+      expect(manager.getSnapshot(terminalId)?.status).toBe("running")
+    } finally {
+      manager.close(terminalId)
+    }
+  })
+
+  test("closing a PTY with a foreground job leaves no child process", async () => {
+    if (process.platform !== "linux") return
+    const terminalId = "terminal-close-foreground-job"
+    const { manager, getOutput } = await createSession(terminalId)
+    const state = manager as unknown as { sessions: Map<string, { process: Bun.Subprocess | null }> }
+
+    try {
+      manager.write(terminalId, "sleep 30\r")
+      await waitForOutputToContain(getOutput, "sleep 30")
+      const shellPid = state.sessions.get(terminalId)?.process?.pid
+      expect(typeof shellPid).toBe("number")
+      const children = Bun.spawnSync(["ps", "-eo", "pid=,ppid=,comm="]).stdout.toString().split("\n")
+        .map((line) => line.trim().split(/\s+/))
+        .filter(([, parentPid, command]) => parentPid === String(shellPid) && command === "sleep")
+      const sleepPid = Number(children[0]?.[0])
+      expect(sleepPid).toBeGreaterThan(1)
+      manager.close(terminalId)
+      await waitFor(() => {
+        const state = Bun.spawnSync(["ps", "-o", "stat=", "-p", String(sleepPid)]).stdout.toString().trim()
+        return !state
+      }, COMMAND_TIMEOUT_MS)
+      expect(Bun.spawnSync(["ps", "-o", "stat=", "-p", String(sleepPid)]).stdout.toString().trim()).toBe("")
     } finally {
       manager.close(terminalId)
     }

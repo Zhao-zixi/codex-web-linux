@@ -1,7 +1,8 @@
+import { accessSync, constants } from "node:fs"
 import path from "node:path"
 import process from "node:process"
 import { StringDecoder } from "node:string_decoder"
-import defaultShell, { detectDefaultShell } from "default-shell"
+import { detectDefaultShell } from "default-shell"
 import { Terminal } from "@xterm/headless"
 import { SerializeAddon } from "@xterm/addon-serialize"
 import { Unicode11Addon } from "@xterm/addon-unicode11"
@@ -44,7 +45,7 @@ interface TerminalSession {
   status: "running" | "exited"
   exitCode: number | null
   process: Bun.Subprocess | null
-  terminal: Bun.Terminal
+  terminal: Bun.Terminal | null
   headless: Terminal
   serializeAddon: SerializeAddon
   /**
@@ -129,16 +130,42 @@ function normalizeTerminalDimension(value: number, fallback: number) {
   return Math.max(1, Math.round(value))
 }
 
-function resolveShell() {
+function isExecutableShell(candidate: string | undefined): candidate is string {
+  if (!candidate || !path.isAbsolute(candidate)) return false
   try {
-    return detectDefaultShell()
+    accessSync(candidate, constants.X_OK)
+    return true
   } catch {
-    if (defaultShell) return defaultShell
-    if (process.platform === "win32") {
-      return process.env.ComSpec || "cmd.exe"
-    }
-    return process.env.SHELL || "/bin/sh"
+    return false
   }
+}
+
+export function resolveShell(options: {
+  detectedShell?: string
+  envShell?: string
+  comSpec?: string
+  platform?: NodeJS.Platform
+} = {}) {
+  const platform = options.platform ?? process.platform
+  let detectedShell = options.detectedShell
+  if (detectedShell === undefined) {
+    try {
+      detectedShell = detectDefaultShell()
+    } catch {}
+  }
+  if (isExecutableShell(detectedShell)) return detectedShell
+
+  const envShell = options.envShell ?? process.env.SHELL
+  if (isExecutableShell(envShell)) return envShell
+
+  if (platform === "win32") {
+    const comSpec = options.comSpec ?? process.env.ComSpec
+    return isExecutableShell(comSpec) ? comSpec : "cmd.exe"
+  }
+  if (platform === "darwin") {
+    return isExecutableShell("/bin/zsh") ? "/bin/zsh" : "/bin/sh"
+  }
+  return "/bin/sh"
 }
 
 function resolveShellArgs(shellPath: string) {
@@ -152,6 +179,11 @@ function resolveShellArgs(shellPath: string) {
   }
 
   return []
+}
+
+function requireTerminal(session: TerminalSession) {
+  if (!session.terminal) throw new Error("Terminal process did not provide a PTY.")
+  return session.terminal
 }
 
 // Matches the locale suffixes that imply a multi-byte-capable charmap. Same
@@ -326,7 +358,7 @@ export class TerminalManager {
       existing.rows = normalizeTerminalDimension(args.rows, existing.rows)
       existing.headless.options.scrollback = existing.scrollback
       existing.headless.resize(existing.cols, existing.rows)
-      existing.terminal.resize(existing.cols, existing.rows)
+      requireTerminal(existing).resize(existing.cols, existing.rows)
       signalTerminalProcessGroup(existing.process, "SIGWINCH")
       return this.snapshotOf(existing)
     }
@@ -358,7 +390,7 @@ export class TerminalManager {
       status: "running",
       exitCode: null,
       process: null,
-      terminal: new Bun.Terminal({
+      terminal: process.platform === "linux" ? null : new Bun.Terminal({
         cols,
         rows,
         name: "xterm-256color",
@@ -375,13 +407,26 @@ export class TerminalManager {
     }
 
     try {
+      const terminalOptions = {
+        cols,
+        rows,
+        name: "xterm-256color",
+        data: (_terminal: Bun.Terminal, data: Uint8Array<ArrayBuffer>) => {
+          this.handlePtyOutput(session, data)
+        },
+      }
       session.process = Bun.spawn([shell, ...resolveShellArgs(shell)], {
         cwd: args.projectPath,
         env: createTerminalEnv(),
-        terminal: session.terminal,
+        terminal: process.platform === "linux" ? terminalOptions : requireTerminal(session),
       })
+      if (process.platform === "linux") {
+        session.terminal = session.process.terminal ?? null
+        requireTerminal(session)
+      }
     } catch (error) {
-      session.terminal.close()
+      killTerminalProcessTree(session.process)
+      session.terminal?.close()
       session.serializeAddon.dispose()
       session.headless.dispose()
       throw error
@@ -429,18 +474,23 @@ export class TerminalManager {
     const filteredData = filterFocusReportInput(data, session.focusReportingEnabled)
     if (!filteredData) return
 
+    if (process.platform === "linux") {
+      requireTerminal(session).write(filteredData)
+      return
+    }
+
     let cursor = 0
 
     while (cursor < filteredData.length) {
       const ctrlCIndex = filteredData.indexOf("\x03", cursor)
 
       if (ctrlCIndex === -1) {
-        session.terminal.write(filteredData.slice(cursor))
+        requireTerminal(session).write(filteredData.slice(cursor))
         return
       }
 
       if (ctrlCIndex > cursor) {
-        session.terminal.write(filteredData.slice(cursor, ctrlCIndex))
+        requireTerminal(session).write(filteredData.slice(cursor, ctrlCIndex))
       }
 
       signalTerminalProcessGroup(session.process, "SIGINT")
@@ -454,7 +504,7 @@ export class TerminalManager {
     session.cols = normalizeTerminalDimension(cols, session.cols)
     session.rows = normalizeTerminalDimension(rows, session.rows)
     session.headless.resize(session.cols, session.rows)
-    session.terminal.resize(session.cols, session.rows)
+    requireTerminal(session).resize(session.cols, session.rows)
     signalTerminalProcessGroup(session.process, "SIGWINCH")
   }
 
@@ -464,7 +514,7 @@ export class TerminalManager {
 
     this.sessions.delete(terminalId)
     killTerminalProcessTree(session.process)
-    session.terminal.close()
+    session.terminal?.close()
     session.serializeAddon.dispose()
     session.headless.dispose()
   }

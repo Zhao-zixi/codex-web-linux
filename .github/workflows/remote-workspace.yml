@@ -55,8 +55,12 @@ jobs:
           printf '%s  %s\n' "$MUTAGEN_SHA256" "$archive" | sha256sum --check
           tar -tzf "$archive" > "$RUNNER_TEMP/mutagen-archive-files.txt"
           printf 'mutagen\nmutagen-agents.tar.gz\n' | diff -u - "$RUNNER_TEMP/mutagen-archive-files.txt"
-          tar -xzf "$archive" --directory "$bin_dir" --no-same-owner --no-same-permissions mutagen
+          tar -xzf "$archive" --directory "$bin_dir" --no-same-owner --no-same-permissions mutagen mutagen-agents.tar.gz
           chmod 755 "$bin_dir/mutagen"
+          chmod 644 "$bin_dir/mutagen-agents.tar.gz"
+          test -r "$bin_dir/mutagen-agents.tar.gz"
+          tar -tzf "$bin_dir/mutagen-agents.tar.gz" > "$RUNNER_TEMP/mutagen-agent-files.txt"
+          grep -Fxq linux_amd64 "$RUNNER_TEMP/mutagen-agent-files.txt"
           test "$("$bin_dir/mutagen" version)" = "$MUTAGEN_VERSION"
           echo "$bin_dir" >> "$GITHUB_PATH"
       - name: Require Docker daemon

@@ -63,7 +63,7 @@ describe("parseLocalFileLink", () => {
   })
 
   test("parses same-origin absolute file urls with a line suffix", () => {
-    const originalWindow = globalThis.window
+    const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window")
     Object.defineProperty(globalThis, "window", {
       value: {
         location: {
@@ -71,6 +71,7 @@ describe("parseLocalFileLink", () => {
         },
       },
       configurable: true,
+      writable: true,
     })
 
     try {
@@ -80,10 +81,11 @@ describe("parseLocalFileLink", () => {
         column: undefined,
       })
     } finally {
-      Object.defineProperty(globalThis, "window", {
-        value: originalWindow,
-        configurable: true,
-      })
+      if (originalWindowDescriptor) {
+        Object.defineProperty(globalThis, "window", originalWindowDescriptor)
+      } else {
+        Reflect.deleteProperty(globalThis, "window")
+      }
     }
   })
 

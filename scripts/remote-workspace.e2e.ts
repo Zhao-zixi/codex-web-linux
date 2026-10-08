@@ -1167,10 +1167,6 @@ try {
   const alicePasswordBackup = await readFile(path.join(outputDir, "secrets", "alice", "app-password"))
   run("tar", ["--create", "--file", backupPath, "--directory", root, "deployment"])
   await chmod(backupPath, 0o600)
-  run("docker", ["compose", "-p", project, "-f", path.join(outputDir, "compose.yaml"), "down", "--remove-orphans"], { cwd: outputDir, env, timeout: 60_000 })
-  composeStarted = false
-  await rm(outputDir, { recursive: true, force: true })
-  await mkdir(outputDir, { mode: 0o700 })
   const restoreOwnerArgs = ["--numeric-owner"]
   if (typeof process.getuid !== "function") throw new Error("Cannot verify runner UID for backup restore")
   const runnerUid = process.getuid()
@@ -1186,6 +1182,10 @@ try {
     }
     restoreOwnerArgs.push("--no-same-owner")
   }
+  run("docker", ["compose", "-p", project, "-f", path.join(outputDir, "compose.yaml"), "down", "--remove-orphans"], { cwd: outputDir, env, timeout: 60_000 })
+  composeStarted = false
+  await rm(outputDir, { recursive: true, force: true })
+  await mkdir(outputDir, { mode: 0o700 })
   run("tar", ["--extract", "--file", backupPath, "--directory", root, ...restoreOwnerArgs])
   if (!(await readFile(path.join(outputDir, "state", "alice", "ssh-host-ed25519.pub"))).equals(aliceHostKey)) throw new Error("backup restore changed Alice SSH host key")
   if (!(await readFile(path.join(outputDir, "secrets", "alice", "app-password"))).equals(alicePasswordBackup)) throw new Error("backup restore changed Alice app password")

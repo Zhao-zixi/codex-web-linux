@@ -924,8 +924,9 @@ try {
     const caPath = path.join(root, "caddy-local-root-ca.pem")
     await writeFile(caPath, localCa, { mode: 0o600 })
     await chmod(caPath, 0o600)
-    diagnosticFacts.push(`HTTPS /health failure comparison: ${diagnoseStrictHttpsHealth({ host: "alice.localhost", port: httpsPort, caPath })}`)
-    throw new Error(`Alice hosted HTTPS /health did not become ready (${healthFailure})`)
+    const comparison = diagnoseStrictHttpsHealth({ host: "alice.localhost", port: httpsPort, caPath })
+    diagnosticFacts.push(`HTTPS /health failure comparison: ${comparison}`)
+    throw new Error(`Alice hosted HTTPS /health did not become ready (${healthFailure}); ${comparison}`)
   }
   const login = await loginOnHostedApp("alice.localhost", aliceOrigin, alicePassword, localCa, httpsPort)
   if (login.status !== 200) throw new Error(`Alice /auth/login rejected HTTP ${login.status}: ${login.body.slice(0, 200)}`)

@@ -736,7 +736,7 @@ try {
     runtimeGid: gid,
     publicKeys: { alice: `${clientKeys.alice}.pub`, bob: `${clientKeys.bob}.pub` },
   })
-  const manifest = JSON.parse(await readFile(path.join(outputDir, "manifest.json"), "utf8")) as { domain?: string; local?: boolean }
+  const manifest = JSON.parse(await readFile(path.join(outputDir, "manifest.json"), "utf8")) as { domain?: string; local?: boolean; runtimeUid?: number }
   diagnosticFacts.push(`Manifest local=${manifest.local} domain=${manifest.domain} Alice origin=https://alice.${manifest.domain}:${httpsPort}`)
   diagnosticFacts.push(`Selected local published ports: HTTP=${httpPort}, HTTPS=${httpsPort}; SSH Alice=${alicePort}, Bob=${bobPort}`)
   await generateRemoteWorkspaceFiles(outputDir)
@@ -1171,7 +1171,22 @@ try {
   composeStarted = false
   await rm(outputDir, { recursive: true, force: true })
   await mkdir(outputDir, { mode: 0o700 })
-  run("tar", ["--extract", "--file", backupPath, "--directory", root, "--numeric-owner", "--same-owner"])
+  const restoreOwnerArgs = ["--numeric-owner"]
+  if (typeof process.getuid !== "function") throw new Error("Cannot verify runner UID for backup restore")
+  const runnerUid = process.getuid()
+  if (runnerUid === 0) {
+    restoreOwnerArgs.push("--same-owner")
+  } else {
+    const composeConfig = JSON.parse(compose(["config", "--format", "json"])) as {
+      services?: Record<string, { user?: string }>
+    }
+    const appUid = composeConfig.services?.kanna_alice?.user?.split(":", 1)[0]
+    if (!Number.isInteger(manifest.runtimeUid) || manifest.runtimeUid !== runnerUid || appUid !== String(runnerUid)) {
+      throw new Error(`Cannot restore ownership as non-root: manifest app UID ${manifest.runtimeUid ?? "unknown"} and Compose app UID ${appUid ?? "unknown"} must match runner UID ${runnerUid}`)
+    }
+    restoreOwnerArgs.push("--no-same-owner")
+  }
+  run("tar", ["--extract", "--file", backupPath, "--directory", root, ...restoreOwnerArgs])
   if (!(await readFile(path.join(outputDir, "state", "alice", "ssh-host-ed25519.pub"))).equals(aliceHostKey)) throw new Error("backup restore changed Alice SSH host key")
   if (!(await readFile(path.join(outputDir, "secrets", "alice", "app-password"))).equals(alicePasswordBackup)) throw new Error("backup restore changed Alice app password")
   if (await stat(path.join(outputDir, "secrets", "alice", "app-password")).then((value) => value.mode & 0o077) !== 0) throw new Error("backup restore widened app-password permissions")

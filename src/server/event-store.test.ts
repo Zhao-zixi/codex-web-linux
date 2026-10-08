@@ -1765,7 +1765,8 @@ describe("stateVersion", () => {
     const project = await store.openProject(dataDir, "proj")
     const chat = await store.createChat(project.id)
 
-    const at = Date.now()
+    // Anchor well inside a 15s bucket so wall-clock time cannot split this fixture.
+    const at = Math.floor(Date.now() / 15_000) * 15_000 + 1_000
     await store.appendMessage(chat.id, entry("user_prompt", at, { content: "go" }))
 
     const before = store.stateVersion

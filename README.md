@@ -81,7 +81,7 @@ Claude Agent SDK / Codex App Server / cursor-agent / grok CLI（本机进程）
 
 ## 系统要求
 
-- [Bun](https://bun.sh) v1.3.5 或更高版本。
+- [Bun](https://bun.sh) v1.4.2 或更高版本。
 - 可正常使用的 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 环境。
 - （可选）[Codex CLI](https://github.com/openai/codex)，用于 Codex provider。
 

@@ -138,7 +138,7 @@ async function slimTranscripts(log: (message: string) => void): Promise<SlimTran
   return await store.slimTranscripts({ force: true, onProgress: log })
 }
 
-const MINIMUM_BUN_VERSION = "1.3.5"
+const MINIMUM_BUN_VERSION = "1.4.2"
 /** Bound on the pre-listen update check; see `fetchLatestPackageVersion`. */
 const STARTUP_UPDATE_CHECK_TIMEOUT_MS = 5_000
 

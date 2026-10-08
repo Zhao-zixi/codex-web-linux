@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { rmSync } from "node:fs"
-import { mkdtemp, readFile, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { AppSettingsManager, readAppSettingsSnapshot } from "./app-settings"
@@ -8,11 +7,9 @@ import type { AppSettingsSnapshot } from "../shared/types"
 
 let tempDirs: string[] = []
 
-afterEach(() => {
-  const directories = tempDirs.splice(0)
-  for (const directory of directories) {
-    rmSync(directory, { recursive: true, force: true })
-  }
+afterEach(async () => {
+  await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })))
+  tempDirs = []
 })
 
 async function createTempFilePath() {

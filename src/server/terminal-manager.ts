@@ -348,7 +348,7 @@ export class TerminalManager {
       throw new Error("Embedded terminal is currently supported on macOS/Linux only.")
     }
     if (typeof Bun.Terminal !== "function") {
-      throw new Error("Embedded terminal requires Bun 1.3.5+ with Bun.Terminal support.")
+      throw new Error("Embedded terminal requires Bun 1.4.2+ with Bun.Terminal support.")
     }
 
     const existing = this.sessions.get(args.terminalId)

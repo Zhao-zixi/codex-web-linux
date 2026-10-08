@@ -6,7 +6,7 @@
 
 ## 支持范围与前置条件
 
-部署主机要求 Linux、Docker Engine、Docker Compose v2、Bun 1.3.5 或更高版本、OpenSSH 客户端工具、`jq`、Mutagen CLI，以及可以写入持久目录的 UID/GID。公网部署需要域名 DNS 记录指向主机，并开放 HTTP/HTTPS 和每个账号单独的 SSH TCP 端口。首版只接受 DNS 名称或 IPv4 地址；IPv6 literal 不支持，Mutagen 连接请使用 DNS 名称或本地 SSH alias。
+部署主机要求 Linux、Docker Engine、Docker Compose v2、Bun 1.4.2 或更高版本、OpenSSH 客户端工具、`jq`、Mutagen CLI，以及可以写入持久目录的 UID/GID。公网部署需要域名 DNS 记录指向主机，并开放 HTTP/HTTPS 和每个账号单独的 SSH TCP 端口。首版只接受 DNS 名称或 IPv4 地址；IPv6 literal 不支持，Mutagen 连接请使用 DNS 名称或本地 SSH alias。
 
 开发与生成 CLI 使用 Bun。请从 [Bun 官方安装说明](https://bun.sh/docs/installation) 安装，不要通过未经审阅的 `curl | sh` 命令安装。Mutagen 请从 [Mutagen 官方安装文档](https://mutagen.io/documentation/introduction/installation/) 选择对应平台的发行版；Docker 请按 [Docker Engine 官方文档](https://docs.docker.com/engine/install/) 安装。`doctor` 会检查 Docker daemon、Compose、`ssh-keygen`、Mutagen、`jq` 和已初始化状态的目录权限；任一必需项失败都会返回非零状态。
 
@@ -167,7 +167,7 @@ bun run test:remote-workspace
 
 真实两账号集成测试会构建镜像、启动 Docker Compose、用公钥登录两个 SSH sidecar，通过登录后的 HTTPS/WS 创建项目并在 Kanna PTY 中验证工作目录、命令输出和 marker 持久化；它也验证 Codex app-server initialize 握手、同源安全请求、兄弟子域跨源拒绝、账号认证隔离、Mutagen 双向同步/二进制/删除/暂停恢复/冲突合并、容器重启和备份恢复。Linux PTY 使用 Bun inline terminal 创建控制终端；测试验证 Ctrl-C 在 3 秒内中断前台 `sleep` 和 pipeline、raw mode 下仍把字节 `0x03` 交给程序、窗口尺寸更新，以及关闭活动终端后 shell 和作业进程退出。app 容器以 Docker init 作为 PID 1 回收终端关闭时被收养的子进程，Kanna Bun 仍以配置的非 root UID 运行，并保留只读根文件系统、丢弃全部 capabilities 和 `no-new-privileges`。E2E 用容器内 `/proc` 的 PID、状态、进程组、session ID 和 start time 验证目标进程确已退出，邻终端和另一账号进程保持存活。
 
-测试要求 Docker daemon、Mutagen 0.18.1、OpenSSH、jq、Bun 1.3.5+ 和 Node.js 22+；缺少依赖或 daemon 权限会失败，不会报告跳过成功。E2E 的 HTTPS/WebSocket 测试客户端使用 Node.js 22，以保留严格 CA 与主机名验证；app runtime 镜像当前使用 Node.js 20.19.2，并已验证固定 Codex CLI 可启动。测试用 Caddy local CA 严格验证 HTTPS 链与主机名；公网 DNS、ACME、浏览器对公网证书的信任和真实 Codex 账号模型任务仍需部署环境另行验收：
+测试要求 Docker daemon、Mutagen 0.18.1、OpenSSH、jq、Bun 1.4.2+ 和 Node.js 22+；缺少依赖或 daemon 权限会失败，不会报告跳过成功。E2E 的 HTTPS/WebSocket 测试客户端使用 Node.js 22，以保留严格 CA 与主机名验证；app runtime 镜像当前使用 Node.js 20.19.2，并已验证固定 Codex CLI 可启动。测试用 Caddy local CA 严格验证 HTTPS 链与主机名；公网 DNS、ACME、浏览器对公网证书的信任和真实 Codex 账号模型任务仍需部署环境另行验收：
 
 ```sh
 bun run test:remote-workspace:e2e

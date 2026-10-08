@@ -1,16 +1,16 @@
-FROM oven/bun:1.3.5 AS build
+FROM oven/bun:1.4.2 AS build
 WORKDIR /opt/kanna-build-source
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 COPY . .
 RUN bun run build
 
-FROM oven/bun:1.3.5 AS production-dependencies
+FROM oven/bun:1.4.2 AS production-dependencies
 WORKDIR /app
 COPY package.json bun.lock ./
 RUN bun install --production --frozen-lockfile
 
-FROM oven/bun:1.3.5 AS runtime
+FROM oven/bun:1.4.2 AS runtime
 ARG REMOTE_UID=1000
 ARG REMOTE_GID=1000
 ENV BUN_INSTALL=/opt/bun \

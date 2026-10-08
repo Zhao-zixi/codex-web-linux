@@ -1,6 +1,6 @@
 # 首版自建远程工作区方案
 
-状态：首版方案。以下验收项目初始均为**待验证**；在实际部署与运行完成前，不得宣称公网 HTTPS、隔离、双向同步或真实 Codex 执行已通过。
+状态：首版实现及本机 Docker 验收已完成。当前证据包括 2633 项 Bun 测试通过、`bun run check` 通过、标准镜像构建和双账号完整 Docker E2E；本地 Caddy CA 下 HTTPS、账号隔离、SSH/Mutagen、备份恢复及 Linux PTY 均有实际验证。GitHub CI 最新状态以 [PR #1 checks](https://github.com/Zhao-zixi/codex-web-linux/pull/1) 为准；本地结果不代表 CI 已通过。公网 DNS/ACME/浏览器公认证书信任，以及真实 Codex 账号登录后的模型任务仍待目标环境验证。
 
 ## 目标与边界
 
@@ -53,25 +53,25 @@
 
 ## 验收矩阵
 
-所有项目初始状态为**待验证**。每项应记录实际命令、环境、观察结果；本地容器或自签证书测试不能代替真实公网域名和有效证书验收。
+以下状态区分本机真实 Docker 验收与尚未完成的公网/账号验收。本地容器和 local CA 证据不能代替真实公网域名与有效证书验收。
 
 | 项目 | 通过证据 | 状态 |
 | --- | --- | --- |
-| 构建与检查 | 聚焦测试、`bun test`、`bun run check` 通过；部署配置校验通过；两个镜像成功构建 | 待验证 |
-| 安装启动 | 从干净目录按中文部署指南启动至少两个账号；均能登录、创建项目并打开终端 | 待验证 |
-| HTTPS | 目标域名 DNS 正确、证书有效、HTTP 跳转 HTTPS、WebSocket 正常；内部测试证书不计为公网通过 | 待验证 |
-| Web 隔离 | A 的口令和 session cookie 在 B 无效；未登录 API/WS 被拒；项目和历史互不可见 | 待验证 |
-| 文件与 SSH 隔离 | A 的 key 不能登录 B；A 的 SSH 和 Kanna 不能访问 B 的 workspace、HOME、data 和凭据；SSH 不能读取自身 Kanna HOME | 待验证 |
-| 双向同步 | 两方向的新增、修改、删除、目录和二进制文件均校验一致；包含空格和中文路径 | 待验证 |
-| 冲突保护 | 两端同时修改同一文件时冲突可观察，双方内容保留；按指南处理后恢复收敛 | 待验证 |
-| 断线恢复 | 中断 SSH 后两边分别修改不同文件；恢复连接后自动收敛；容器重启后 data 和 host key 保留 | 待验证 |
+| 构建与检查 | `bun test`：2633 pass、0 fail、7404 assertions、210 files；`bun run check` 通过；本地标准 Docker 镜像构建及完整 E2E 通过 | 本机已验证；GitHub CI 当前结果见 [PR #1 checks](https://github.com/Zhao-zixi/codex-web-linux/pull/1) |
+| 安装启动 | 按中文指南生成并启动两个隔离账号；应用登录、项目与终端均由 Docker E2E 验证 | 本机 Docker 已验证 |
+| HTTPS | Caddy local CA 对证书链和主机名严格校验，HTTPS/WebSocket 可用；公网 DNS、ACME 签发和浏览器公认证书信任 | local CA 本机已验证；公网待验收 |
+| Web 隔离 | 同源认证请求成功，兄弟子域跨源请求拒绝，账号认证隔离通过；测试未登录/错误认证边界 | 本机 Docker E2E 已验证 |
+| 文件与 SSH 隔离 | 两账号各自公钥 SSH、网络和挂载隔离；工作区、HOME、data 与凭据不跨账号访问 | 本机 Docker E2E 已验证 |
+| 双向同步 | 两方向新增、修改、删除、目录、二进制、空格及中文路径均检查；Mutagen 暂停/恢复与断连恢复 | 本机 Docker E2E 已验证 |
+| 冲突保护 | 双端冲突可观察并按 two-way-safe 流程恢复收敛，未丢弃双方文件 | 本机 Docker E2E 已验证 |
+| 断线恢复 | SSH/同步恢复、容器重启和备份恢复检查；账号数据与 SSH host key 保留 | 本机 Docker E2E 已验证 |
 | 终端 job control | Kanna PTY 可运行命令、工作目录正确、marker 跨重启持久；Ctrl-C 能中断长命令并返回 shell；raw mode 保留 `0x03` 字节 | 本地 Docker E2E 已验证 sleep/pipeline 在 3 秒内中断、raw byte、resize、中文工作目录、active close 后 PID 清理，以及相邻 Alice terminal/Bob shell 不受影响；公网和浏览器环境仍待验收 |
-| Codex 实际执行 | 使用明确提供的账号凭据发起真实任务；Codex 在服务器工作区改文件，改动同步回本机；记录结果，不能用 mock 代替 | 待验证 |
-| UI | 桌面和窄屏下入口均可用；沿用现有界面风格并保存截图 | 待验证 |
+| Codex 实际执行 | app-server initialize 握手已验证；尚无实际 Codex 账号凭据，未执行真实模型任务，也未验证模型修改回传 | initialize 已验证；真实账号任务待验收 |
+| UI | 真实 Kanna 服务与 Chromium 验证 Settings → General；1365px 桌面和 390px 窄屏无横向溢出，底部复制按钮可操作 | 本机浏览器已验证；[桌面截图](assets/remote-workspace-desktop.png) / [窄屏截图](assets/remote-workspace-mobile.png) |
 
 ## 上线条件
 
-- 所有适用的构建、回归、隔离、同步和真实目标环境验收都有可审阅证据。
+- 已完成的本机构建、回归、隔离与同步验收有可审阅证据；真实目标环境的公网 TLS 与 Codex 账号任务仍需完成后才能宣称整体上线验收结束。
 - 检查 Compose/Docker 实际挂载、网络与容器权限；不能仅凭 UI 结果推断隔离成立。
 - 审查配置生成文件、secret/state 是否被 Git 忽略；审查镜像、端口和宿主挂载，确认不暴露共享凭据或其他账号数据。
-- 公网 HTTPS、跨账号隔离、Mutagen 冲突恢复和真实 Codex 写入回传均未完成时，必须明确列为未验收，不能以架构设计或本地 mock 代替。
+- 公网 HTTPS 和真实 Codex 写入回传仍未完成，必须明确列为待验收；跨账号隔离及 Mutagen 冲突恢复已在本机 Docker E2E 验证，不能把本地证据描述为公网环境验证。

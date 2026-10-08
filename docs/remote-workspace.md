@@ -2,13 +2,41 @@
 
 这套部署为每个账号启动独立的 Kanna app、SSH sidecar、网络、工作区和持久 HOME。Caddy 根据 `<账号>.<域名>` 转发 HTTPS 请求；SSH 只接受该账号提供的公钥。Kanna app 固定以非 root UID/GID 运行，SSH 登录映射到普通 `workspace` 用户。SSH shell 保持可用，供 Mutagen 启动远程同步 helper；root 登录、密码认证、端口/代理转发均关闭。
 
-> 当前仓库包含配置生成器、镜像定义和 E2E 测试，但当前开发容器没有可访问的 Docker daemon，因此尚未在此环境验证镜像构建、SSH 登录或 Mutagen 同步。部署前请在目标 Linux 主机运行 `doctor` 和下文的 E2E 命令；不要把本指南视为已通过的生产认证。
+> 本机 Linux/Docker 两账号验收已通过：镜像构建、账号隔离、SSH 公钥登录、Caddy local CA 的 HTTPS、Mutagen 双向同步与冲突恢复、备份恢复和 Linux PTY 行为均在 Docker E2E 中验证。公网域名/DNS/ACME 和浏览器对公网证书的信任尚未验证；真实 Codex 账号登录及模型任务也未在此环境运行。GitHub CI 的当前状态见 [PR #1](https://github.com/Zhao-zixi/codex-web-linux/pull/1)，不要将其状态从本地验收推断出来。
 
 ## 支持范围与前置条件
 
 部署主机要求 Linux、Docker Engine、Docker Compose v2、Bun 1.3.5 或更高版本、OpenSSH 客户端工具、`jq`、Mutagen CLI，以及可以写入持久目录的 UID/GID。公网部署需要域名 DNS 记录指向主机，并开放 HTTP/HTTPS 和每个账号单独的 SSH TCP 端口。首版只接受 DNS 名称或 IPv4 地址；IPv6 literal 不支持，Mutagen 连接请使用 DNS 名称或本地 SSH alias。
 
 开发与生成 CLI 使用 Bun。请从 [Bun 官方安装说明](https://bun.sh/docs/installation) 安装，不要通过未经审阅的 `curl | sh` 命令安装。Mutagen 请从 [Mutagen 官方安装文档](https://mutagen.io/documentation/introduction/installation/) 选择对应平台的发行版；Docker 请按 [Docker Engine 官方文档](https://docs.docker.com/engine/install/) 安装。`doctor` 会检查 Docker daemon、Compose、`ssh-keygen`、Mutagen、`jq` 和已初始化状态的目录权限；任一必需项失败都会返回非零状态。
+
+### Linux amd64 安装 Mutagen
+
+Linux x86_64 客户端可使用 Mutagen 官方 v0.18.1 发布包。包内的 CLI 和 `mutagen-agents.tar.gz` 是两个独立文件；必须让它们位于同一目录且均可读，不能只复制 `mutagen` 可执行文件。以下命令将两者安装到 `~/.local/bin`，校验官方 SHA-256，并确认 agent bundle 包含 `linux_amd64`：
+
+```sh
+set -euo pipefail
+tmp_dir="$(mktemp -d)"
+trap 'rm -rf "$tmp_dir"' EXIT
+mkdir -p "$HOME/.local/bin"
+archive="$tmp_dir/mutagen_linux_amd64_v0.18.1.tar.gz"
+curl --fail --location --retry 3 \
+  https://github.com/mutagen-io/mutagen/releases/download/v0.18.1/mutagen_linux_amd64_v0.18.1.tar.gz \
+  --output "$archive"
+printf '%s  %s\n' '7735286c778cc438418209f24d03a64f3a0151c8065ef0fe079cfaf093af6f8f' "$archive" | sha256sum --check
+tar -tzf "$archive" > "$tmp_dir/archive-files.txt"
+printf 'mutagen\nmutagen-agents.tar.gz\n' | diff -u - "$tmp_dir/archive-files.txt"
+tar -xzf "$archive" --directory "$HOME/.local/bin" --no-same-owner --no-same-permissions mutagen mutagen-agents.tar.gz
+chmod 755 "$HOME/.local/bin/mutagen"
+chmod 644 "$HOME/.local/bin/mutagen-agents.tar.gz"
+test -r "$HOME/.local/bin/mutagen-agents.tar.gz"
+tar -tzf "$HOME/.local/bin/mutagen-agents.tar.gz" > "$tmp_dir/agent-files.txt"
+grep -Fxq linux_amd64 "$tmp_dir/agent-files.txt"
+export PATH="$HOME/.local/bin:$PATH"
+mutagen version
+```
+
+预期版本为 `0.18.1`。其它平台请使用上面的 Mutagen 官方安装文档或平台包管理器；Windows 客户端应在 WSL2 内安装与 Linux 发行版匹配的版本。
 
 此部署指南针对 Linux Docker 主机。macOS 可作为 SSH/同步客户端，前提是安装了 OpenSSH、jq 和 Mutagen；Windows 客户端请在 WSL2 发行版内运行同步脚本并安装这些工具。Docker Desktop/macOS 或原生 Windows 部署主机不在当前 E2E 验证范围内。
 
@@ -73,7 +101,7 @@ Codex 凭据按账号单独设置。用户登录自己的 Kanna 后，可在网�
 docker compose -f .remote-workspace/compose.yaml exec kanna_alice codex login --device-auth
 ```
 
-其他账号使用各自的 `kanna_<账号>` 容器。宿主机或 root 的 `~/.codex` 凭据不会复制到容器。不要把 token 粘贴进 Compose、环境变量、工作区或日志。账号的 `.codex` 目录分别持久保存在 `state/<账号>/codex`。真实 Codex 账户登录和付费模型任务尚未在此环境验收。若使用 API key 登录，应通过隐藏输入或 stdin 提供，不要把 key 写入命令历史或聊天内容。
+其他账号使用各自的 `kanna_<账号>` 容器。宿主机或 root 的 `~/.codex` 凭据不会复制到容器。不要把 token 粘贴进 Compose、环境变量、工作区或日志。账号的 `.codex` 目录分别持久保存在 `state/<账号>/codex`。真实 Codex 账户登录和实际模型任务尚未在此环境验收。若使用 API key 登录，应通过隐藏输入或 stdin 提供，不要把 key 写入命令历史或聊天内容。
 
 托管模式下，新建项目默认使用 `/workspace`，但会尊重用户已经保存的 `New Projects Directory` 设置。已有账号若保存了其他目录，请在设置中将新项目目录改为 `/workspace`，然后从 Projects 页面新建项目；也可直接打开或创建 `/workspace/<项目名>`。Mutagen 同步只准备远端目录，不会自动替 Kanna 选择项目；要让会话在同步目录工作，请从 Kanna 打开对应项目目录。
 
@@ -139,7 +167,7 @@ bun run test:remote-workspace
 
 真实两账号集成测试会构建镜像、启动 Docker Compose、用公钥登录两个 SSH sidecar，通过登录后的 HTTPS/WS 创建项目并在 Kanna PTY 中验证工作目录、命令输出和 marker 持久化；它也验证 Codex app-server initialize 握手、同源安全请求、兄弟子域跨源拒绝、账号认证隔离、Mutagen 双向同步/二进制/删除/暂停恢复/冲突合并、容器重启和备份恢复。Linux PTY 使用 Bun inline terminal 创建控制终端；测试验证 Ctrl-C 在 3 秒内中断前台 `sleep` 和 pipeline、raw mode 下仍把字节 `0x03` 交给程序、窗口尺寸更新，以及关闭活动终端后 shell 和作业进程退出。app 容器以 Docker init 作为 PID 1 回收终端关闭时被收养的子进程，Kanna Bun 仍以配置的非 root UID 运行，并保留只读根文件系统、丢弃全部 capabilities 和 `no-new-privileges`。E2E 用容器内 `/proc` 的 PID、状态、进程组、session ID 和 start time 验证目标进程确已退出，邻终端和另一账号进程保持存活。
 
-测试要求 Docker daemon、Mutagen 0.18.1、OpenSSH、jq、Bun 1.3.5+ 和 Node.js 22+；缺少依赖或 daemon 权限会失败，不会报告跳过成功。E2E 的 HTTPS/WebSocket 测试客户端使用 Node.js 22，以保留严格 CA 与主机名验证；app runtime 镜像当前使用 Node.js 20.19.2，并已验证固定 Codex CLI 可启动。测试用 Caddy local CA 严格验证 HTTPS 链与主机名；公网 DNS、ACME、浏览器信任和真实付费 Codex 任务仍需部署环境另行验收：
+测试要求 Docker daemon、Mutagen 0.18.1、OpenSSH、jq、Bun 1.3.5+ 和 Node.js 22+；缺少依赖或 daemon 权限会失败，不会报告跳过成功。E2E 的 HTTPS/WebSocket 测试客户端使用 Node.js 22，以保留严格 CA 与主机名验证；app runtime 镜像当前使用 Node.js 20.19.2，并已验证固定 Codex CLI 可启动。测试用 Caddy local CA 严格验证 HTTPS 链与主机名；公网 DNS、ACME、浏览器对公网证书的信任和真实 Codex 账号模型任务仍需部署环境另行验收：
 
 ```sh
 bun run test:remote-workspace:e2e
@@ -153,6 +181,7 @@ bun run test:remote-workspace:e2e
 - SSH 报 `Permission denied (publickey)`：核对提交的 `.pub` 与客户端私钥是否配对、ssh-agent 中密钥是否正确、账号公钥文件是否为裸单行格式，并检查端口、防火墙和容器状态。
 - SSH 提示 host key changed：先确认是否有计划内重建或恢复；与服务端持久 host key 指纹核对后再更新客户端 known_hosts。
 - Mutagen 无法连接：确认 ssh-agent 有该用户私钥、SSH alias/端口配置指向正确账号、known_hosts 中的指纹有效、服务端普通用户 shell 可启动，以及双方网络可达。不要使用 root shell、密码登录或关闭 host-key 检查。
+- Mutagen 报 `unable to locate agent bundle`：Mutagen CLI 旁必须有同版本且可读的 `mutagen-agents.tar.gz`；从官方发行归档一并安装这两个文件，并确认 agent bundle 中包含当前客户端平台（Linux amd64 为 `linux_amd64`）。仅复制 `mutagen` 可执行文件不够。
 - 同步停滞：检查 `sync.sh list` 和 `mutagen sync flush <session>` 输出；暂停具体 session 后处理冲突。不要运行 `mutagen sync terminate --all` 或停止共享 daemon。
 
 真实 WebSocket 终端命令、PTY 工作目录、中文路径、持久 marker 和终端 job control 已在 Docker E2E 中验证。关闭终端时，测试确认所属 shell 和前台作业 PID 消失；Alice 的相邻终端和 Bob 的 shell PID/start time 保持不变。终端行为在本地受限容器中已通过，不代表公网域名、浏览器证书信任或真实 Codex 任务已验收。

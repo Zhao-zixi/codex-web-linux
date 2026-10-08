@@ -1,0 +1,15 @@
+FROM debian:bookworm-slim
+ARG REMOTE_UID=1000
+ARG REMOTE_GID=1000
+RUN if [ "${REMOTE_UID}" -le 0 ] || [ "${REMOTE_GID}" -le 0 ]; then echo "REMOTE_UID and REMOTE_GID must be positive" >&2; exit 1; fi \
+    && apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server ca-certificates git openssl \
+    && rm -rf /var/lib/apt/lists/* \
+    && if getent passwd "${REMOTE_UID}" >/dev/null; then echo "REMOTE_UID is already assigned in the SSH image; choose an unused non-root UID" >&2; exit 1; fi \
+    && if ! getent group "${REMOTE_GID}" >/dev/null; then groupadd --gid "${REMOTE_GID}" workspace; fi \
+    && useradd --password "$(head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 64 | openssl passwd -6 -stdin)" --uid "${REMOTE_UID}" --gid "${REMOTE_GID}" --create-home --home-dir /home/workspace --shell /bin/bash workspace \
+    && mkdir -p /run/sshd /etc/ssh/hostkeys /workspace \
+    && chmod 0755 /run/sshd /etc/ssh/hostkeys /workspace
+COPY sshd_config /etc/ssh/sshd_config
+EXPOSE 2222
+CMD ["/usr/sbin/sshd", "-D", "-e", "-f", "/etc/ssh/sshd_config"]

@@ -1,0 +1,48 @@
+name: Remote workspace
+
+on:
+  push:
+    branches-ignore:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-unit-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.5
+      - run: bun install --frozen-lockfile
+      - run: bun run check
+      - run: bun run test:remote-workspace
+
+  docker-ssh-mutagen-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.24.2
+      - run: bun install --frozen-lockfile
+      - name: Install pinned Mutagen CLI from its Go module
+        env:
+          GOBIN: ${{ runner.temp }}/bin
+        run: |
+          go install github.com/mutagen-io/mutagen@v0.18.1
+          echo "${{ runner.temp }}/bin" >> "$GITHUB_PATH"
+      - name: Require Docker daemon
+        run: docker info
+      - run: bun run test:remote-workspace:e2e

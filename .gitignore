@@ -28,6 +28,7 @@ Thumbs.db
 # vite
 vite.config.ts.timestamp-*
 /.kanna
+/.remote-workspace/
 
 # Playwright
 test-results/

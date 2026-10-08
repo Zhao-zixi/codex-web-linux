@@ -55,6 +55,7 @@ async function startCloudServer(options: {
   tempDirs.push(dataDir)
   const server = await startKannaServer({
     dataDir,
+    keybindingsPath: path.join(dataDir, "keybindings.json"),
     port: options.port,
     cloud: options.cloud,
     password: options.password ?? null,

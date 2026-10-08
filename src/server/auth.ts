@@ -111,6 +111,20 @@ export interface AuthManagerOptions {
   trustProxy?: boolean
 }
 
+const STATE_CHANGING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"])
+
+/** Protect hosted browser requests from same-site sibling-subdomain CSRF. */
+export function shouldRejectHostedCrossOrigin(
+  req: Request,
+  hostedMode: boolean,
+  validateOrigin: (request: Request) => boolean
+) {
+  if (!hostedMode || !req.headers.has("origin")) return false
+  const { pathname } = new URL(req.url)
+  const protectedRequest = pathname === "/ws" || (pathname.startsWith("/api/") && STATE_CHANGING_METHODS.has(req.method.toUpperCase()))
+  return protectedRequest && !validateOrigin(req)
+}
+
 export function createAuthManager(password: string, options: AuthManagerOptions = {}): AuthManager {
   const sessions = new Set<string>()
   const expectedPassword = Buffer.from(password)

@@ -155,7 +155,16 @@ describe("buildTerminalCommand", () => {
 
   test("defaults to Terminal.app on macOS when no emulator is named", () => {
     // The behaviour the menu had before terminals were detected at all.
-    expect(buildTerminalCommand({ localPath: "/repo", platform: "darwin" }))
+    expect(buildTerminalCommand({ localPath: "/repo", platform: "darwin", canOpenMacApp: () => true }))
       .toEqual({ command: "open", args: ["-a", "Terminal", "/repo"] })
+  })
+
+  test("reports a missing macOS terminal when neither the app nor CLI exists", () => {
+    expect(() => buildTerminalCommand({
+      localPath: "/repo",
+      platform: "darwin",
+      canOpenMacApp: () => false,
+      hasCommand: () => false,
+    })).toThrow("Terminal is not installed")
   })
 })

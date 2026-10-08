@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { persistProjectUpload } from "./uploads"
 import { startKannaServer } from "./server"
+import { createAuthManager, shouldRejectHostedCrossOrigin } from "./auth"
 
 const tempDirs: string[] = []
 
@@ -11,18 +12,21 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
 })
 
-async function startPasswordServer(options: { trustProxy?: boolean; port?: number } = {}) {
+async function startPasswordServer(options: { trustProxy?: boolean; port?: number; hostedWorkspace?: { enabled: false } | { displayName: string; sshHost: string; sshPort: number; sshUser: string; workspaceRoot: string } } = {}) {
   const projectDir = await mkdtemp(path.join(tmpdir(), "kanna-auth-test-"))
   const dataDir = await mkdtemp(path.join(tmpdir(), "kanna-auth-data-"))
   tempDirs.push(projectDir)
   tempDirs.push(dataDir)
   const server = await startKannaServer({
     dataDir,
-    port: options.port ?? 4320,
+    port: options.port ?? 0,
     strictPort: true,
     password: "secret",
+    keybindingsPath: path.join(dataDir, "keybindings.json"),
     trustProxy: options.trustProxy ?? false,
+    hostedWorkspace: options.hostedWorkspace ?? { enabled: false },
   })
+  expect(server.port).toBeGreaterThan(0)
   const project = await server.store.openProject(projectDir, "Project")
   return { server, projectDir, project }
 }
@@ -34,8 +38,28 @@ function extractCookie(response: Response) {
 }
 
 describe("password auth", () => {
+  test("rejects hosted cross-origin and null-origin state-changing browser requests", () => {
+    const auth = createAuthManager("secret", { trustProxy: true })
+    const request = (pathname: string, method: string, origin?: string) => new Request(`http://alice.example.test${pathname}`, {
+      method,
+      headers: {
+        ...(origin === undefined ? {} : { Origin: origin }),
+        "X-Forwarded-Proto": "https",
+      },
+    })
+
+    expect(shouldRejectHostedCrossOrigin(request("/ws", "GET", "https://bob.example.test"), true, auth.validateOrigin)).toBe(true)
+    expect(shouldRejectHostedCrossOrigin(request("/ws", "GET", "null"), true, auth.validateOrigin)).toBe(true)
+    expect(shouldRejectHostedCrossOrigin(request("/api/projects", "POST", "https://bob.example.test"), true, auth.validateOrigin)).toBe(true)
+    expect(shouldRejectHostedCrossOrigin(request("/api/projects", "DELETE", "null"), true, auth.validateOrigin)).toBe(true)
+    expect(shouldRejectHostedCrossOrigin(request("/api/projects", "POST", "https://alice.example.test"), true, auth.validateOrigin)).toBe(false)
+    expect(shouldRejectHostedCrossOrigin(request("/api/projects", "POST"), true, auth.validateOrigin)).toBe(false)
+    expect(shouldRejectHostedCrossOrigin(request("/api/projects", "POST", "https://bob.example.test"), false, auth.validateOrigin)).toBe(false)
+    expect(shouldRejectHostedCrossOrigin(request("/api/projects", "GET", "https://bob.example.test"), true, auth.validateOrigin)).toBe(false)
+  })
+
   test("serves the app shell to unauthenticated browser requests", async () => {
-    const { server } = await startPasswordServer()
+    const { server } = await startPasswordServer({ port: 54321 })
 
     try {
       const response = await fetch(`http://localhost:${server.port}/chat/demo`, { headers: { Accept: "text/html" } })
@@ -67,6 +91,40 @@ describe("password auth", () => {
     try {
       const response = await fetch(`http://localhost:${server.port}/api/projects/project-1/uploads`, { redirect: "manual" })
       expect(response.status).toBe(401)
+    } finally {
+      await server.stop()
+    }
+  })
+
+  test("protects and returns only configured hosted workspace connection details", async () => {
+    const { server } = await startPasswordServer({
+      hostedWorkspace: {
+        displayName: "Remote",
+        sshHost: "sync.example.test",
+        sshPort: 2222,
+        sshUser: "kanna",
+        workspaceRoot: "/workspace",
+      },
+    })
+
+    try {
+      const denied = await fetch(`http://localhost:${server.port}/api/hosted-workspace`)
+      expect(denied.status).toBe(401)
+      const loginResponse = await fetch(`http://localhost:${server.port}/auth/login`, {
+        method: "POST",
+        body: JSON.stringify({ password: "secret", next: "/" }),
+        headers: { "Content-Type": "application/json", Origin: `http://localhost:${server.port}` },
+      })
+      const response = await fetch(`http://localhost:${server.port}/api/hosted-workspace`, { headers: { Cookie: extractCookie(loginResponse) } })
+      expect(response.status).toBe(200)
+      expect(response.headers.get("cache-control")).toBe("no-store")
+      expect(await response.json()).toEqual({
+        displayName: "Remote",
+        sshHost: "sync.example.test",
+        sshPort: 2222,
+        sshUser: "kanna",
+        workspaceRoot: "/workspace",
+      })
     } finally {
       await server.stop()
     }
@@ -185,7 +243,7 @@ describe("password auth", () => {
   })
 
   test("ignores forwarded proto when trustProxy is off", async () => {
-    const { server } = await startPasswordServer({ port: 54321 })
+    const { server } = await startPasswordServer()
 
     try {
       const response = await fetch(`http://localhost:${server.port}/auth/login?next=%2F`, {

@@ -1311,7 +1311,7 @@ export function createProcessAuthDeps(): Pick<ProviderAuthManagerDeps, "exec" | 
 
     spawnPty(argv) {
       if (typeof Bun.Terminal !== "function") {
-        throw new Error("This sign-in flow requires Bun 1.3.5+ (PTY support).")
+        throw new Error("This sign-in flow requires Bun 1.4.2+ (PTY support).")
       }
       const listeners = new Set<(chunk: string) => void>()
       const terminal = new Bun.Terminal({

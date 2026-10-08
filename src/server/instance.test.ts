@@ -27,7 +27,7 @@ describe("probeExistingInstance", () => {
   test("finds a running same-data-dir instance and ignores foreign ones", async () => {
     const dataDir = await mkdtemp(path.join(tmpdir(), "kanna-instance-"))
     tempDirs.push(dataDir)
-    const server = await startKannaServer({ dataDir, port: 4381 })
+    const server = await startKannaServer({ dataDir, keybindingsPath: path.join(dataDir, "keybindings.json"), port: 4381 })
     stops.push(server.stop)
 
     const match = await probeExistingInstance(server.port, dataDir)

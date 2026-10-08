@@ -12,7 +12,7 @@ import {
   CLOUD_WS_ENDPOINT_PATH,
   type CloudWsEndpointResponse,
 } from "../shared/cloud-api"
-import { createAuthManager } from "./auth"
+import { createAuthManager, shouldRejectHostedCrossOrigin } from "./auth"
 import { classifyCloudRequest, isAllowedCloudWsUpgrade, type CloudRequestClass } from "./cloud/guard"
 import { createCloudRuntime, type CloudRuntime } from "./cloud"
 import { createFleetCache } from "./cloud/fleet"
@@ -55,6 +55,7 @@ import { instanceFingerprint } from "./instance"
 import { deleteProjectUpload, inferAttachmentContentType, inferProjectFileContentType, persistProjectUpload } from "./uploads"
 import { getProjectUploadDir } from "./paths"
 import { inheritShellPath } from "./process-utils"
+import { readHostedWorkspaceConfig, type HostedWorkspaceSnapshot } from "./hosted-workspace"
 
 const MAX_UPLOAD_FILES = 50
 const MAX_UPLOAD_SIZE_BYTES = 100 * 1024 * 1024
@@ -119,6 +120,10 @@ export interface StartKannaServerOptions {
    * reachable solely through a trusted reverse proxy such as cloudflared.
    */
   trustProxy?: boolean
+  /** Deployment-provided SSH sync details; omitted to load KANNA_HOSTED_WORKSPACE_CONFIG. */
+  hostedWorkspace?: HostedWorkspaceSnapshot
+  /** Isolated keybindings file path for embedded server tests/runtime. */
+  keybindingsPath?: string
   /**
    * Cloud runtime shell (kanna.sh pairing). When set, requests are classified
    * (proxied / local / untrusted raw-tunnel) before any other handling:
@@ -156,6 +161,11 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   // awaited before anything can start an agent.
   const shellPathReady = inheritShellPath()
   const auth = options.password ? createAuthManager(options.password, { trustProxy: options.trustProxy ?? false }) : null
+  const hostedWorkspace = options.hostedWorkspace ?? await readHostedWorkspaceConfig(process.env.KANNA_HOSTED_WORKSPACE_CONFIG)
+  if (!("enabled" in hostedWorkspace) && !auth) {
+    throw new Error("Hosted workspace mode requires password authentication")
+  }
+  const hostedMode = !("enabled" in hostedWorkspace)
   const diagnostics = new PerformanceLog(options.dataDir ?? getDataDir(homedir()), undefined, options.update?.version)
   const store = new EventStore(options.dataDir, diagnostics)
   const diffStore = new DiffStore(store.dataDir)
@@ -231,12 +241,15 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   const portTunnels = new PortTunnelManager({
     log: (message) => console.log(`${LOG_PREFIX} ${message}`),
   })
-  const keybindings = new KeybindingsManager()
+  const keybindings = new KeybindingsManager(options.keybindingsPath)
   // Dev-box UI flag: the real thing is `kanna --cloud`; KANNA_DEVBOX_UI=1 is
   // the dev-mode override (`bun run dev:cloud`) so the UI is developable
   // without a cloud identity.
   const devboxUi = Boolean(options.directCloud) || process.env.KANNA_DEVBOX_UI === "1"
-  const appSettings = new AppSettingsManager(path.join(store.dataDir, "settings.json"), { devbox: devboxUi })
+  const appSettings = new AppSettingsManager(path.join(store.dataDir, "settings.json"), {
+    devbox: devboxUi,
+    hosted: hostedMode,
+  })
   await appSettings.initialize()
   // Which editors and terminals this machine has, for the "Open in…" menus.
   // Deliberately not awaited: it shells out per app, and the menus render
@@ -518,6 +531,10 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
             ? classifyCloudRequest(req, cloud.identity.proxySecret)
             : "local"
 
+          if (auth && shouldRejectHostedCrossOrigin(req, hostedMode, auth.validateOrigin)) {
+            return withOriginAgentCluster(new Response("Forbidden", { status: 403 }))
+          }
+
           // The proxy answers /__cloud/* itself and never forwards it; the
           // machine 404s the prefix explicitly so the client can
           // feature-detect cloud mode (the SPA fallback would otherwise
@@ -641,6 +658,11 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
             // exposed on local/proxied requests — the raw-tunnel /health
             // above stays minimal.
             return withOriginAgentCluster(Response.json({ ok: true, port: actualPort, instance: instanceFingerprint(store.dataDir) }))
+          }
+
+          if (url.pathname === "/api/hosted-workspace") {
+            if (req.method !== "GET") return withOriginAgentCluster(new Response(null, { status: 405, headers: { Allow: "GET" } }))
+            return withOriginAgentCluster(Response.json(hostedWorkspace, { headers: { "Cache-Control": "no-store" } }))
           }
 
           if (url.pathname === CLOUD_PAIR_SESSION_PATH) {
@@ -776,6 +798,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
           },
         },
       })
+      actualPort = server.port ?? actualPort
       break
     } catch (err: unknown) {
       const isAddrInUse =

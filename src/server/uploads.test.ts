@@ -20,6 +20,7 @@ async function startIsolatedServer(options: { port: number; strictPort?: boolean
   tempDirs.push(dataDir)
   return startKannaServer({
     dataDir,
+    keybindingsPath: path.join(dataDir, "keybindings.json"),
     port: options.port,
     strictPort: options.strictPort ?? true,
   })

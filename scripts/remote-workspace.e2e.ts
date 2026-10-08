@@ -112,7 +112,7 @@ function hostedHttpsRequest(args: {
   headers?: Record<string, string>
   body?: string
 }) {
-  const nodeClient = String.raw`const https=require("https");let input="";process.stdin.setEncoding("utf8");process.stdin.on("data",x=>input+=x);process.stdin.on("end",()=>{const a=JSON.parse(input);const r=https.request({hostname:"127.0.0.1",port:a.port,servername:a.host,path:a.path,method:a.method,ca:a.ca,headers:{Host:a.host+":"+a.port,...a.headers},rejectUnauthorized:true},s=>{const c=[];s.on("data",x=>c.push(x));s.on("end",()=>process.stdout.write(JSON.stringify({status:s.statusCode||0,headers:s.headers,body:Buffer.concat(c).toString("utf8")})))});r.on("upgrade",(s,socket)=>{socket.destroy();process.stdout.write(JSON.stringify({status:s.statusCode||0,headers:s.headers,body:""}))});r.on("error",e=>process.stdout.write(JSON.stringify({error:{code:e.code||"unknown",errno:e.errno||"unknown",address:e.address||"unknown",port:e.port||"unknown"}})));if(a.body)r.write(a.body);r.end()})`
+  const nodeClient = String.raw`const https=require("https");let input="";process.stdin.setEncoding("utf8");process.stdin.on("data",x=>input+=x);process.stdin.on("end",()=>{const a=JSON.parse(input);const safe=x=>String(x||"").replace(/[\r\n\t]+/g," ").slice(0,240);const r=https.request({hostname:"127.0.0.1",port:a.port,servername:a.host,path:a.path,method:a.method,ca:a.ca,headers:{Host:a.host+":"+a.port,...a.headers},rejectUnauthorized:true},s=>{const c=[];s.on("data",x=>c.push(x));s.on("end",()=>process.stdout.write(JSON.stringify({status:s.statusCode||0,headers:s.headers,body:Buffer.concat(c).toString("utf8")})))});r.on("upgrade",(s,socket)=>{socket.destroy();process.stdout.write(JSON.stringify({status:s.statusCode||0,headers:s.headers,body:""}))});r.on("error",e=>process.stdout.write(JSON.stringify({error:{code:e.code||"unknown",errno:e.errno||"unknown",address:e.address||"unknown",port:e.port||"unknown",message:safe(e.message),reason:safe(e.reason),library:safe(e.library)}})));if(a.body)r.write(a.body);r.end()})`
   const result = spawnSync("node", ["-e", nodeClient], {
     env: process.env,
     encoding: "utf8",
@@ -122,9 +122,47 @@ function hostedHttpsRequest(args: {
   })
   if (result.error) throw new Error(`Node HTTPS helper failed (${(result.error as NodeJS.ErrnoException).code ?? "unknown"})`)
   if (result.status !== 0) throw new Error(`Node HTTPS helper exited with status ${result.status ?? "unknown"}`)
-  const parsed = JSON.parse(result.stdout) as { status?: number; headers?: IncomingHttpHeaders; body?: string; error?: { code?: string; errno?: string; address?: string; port?: string } }
-  if (parsed.error) throw new Error(`Node HTTPS request failed (code=${parsed.error.code} errno=${parsed.error.errno} address=${parsed.error.address} port=${parsed.error.port})`)
+  const parsed = JSON.parse(result.stdout) as { status?: number; headers?: IncomingHttpHeaders; body?: string; error?: { code?: string; errno?: string; address?: string; port?: string; message?: string; reason?: string; library?: string } }
+  if (parsed.error) {
+    const detail = [parsed.error.message, parsed.error.reason, parsed.error.library].filter(Boolean).join(" | ")
+    throw new Error(`Node HTTPS request failed (code=${parsed.error.code} errno=${parsed.error.errno} address=${parsed.error.address} port=${parsed.error.port}${detail ? ` detail=${detail}` : ""})`)
+  }
   return { status: parsed.status ?? 0, headers: parsed.headers ?? {}, body: parsed.body ?? "" }
+}
+
+function diagnoseStrictHttpsHealth(args: { host: string; port: number; caPath: string }) {
+  const resolve = `${args.host}:${args.port}:127.0.0.1`
+  const curl = spawnSync("curl", [
+    "--silent", "--show-error", "--max-time", "5", "--output", "/dev/null",
+    "--write-out", "%{http_code}", "--resolve", resolve, "--cacert", args.caPath,
+    `https://${args.host}:${args.port}/health`,
+  ], { env, encoding: "utf8", timeout: 6_000, maxBuffer: 1024 })
+  const curlCategory = curl.error
+    ? `spawn-${(curl.error as NodeJS.ErrnoException).code ?? "unknown"}`
+    : curl.status === 0 && /^\d{3}$/.test(curl.stdout.trim())
+      ? `HTTP-${curl.stdout.trim()}`
+      : `curl-exit-${curl.status ?? "unknown"}-code-${/curl:\s*\((\d+)\)/.exec(curl.stderr ?? "")?.[1] ?? "unknown"}`
+
+  const port = spawnSync("docker", ["compose", "-p", project, "-f", path.join(outputDir, "compose.yaml"), "port", "caddy", "443"], {
+    cwd: outputDir, env, encoding: "utf8", timeout: 5_000, maxBuffer: 1024,
+  })
+  const portBinding = port.status === 0 && /^127\.0\.0\.1:\d+$/.test(port.stdout.trim())
+    ? port.stdout.trim()
+    : `unavailable-${port.error ? (port.error as NodeJS.ErrnoException).code ?? "spawn-error" : `exit-${port.status ?? "unknown"}`}`
+
+  const states = (["caddy", "kanna_alice", "kanna_bob"] as const).map((service) => {
+    const ids = spawnSync("docker", ["compose", "-p", project, "-f", path.join(outputDir, "compose.yaml"), "ps", "--all", "--quiet", service], {
+      cwd: outputDir, env, encoding: "utf8", timeout: 5_000, maxBuffer: 1024,
+    })
+    const id = ids.status === 0 ? ids.stdout.trim().split("\n").filter(Boolean)[0] : undefined
+    if (!id) return `${service}=missing`
+    const inspect = spawnSync("docker", ["inspect", "--format", "{{.State.Status}} {{.RestartCount}}", id], {
+      env, encoding: "utf8", timeout: 5_000, maxBuffer: 1024,
+    })
+    const match = inspect.status === 0 ? /^(\S+)\s+(\d+)$/.exec(inspect.stdout.trim()) : null
+    return match ? `${service}=state:${match[1]},restarts:${match[2]}` : `${service}=inspect-unavailable`
+  })
+  return `strict-curl=${curlCategory}; caddy443=${portBinding}; containers=${states.join(";")}`
 }
 
 async function websocketUpgrade(host: string, origin: string, cookie: string, ca: string, port: number) {
@@ -882,7 +920,13 @@ try {
     }
     if (!healthReady) await Bun.sleep(500)
   }
-  if (!healthReady) throw new Error(`Alice hosted HTTPS /health did not become ready (${healthFailure})`)
+  if (!healthReady) {
+    const caPath = path.join(root, "caddy-local-root-ca.pem")
+    await writeFile(caPath, localCa, { mode: 0o600 })
+    await chmod(caPath, 0o600)
+    diagnosticFacts.push(`HTTPS /health failure comparison: ${diagnoseStrictHttpsHealth({ host: "alice.localhost", port: httpsPort, caPath })}`)
+    throw new Error(`Alice hosted HTTPS /health did not become ready (${healthFailure})`)
+  }
   const login = await loginOnHostedApp("alice.localhost", aliceOrigin, alicePassword, localCa, httpsPort)
   if (login.status !== 200) throw new Error(`Alice /auth/login rejected HTTP ${login.status}: ${login.body.slice(0, 200)}`)
   const setCookie = login.headers["set-cookie"]?.[0]

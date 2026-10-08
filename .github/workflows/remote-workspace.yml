@@ -13,19 +13,26 @@ permissions:
 
 jobs:
   build-and-unit-test:
+    name: build-and-unit-test (Bun ${{ matrix.bun-version }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        bun-version: ["1.3.5", "1.4.2"]
     env:
       NO_PROXY: 127.0.0.1,localhost,::1
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.5
+          bun-version: ${{ matrix.bun-version }}
       - run: bun install --frozen-lockfile
       - run: bun run check
       - run: |
           export no_proxy="$NO_PROXY"
-          timeout --signal=TERM --kill-after=10s 5m bun test
+          printf 'Bun version: '
+          bun --version
+          time timeout --signal=TERM --kill-after=10s 5m bun test
 
   docker-ssh-mutagen-e2e:
     runs-on: ubuntu-latest

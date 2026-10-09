@@ -419,15 +419,21 @@ function createTestRouter(overrides: Partial<CreateWsRouterArgs> = {}) {
 }
 
 describe("ws-router", () => {
-  test("closes bearer sockets before accepting a command after session expiry", async () => {
+  test("keeps an expired bearer socket unauthorized for later commands and broadcasts", async () => {
     let active = true
     const router = createTestRouter({ authSessionActive: () => active })
     const ws = Object.assign(new FakeWebSocket(), {
       data: { subscriptions: new Map(), protectedDraftChatIds: new Set<string>(), authSessionId: "opaque-session", authOrigin: "https://fnos.example.test:8444" },
     })
     router.handleOpen(ws as never)
+    ws.data.subscriptions.set("sidebar", { type: "sidebar" })
     active = false
     await router.handleMessage(ws as never, JSON.stringify({ v: PROTOCOL_VERSION, type: "command", id: "expired", command: { type: "system.ping" } }))
+    await router.handleMessage(ws as never, JSON.stringify({ v: PROTOCOL_VERSION, type: "command", id: "expired-again", command: { type: "system.ping" } }))
+    await router.broadcastSidebar()
+    router.handleClose(ws as never)
+    await router.handleMessage(ws as never, JSON.stringify({ v: PROTOCOL_VERSION, type: "command", id: "closed", command: { type: "system.ping" } }))
+
     expect(ws.closed).toEqual([{ code: 1008, reason: "Authentication expired" }])
     expect(ws.sent).toHaveLength(0)
   })

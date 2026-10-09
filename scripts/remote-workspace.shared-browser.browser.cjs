@@ -1,7 +1,56 @@
 const { chromium } = require("playwright")
+const https = require("node:https")
+const { randomBytes } = require("node:crypto")
+const fs = require("node:fs")
 
 function assert(condition, label) {
   if (!condition) throw new Error(label)
+}
+
+function strictHttpsStatus(url, headers) {
+  return new Promise((resolve, reject) => {
+    const request = https.request(new URL(url), {
+      method: "GET",
+      ca: fs.readFileSync("/test/root.crt"),
+      rejectUnauthorized: true,
+      agent: false,
+      headers,
+    }, (response) => {
+      response.resume()
+      response.once("end", () => resolve({ status: response.statusCode ?? 0, setCookie: Boolean(response.headers["set-cookie"]) }))
+    })
+    request.setTimeout(5_000, () => request.destroy(new Error("request timeout")))
+    request.once("error", (error) => reject(new Error(`strict HTTPS request failed (${error.code ?? error.name})`)))
+    request.end()
+  })
+}
+
+function strictHttpsWebSocketStatus(url, headers) {
+  return new Promise((resolve, reject) => {
+    const request = https.request(new URL(url), {
+      method: "GET",
+      ca: fs.readFileSync("/test/root.crt"),
+      rejectUnauthorized: true,
+      agent: false,
+      headers: {
+        Connection: "Upgrade",
+        Upgrade: "websocket",
+        "Sec-WebSocket-Version": "13",
+        "Sec-WebSocket-Key": randomBytes(16).toString("base64"),
+        ...headers,
+      },
+    }, (response) => {
+      response.resume()
+      response.once("end", () => resolve({ status: response.statusCode ?? 0, upgraded: false }))
+    })
+    request.setTimeout(5_000, () => request.destroy(new Error("request timeout")))
+    request.once("upgrade", (response, socket) => {
+      socket.destroy()
+      resolve({ status: response.statusCode ?? 0, upgraded: true })
+    })
+    request.once("error", (error) => reject(new Error(`strict HTTPS WebSocket request failed (${error.code ?? error.name})`)))
+    request.end()
+  })
 }
 
 async function waitForPageSession(page, label) {
@@ -142,6 +191,47 @@ async function main() {
     assert(securityB.secure && securityB.controlled && securityB.bearerStored, "account B secure worker session is incomplete")
     assert(securityA.origin !== securityB.origin, "the two accounts did not receive distinct origins")
     await fetchWorkspaceMetadata(pageB, "account B")
+
+    const tokenA = await pageA.evaluate(() => sessionStorage.getItem("kanna.auth.token"))
+    const tokenB = await pageB.evaluate(() => sessionStorage.getItem("kanna.auth.token"))
+    assert(tokenA && tokenB, "both accounts must hold their own bearer session")
+    const crossPortBearer = await strictHttpsStatus(`${securityB.origin}/api/hosted-workspace`, {
+      Origin: securityB.origin,
+      Authorization: `Bearer ${tokenA}`,
+    })
+    const ownPortBearer = await strictHttpsStatus(`${securityB.origin}/api/hosted-workspace`, {
+      Origin: securityB.origin,
+      Authorization: `Bearer ${tokenB}`,
+    })
+    assert(crossPortBearer.status === 401, "account B accepted account A's bearer on B's exact origin")
+    assert(ownPortBearer.status === 200, "account B's own bearer was not accepted on B's exact origin")
+
+    const ticketAResult = await pageA.evaluate(async () => {
+      const token = sessionStorage.getItem("kanna.auth.token")
+      const response = await fetch("/auth/ws-ticket", {
+        method: "POST",
+        credentials: "omit",
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const payload = await response.json()
+      return { status: response.status, ticket: payload.ticket }
+    })
+    assert(ticketAResult.status === 200 && typeof ticketAResult.ticket === "string", "account A did not issue a test WebSocket ticket")
+    const crossPortTicket = await strictHttpsWebSocketStatus(`${securityB.origin}/ws`, {
+      Host: new URL(securityB.origin).host,
+      Origin: securityB.origin,
+      "Sec-WebSocket-Protocol": `kanna.ws.v1, kanna.ticket.${ticketAResult.ticket}`,
+    })
+    assert(crossPortTicket.status === 401 && !crossPortTicket.upgraded, "account B accepted account A's WebSocket ticket")
+
+    await pageB.close()
+    const noClientB = await context.newPage()
+    const noClientBResponse = await noClientB.goto(`${securityB.origin}/api/hosted-workspace`, {
+      waitUntil: "domcontentloaded",
+      timeout: 10_000,
+    })
+    assert(noClientBResponse?.status() === 401, "account B protected navigation succeeded with no B app client while A remained open")
+    await noClientB.close()
 
     const project = await openWorkspaceSocket(pageA, projectPath)
     await pageA.screenshot({ path: "/test/output/final-shared-workspace.png", fullPage: true })
@@ -550,7 +640,6 @@ async function main() {
     }), pngUrl)
     assert(protectedMediaAfterLogout, "protected native media remained accessible after logout")
     await newTab.close()
-    await pageB.close()
     await pageA.close()
     const noClientPage = await context.newPage()
     const noClientResponse = await noClientPage.goto(`${originA}/api/projects/${encodeURIComponent(project.projectId)}/files/fixture.html/content`, {
@@ -566,6 +655,8 @@ async function main() {
       secureOrigins: [securityA.origin, securityB.origin],
       distinctOriginSessions: true,
       noCookies: true,
+      crossPortAuth: { accountABearerOnB: crossPortBearer.status, accountBBearerOnB: ownPortBearer.status, accountAWebSocketTicketOnB: crossPortTicket.status },
+      noClientWithOtherAccountOpen: noClientBResponse?.status() ?? 0,
       workerControlledBothOrigins: true,
       apiViaWorker: true,
       spoofedWorkerRequestIgnored: spoofedRequestIgnored,

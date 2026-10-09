@@ -71,7 +71,7 @@ describe("password auth", () => {
   })
 
   test("serves the app shell to unauthenticated browser requests", async () => {
-    const { server } = await startPasswordServer({ port: 54321 })
+    const { server } = await startPasswordServer()
 
     try {
       const response = await fetch(`http://localhost:${server.port}/chat/demo`, { headers: { Accept: "text/html" } })
@@ -177,7 +177,7 @@ describe("password auth", () => {
   test("uses origin-bound bearer sessions without cookie fallback in shared-host mode", async () => {
     const port = 54324
     const { server } = await startPasswordServer({
-      port,
+      port: 0,
       trustProxy: true,
       hostedWorkspace: {
         displayName: "elim",
@@ -192,10 +192,15 @@ describe("password auth", () => {
       },
     })
     const origin = `https://localhost:${port}`
-    const url = `http://localhost:${port}`
+    const url = `http://localhost:${server.port}`
+    const hostedFetch = (pathname: string, init: RequestInit = {}) => {
+      const headers = new Headers(init.headers)
+      headers.set("Host", `localhost:${port}`)
+      return fetch(`${url}${pathname}`, { ...init, headers })
+    }
 
     try {
-      const login = await fetch(`${url}/auth/login`, {
+      const login = await hostedFetch("/auth/login", {
         method: "POST",
         headers: { Origin: origin, "X-Forwarded-Proto": "https", "Content-Type": "application/json" },
         body: JSON.stringify({ password: "secret" }),
@@ -206,39 +211,39 @@ describe("password auth", () => {
       expect(loginPayload.token).toMatch(/^[A-Za-z0-9_-]{32,128}$/)
       expect(loginPayload.expiresAt).toBeGreaterThan(Date.now())
 
-      const cookieOnlyStatus = await fetch(`${url}/auth/status`, {
+      const cookieOnlyStatus = await hostedFetch("/auth/status", {
         headers: { Origin: origin, "X-Forwarded-Proto": "https", Cookie: `kanna_session=${loginPayload.token}` },
       })
       expect(await cookieOnlyStatus.json()).toEqual({ enabled: true, authenticated: false, authMode: "bearer" })
 
-      const cookieOnlyApi = await fetch(`${url}/api/hosted-workspace`, {
+      const cookieOnlyApi = await hostedFetch("/api/hosted-workspace", {
         headers: { Origin: origin, "X-Forwarded-Proto": "https", Cookie: `kanna_session=${loginPayload.token}` },
       })
       expect(cookieOnlyApi.status).toBe(401)
 
-      const bearerApi = await fetch(`${url}/api/hosted-workspace`, {
+      const bearerApi = await hostedFetch("/api/hosted-workspace", {
         headers: { Origin: origin, "X-Forwarded-Proto": "https", Authorization: `Bearer ${loginPayload.token}` },
       })
       expect(bearerApi.status).toBe(200)
       expect(await bearerApi.json()).toMatchObject({ authMode: "bearer", webOrigin: origin })
-      const bearerWithoutOrigin = await fetch(`${url}/api/hosted-workspace`, {
+      const bearerWithoutOrigin = await hostedFetch("/api/hosted-workspace", {
         headers: { "X-Forwarded-Proto": "https", Authorization: `Bearer ${loginPayload.token}` },
       })
       expect(bearerWithoutOrigin.status).toBe(200)
 
-      const crossPort = await fetch(`${url}/api/hosted-workspace`, {
+      const crossPort = await hostedFetch("/api/hosted-workspace", {
         headers: { Origin: "https://localhost:54325", "X-Forwarded-Proto": "https", Authorization: `Bearer ${loginPayload.token}` },
       })
       expect(crossPort.status).toBe(401)
 
-      const ticketResponse = await fetch(`${url}/auth/ws-ticket`, {
+      const ticketResponse = await hostedFetch("/auth/ws-ticket", {
         method: "POST",
         headers: { Origin: origin, "X-Forwarded-Proto": "https", Authorization: `Bearer ${loginPayload.token}` },
       })
       expect(ticketResponse.status).toBe(200)
       const { ticket } = await ticketResponse.json() as { ticket: string }
       const ws = new WebSocket(`ws://localhost:${server.port}/ws`, ["kanna.ws.v1", `kanna.ticket.${ticket}`], {
-        headers: { Origin: origin, "X-Forwarded-Proto": "https" },
+        headers: { Host: `localhost:${port}`, Origin: origin, "X-Forwarded-Proto": "https" },
       })
       await new Promise<void>((resolve, reject) => {
         ws.once("open", resolve)
@@ -248,14 +253,14 @@ describe("password auth", () => {
       expect(ws.protocol).not.toContain(ticket)
       const closeCode = new Promise<number>((resolve) => ws.once("close", (code) => resolve(code)))
 
-      const logout = await fetch(`${url}/auth/logout`, {
+      const logout = await hostedFetch("/auth/logout", {
         method: "POST",
         headers: { Origin: origin, "X-Forwarded-Proto": "https", Authorization: `Bearer ${loginPayload.token}` },
       })
       expect(logout.status).toBe(200)
       expect(logout.headers.get("set-cookie")).toBeNull()
       expect(await closeCode).toBe(1008)
-      const afterLogout = await fetch(`${url}/api/hosted-workspace`, {
+      const afterLogout = await hostedFetch("/api/hosted-workspace", {
         headers: { Origin: origin, "X-Forwarded-Proto": "https", Authorization: `Bearer ${loginPayload.token}` },
       })
       expect(afterLogout.status).toBe(401)
@@ -454,7 +459,7 @@ describe("password auth", () => {
   })
 
   test("honors forwarded proto when trustProxy is on", async () => {
-    const { server } = await startPasswordServer({ port: 54322, trustProxy: true })
+    const { server } = await startPasswordServer({ trustProxy: true })
 
     try {
       const redirect = await fetch(`http://localhost:${server.port}/auth/login?next=%2F`, {
@@ -493,7 +498,7 @@ describe("password auth", () => {
   })
 
   test("ignores invalid forwarded proto values", async () => {
-    const { server } = await startPasswordServer({ port: 54323, trustProxy: true })
+    const { server } = await startPasswordServer({ trustProxy: true })
 
     try {
       const redirect = await fetch(`http://localhost:${server.port}/auth/login?next=%2F`, {

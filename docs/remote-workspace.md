@@ -2,7 +2,7 @@
 
 这套部署为每个账号启动独立的 Kanna app、SSH sidecar、网络、工作区和持久 HOME。默认子域模式由 Caddy 根据 `<账号>.<域名>` 转发 HTTPS 请求；shared 模式改用同一 hostname 的账号专属 HTTPS 端口。SSH 只接受该账号提供的公钥。Kanna app 固定以非 root UID/GID 运行，SSH 登录映射到普通 `workspace` 用户。SSH shell 保持可用，供 Mutagen 启动远程同步 helper；root 登录、密码认证、端口/代理转发均关闭。
 
-> 本机 Linux/Docker 两账号验收已通过：镜像构建、账号隔离、SSH 公钥登录、Caddy local CA 的 HTTPS、Mutagen 双向同步与冲突恢复、备份恢复和 Linux PTY 行为均在 Docker E2E 中验证。公网域名/DNS/ACME 和浏览器对公网证书的信任尚未验证；真实 Codex 账号登录及模型任务也未在此环境运行。GitHub CI 的当前状态见 [PR #1](https://github.com/Zhao-zixi/codex-web-linux/pull/1)，不要将其状态从本地验收推断出来。
+> 本机 Linux/Docker 验收已通过：镜像构建、两账号隔离、SSH 公钥登录、Mutagen 双向同步与冲突恢复、备份恢复、Linux PTY 行为，以及 shared internal CA 下的严格 TLS 浏览器流程和 SSH/Mutagen E2E。浏览器验证覆盖双 origin 登录、媒体和 Range 请求、下载、Service Worker 生命周期及注销。公网域名/DNS/NAT、浏览器对公网证书的信任和真实 Codex 账号模型任务尚未验证。GitHub CI 的当前状态见 [PR #2](https://github.com/Zhao-zixi/codex-web-linux/pull/2)，不要将其状态从本机验收推断出来。
 
 ## 支持范围与前置条件
 
@@ -43,7 +43,7 @@ docker compose -f .remote-workspace/compose.yaml up --force-recreate -d --no-dep
 
 ### 可选方案：Caddy internal CA
 
-如果没有可用的外部可信证书，可以选择由 Caddy 为 `fnos.zixizhao.top` 签发内部 CA 证书。高端口 TLS 直接由 Caddy 提供，不依赖公网 80/443，也不需要 ACME；但每台客户端必须先信任 Caddy 的 public root CA，浏览器才会认可 HTTPS。internal CA 已在隔离的 Compose 验证中通过 public root 导出和严格证书链 TLS smoke check；这不是完整应用流程或公网部署验收。用户尚未在 external 与 internal TLS 之间作正式选择，公网 NAT 也仍未验证。
+如果没有可用的外部可信证书，可以选择由 Caddy 为 `fnos.zixizhao.top` 签发内部 CA 证书。高端口 TLS 直接由 Caddy 提供，不依赖公网 80/443，也不需要 ACME；但每台客户端必须先信任 Caddy 的 public root CA，浏览器才会认可 HTTPS。internal CA 下的完整本机严格 TLS 浏览器流程和 shared SSH/Mutagen E2E 已通过，覆盖双 origin 登录、媒体与 Range、下载、Service Worker 和注销。用户尚未在 external 与 internal TLS 之间作正式选择，公网 NAT 仍未验证。
 
 必须显式选择 `--tls-mode internal`；`--tls-mode` 默认值是 external，shared external 必须提供证书和私钥路径，缺失配置会报错，不会回退到 internal。internal 模式不能同时传入 external 证书和私钥参数。CLI 形式如下：
 
@@ -81,7 +81,7 @@ sha256sum /tmp/fnos-zixizhao-root.crt
 
 公网入口和 NAT 转发目前尚未验收。部署后应从外网分别验证两个 HTTPS URL 的证书主机名与信任链、账号登录隔离、WebSocket、音频/媒体流和 Range 请求，并确认 SSH 端口只到达对应 sidecar；同时确认 fnOS 的 80、443、8443 服务仍正常。完成这些检查前，不要把公网访问描述为已验证。
 
-若高端口入口或证书检查失败，可先停止这套 Compose 部署并撤销路由器/防火墙新增的四条转发规则；Docker Compose `down` 不要附加 `-v`，以保留账号 HOME、Codex 登录态和 workspace。修复后从原 `.remote-workspace/` 状态目录重新 `generate`、`doctor`、`up`。回滚期间确认 fnOS 自己的服务仍正常；不要为了排障重启 fnOS 或覆盖其端口配置。SSH 私钥始终由账号用户在自己的电脑上生成或从其既有密钥管理器取得，管理员只接收对应 `.pub` 公钥；如果私钥遗失，应按用户密钥管理流程在客户端轮换并重新授权公钥，不得从仓库或部署目录恢复私钥。
+若高端口入口或证书检查失败，可先停止这套 Compose 部署并撤销路由器/防火墙新增的四条转发规则；Docker Compose `down` 不要附加 `-v`，以保留账号 HOME、Codex 登录态和 workspace。修复后从原 `.remote-workspace/` 状态目录重新 `generate`、`doctor`、`up`。回滚期间确认 fnOS 自己的服务仍正常；不要为了排障重启 fnOS 或覆盖其端口配置。SSH 私钥由对应账号用户持有；本次密钥是在授权的受控流程中于部署服务器仓库外生成，再通过安全渠道交付给用户。不得把私钥提交 Git、放进账号 bundle 或从仓库恢复；若私钥遗失，应为该用户轮换密钥并重新授权公钥。
 
 ### Linux amd64 安装 Mutagen
 
@@ -128,7 +128,7 @@ ssh-keygen -t ed25519 -f ~/.ssh/kanna-alice -C alice
 ssh-keygen -t ed25519 -f ~/.ssh/kanna-bob -C bob
 ```
 
-当前 fnOS shared 部署使用已获授权生成的 Ed25519 密钥，密钥文件保存在仓库之外的 `/root/.kanna/remote-workspace-client-keys/<account>/id_ed25519` 与 `id_ed25519.pub`。初始化只使用 `.pub` 公钥路径。私钥须由对应账号用户通过安全渠道取到自己的客户端，存放于客户端密钥管理位置并限制访问；不得提交 Git、放进部署 bundle、粘贴到命令参数或发给其他账号。若换新密钥，应由账号用户在客户端生成，再向管理员交付 `.pub` 文件。
+当前 fnOS shared 部署使用已授权生成的 Ed25519 密钥，密钥文件保存在仓库之外的 `/root/.kanna/remote-workspace-client-keys/<account>/id_ed25519` 与 `id_ed25519.pub`。初始化只使用 `.pub` 公钥路径；对应私钥应由管理员通过安全渠道交付给其所属账号用户，并由用户保存在自己的客户端密钥管理位置、限制本地访问。不得提交 Git、放进部署 bundle、粘贴到命令参数或交给其他账号。若轮换密钥，应重新进行受控生成和安全交付。
 
 公钥应为 `.pub` 文件中的单行裸 OpenSSH key，不可带 `command=` 等 authorized_keys 前缀。为每个账号分配不同 SSH 端口，并确保公网防火墙放行这些端口。运行 `init` 会创建随机 app 密码并写入权限受限的状态目录，不会把密码打印到终端；它不会生成或保存客户端私钥。
 

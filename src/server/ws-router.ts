@@ -194,12 +194,14 @@ interface SnapshotComputationCache {
  */
 const COMPRESS_FRAME_MIN_BYTES = 1024
 
-const socketAuthChecks = new WeakMap<ServerWebSocket<ClientState>, () => boolean>()
+const socketAuthChecks = new WeakMap<ServerWebSocket<ClientState>, { active: () => boolean; closing: boolean }>()
 
 function socketIsAuthorized(ws: ServerWebSocket<ClientState>) {
-  const check = socketAuthChecks.get(ws)
-  if (!check || check()) return true
-  socketAuthChecks.delete(ws)
+  const auth = socketAuthChecks.get(ws)
+  if (!auth) return true
+  if (auth.closing) return false
+  if (auth.active()) return true
+  auth.closing = true
   ws.close(1008, "Authentication expired")
   return false
 }
@@ -2046,13 +2048,17 @@ export function createWsRouter({
     },
     handleOpen(ws: ServerWebSocket<ClientState>) {
       if (ws.data.authSessionId && ws.data.authOrigin && authSessionActive) {
-        socketAuthChecks.set(ws, () => authSessionActive(ws.data.authSessionId!, ws.data.authOrigin!))
+        socketAuthChecks.set(ws, {
+          active: () => authSessionActive(ws.data.authSessionId!, ws.data.authOrigin!),
+          closing: false,
+        })
         if (!socketIsAuthorized(ws)) return
       }
       sockets.add(ws)
     },
     handleClose(ws: ServerWebSocket<ClientState>) {
-      socketAuthChecks.delete(ws)
+      const auth = socketAuthChecks.get(ws)
+      if (auth) auth.closing = true
       sockets.delete(ws)
       ws.data.subscriptions.clear()
       ws.data.snapshotSignatures?.clear()
@@ -2067,7 +2073,11 @@ export function createWsRouter({
     },
     closeAuthSession(sessionId: string) {
       for (const ws of sockets) {
-        if (ws.data.authSessionId === sessionId) ws.close(1008, "Signed out")
+        if (ws.data.authSessionId === sessionId) {
+          const auth = socketAuthChecks.get(ws)
+          if (auth) auth.closing = true
+          ws.close(1008, "Signed out")
+        }
       }
     },
     broadcastSnapshots,

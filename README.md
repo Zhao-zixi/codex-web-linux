@@ -126,7 +126,7 @@ kanna --cloudflared <token>        # 使用命名 Cloudflare tunnel
 
 ### 自建远程工作区
 
-Kanna 首版远程工作区通过每账号独立容器、SSH 和用户本机 Mutagen 同步项目。请先阅读[自建远程工作区指南](docs/remote-workspace.md)，其中也包含复用单个 hostname、为每个账号分配独立 HTTPS 高端口的 fnOS 部署步骤。shared 模式可配置外部可信证书；内部 CA 是尚待选择和完成验收的可选途径。同 hostname 的端口不隔离 Cookie，公网 NAT 转发和真实 Codex 执行状态仍以指南中的验收记录为准。
+Kanna 首版远程工作区通过每账号独立容器、SSH 和用户本机 Mutagen 同步项目。请先阅读[自建远程工作区指南](docs/remote-workspace.md)，其中也包含复用单个 hostname、为每个账号分配独立 HTTPS 高端口的 fnOS 部署步骤。internal CA 的严格 TLS 浏览器流程和 shared SSH/Mutagen 本机 E2E 已通过，覆盖双 origin 登录、媒体与 Range、下载、Service Worker 和注销。用户尚未选择正式 TLS 方案，公网 NAT 和真实 Codex 执行状态仍待验证；同 hostname 的端口不隔离 Cookie。
 
 ### 网络访问（Tailscale / LAN）
 

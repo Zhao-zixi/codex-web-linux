@@ -1,19 +1,35 @@
-import { afterEach, expect, mock, spyOn, test } from "bun:test"
+import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test"
 import { clearBearerSession, ensureBearerServiceWorker, kannaFetch, setClientAuthMode, storeBearerSession } from "./auth-client"
 
-const originalWindow = globalThis.window
-const originalNavigator = globalThis.navigator
+let originalWindowDescriptor: PropertyDescriptor | undefined
+let originalNavigatorDescriptor: PropertyDescriptor | undefined
+
+beforeEach(() => {
+  originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window")
+  originalNavigatorDescriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator")
+})
 
 afterEach(() => {
-  setClientAuthMode(null)
-  clearBearerSession()
-  mock.restore()
-  Object.defineProperty(globalThis, "window", { configurable: true, value: originalWindow })
-  Object.defineProperty(globalThis, "navigator", { configurable: true, value: originalNavigator })
+  try {
+    setClientAuthMode(null)
+    clearBearerSession()
+    mock.restore()
+  } finally {
+    if (originalWindowDescriptor) {
+      Object.defineProperty(globalThis, "window", originalWindowDescriptor)
+    } else {
+      Reflect.deleteProperty(globalThis, "window")
+    }
+    if (originalNavigatorDescriptor) {
+      Object.defineProperty(globalThis, "navigator", originalNavigatorDescriptor)
+    } else {
+      Reflect.deleteProperty(globalThis, "navigator")
+    }
+  }
 })
 
 test("same-origin bearer requests omit cookies and attach only the current origin token", async () => {
-  Object.defineProperty(globalThis, "window", { configurable: true, value: { location: { origin: "https://fnos.example.test:8444", href: "https://fnos.example.test:8444/" } } })
+  Object.defineProperty(globalThis, "window", { configurable: true, writable: true, value: { location: { origin: "https://fnos.example.test:8444", href: "https://fnos.example.test:8444/" } } })
   setClientAuthMode("bearer")
   storeBearerSession("opaque-test-bearer-token-000000000000", Date.now() + 60_000)
   const fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(new Response("ok"))
@@ -31,7 +47,7 @@ test("same-origin bearer requests omit cookies and attach only the current origi
 })
 
 test("external requests never receive the workspace bearer token", async () => {
-  Object.defineProperty(globalThis, "window", { configurable: true, value: { location: { origin: "https://fnos.example.test:8444", href: "https://fnos.example.test:8444/" } } })
+  Object.defineProperty(globalThis, "window", { configurable: true, writable: true, value: { location: { origin: "https://fnos.example.test:8444", href: "https://fnos.example.test:8444/" } } })
   setClientAuthMode("bearer")
   storeBearerSession("opaque-test-bearer-token-000000000000", Date.now() + 60_000)
   const fetchSpy = spyOn(globalThis, "fetch").mockResolvedValue(new Response("ok"))
@@ -68,9 +84,10 @@ test("claims an active auth worker when an existing page has no controller", asy
   Object.defineProperty(serviceWorker, "ready", { value: Promise.resolve(registration) })
   Object.defineProperty(globalThis, "window", {
     configurable: true,
+    writable: true,
     value: { location: { origin }, setTimeout, clearTimeout },
   })
-  Object.defineProperty(globalThis, "navigator", { configurable: true, value: { serviceWorker } })
+  Object.defineProperty(globalThis, "navigator", { configurable: true, writable: true, value: { serviceWorker } })
 
   await ensureBearerServiceWorker()
 

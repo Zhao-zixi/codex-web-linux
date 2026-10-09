@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto"
-import { chmod, chown, copyFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
+import { access, chmod, chown, copyFile, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises"
+import { constants as fsConstants } from "node:fs"
 import path from "node:path"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
@@ -7,7 +8,12 @@ import { fileURLToPath } from "node:url"
 export interface RemoteWorkspaceAccount {
   name: string
   sshPort: number
+  webPort?: number
 }
+
+export type RemoteWorkspaceTls =
+  | { mode: "external"; certFile: string; keyFile: string }
+  | { mode: "internal" }
 
 export interface RemoteWorkspaceManifest {
   version: 1
@@ -16,6 +22,9 @@ export interface RemoteWorkspaceManifest {
   runtimeUid: number
   runtimeGid: number
   accounts: RemoteWorkspaceAccount[]
+  hostnameMode?: "subdomain" | "shared"
+  publicHostname?: string
+  tls?: RemoteWorkspaceTls
 }
 
 export interface InitRemoteWorkspaceOptions {
@@ -26,6 +35,9 @@ export interface InitRemoteWorkspaceOptions {
   runtimeUid: number
   runtimeGid: number
   publicKeys: Record<string, string>
+  hostnameMode?: "subdomain" | "shared"
+  publicHostname?: string
+  tls?: RemoteWorkspaceTls
 }
 
 const ACCOUNT_NAME = /^[a-z][a-z0-9-]{0,30}[a-z0-9]$|^[a-z]$/
@@ -50,6 +62,7 @@ export function validateAccounts(accounts: RemoteWorkspaceAccount[]) {
   if (accounts.length < 1 || accounts.length > 32) throw new Error("Provide between 1 and 32 accounts")
   const names = new Set<string>()
   const ports = new Set<number>()
+  const webPorts = new Set<number>()
   for (const account of accounts) {
     validateAccountName(account.name)
     if (names.has(account.name)) throw new Error(`Duplicate account: ${account.name}`)
@@ -57,7 +70,70 @@ export function validateAccounts(accounts: RemoteWorkspaceAccount[]) {
     if (!Number.isInteger(account.sshPort) || account.sshPort < 1024 || account.sshPort > 65535) throw new Error(`Invalid SSH port for ${account.name}`)
     if (ports.has(account.sshPort)) throw new Error(`Duplicate SSH port: ${account.sshPort}`)
     ports.add(account.sshPort)
+    if (account.webPort !== undefined) {
+      if (!Number.isInteger(account.webPort) || account.webPort < 1024 || account.webPort > 65535) throw new Error(`Invalid HTTPS port for ${account.name}`)
+      if (webPorts.has(account.webPort)) throw new Error(`Duplicate HTTPS port: ${account.webPort}`)
+      if (ports.has(account.webPort)) throw new Error(`HTTPS port conflicts with an SSH port: ${account.webPort}`)
+      webPorts.add(account.webPort)
+    }
   }
+  for (const port of webPorts) {
+    if (ports.has(port)) throw new Error(`HTTPS port conflicts with an SSH port: ${port}`)
+  }
+}
+
+async function validateExternalTls(tls: RemoteWorkspaceTls) {
+  if (!tls || tls.mode !== "external") throw new Error("Shared hostname mode requires external TLS certificate files")
+  for (const [label, filePath] of [["certificate", tls.certFile], ["private key", tls.keyFile]] as const) {
+    if (typeof filePath !== "string" || !path.isAbsolute(filePath) || filePath.includes("\n") || filePath.includes("\r") || filePath.includes("\0")) {
+      throw new Error(`TLS ${label} path must be an absolute file path`)
+    }
+    let info
+    try {
+      info = await stat(filePath)
+      await access(filePath, fsConstants.R_OK)
+    } catch {
+      throw new Error(`TLS ${label} file is missing or unreadable`)
+    }
+    if (!info.isFile()) throw new Error(`TLS ${label} path must name a regular file`)
+    if (label === "private key" && ((info.mode & 0o077) !== 0 || (info.mode & 0o400) === 0)) {
+      throw new Error("TLS private key must be owner-readable and not readable or writable by group or others")
+    }
+  }
+  if (await realpath(tls.certFile) === await realpath(tls.keyFile)) throw new Error("TLS certificate and private key must be different files")
+}
+
+async function validateSharedTls(tls: RemoteWorkspaceTls | undefined) {
+  if (!tls) throw new Error("Shared hostname mode requires an explicit TLS mode")
+  if (tls.mode === "internal") {
+    if ("certFile" in tls || "keyFile" in tls) throw new Error("Internal TLS mode cannot include external certificate paths")
+    return
+  }
+  if (tls.mode !== "external") throw new Error("Invalid TLS mode")
+  await validateExternalTls(tls)
+}
+
+function validateManifestHostname(manifest: RemoteWorkspaceManifest) {
+  const mode = manifest.hostnameMode ?? "subdomain"
+  if (mode !== "shared" && mode !== "subdomain") throw new Error("Invalid hostname mode")
+  if (manifest.local && mode === "shared") throw new Error("Shared hostname mode cannot be combined with local mode")
+  if (mode === "shared") {
+    if (!manifest.publicHostname) throw new Error("Shared hostname mode requires a public hostname")
+    if (validateDomain(manifest.publicHostname) !== manifest.publicHostname) throw new Error("Public hostname must be normalized")
+    if (manifest.domain !== manifest.publicHostname) throw new Error("Shared hostname domain must match public hostname")
+    if (manifest.accounts.some((account) => account.webPort === undefined)) throw new Error("Shared hostname mode requires a distinct HTTPS port for every account")
+    if (!manifest.tls) throw new Error("Shared hostname mode requires an explicit TLS mode")
+    if (manifest.tls.mode === "internal") {
+      if ("certFile" in manifest.tls || "keyFile" in manifest.tls) throw new Error("Internal TLS mode cannot include external certificate paths")
+    } else if (manifest.tls.mode === "external") {
+      // Validated asynchronously by init/add-account/generate.
+    } else {
+      throw new Error("Invalid TLS mode")
+    }
+  } else if (manifest.publicHostname !== undefined || manifest.tls !== undefined) {
+    throw new Error("External hostname and TLS settings require shared hostname mode")
+  }
+  return mode
 }
 
 function parseOpenSshPublicKey(text: string) {
@@ -93,8 +169,18 @@ async function ensureOwnedPrivateDir(dirPath: string, uid: number, gid: number) 
 }
 
 export async function initializeRemoteWorkspace(options: InitRemoteWorkspaceOptions) {
-  const domain = options.local ? "localhost" : validateDomain(options.domain)
+  const hostnameMode = options.hostnameMode ?? "subdomain"
+  if (hostnameMode !== "subdomain" && hostnameMode !== "shared") throw new Error("Invalid hostname mode")
+  if (options.local && hostnameMode === "shared") throw new Error("Shared hostname mode cannot be combined with local mode")
+  const publicHostname = hostnameMode === "shared" ? validateDomain(options.publicHostname ?? options.domain) : undefined
+  const domain = options.local ? "localhost" : validateDomain(publicHostname ?? options.domain)
   validateAccounts(options.accounts)
+  if (hostnameMode === "shared") {
+    if (options.accounts.some((account) => account.webPort === undefined)) throw new Error("Shared hostname mode requires a distinct HTTPS port for every account")
+    await validateSharedTls(options.tls)
+  } else if (options.tls || options.publicHostname) {
+    throw new Error("External hostname and TLS settings require shared hostname mode")
+  }
   for (const account of options.accounts) {
     if (!options.publicKeys[account.name]) throw new Error(`A public key file is required for account ${account.name}`)
   }
@@ -127,6 +213,11 @@ export async function initializeRemoteWorkspace(options: InitRemoteWorkspaceOpti
       runtimeUid: options.runtimeUid,
       runtimeGid: options.runtimeGid,
       accounts: options.accounts,
+      ...(hostnameMode === "shared" ? {
+        hostnameMode,
+        publicHostname,
+        tls: options.tls,
+      } : {}),
     }
     const secretsRoot = path.join(outputDir, "secrets")
     const stateRoot = path.join(outputDir, "state")
@@ -183,14 +274,24 @@ function quoteYaml(value: string) {
 }
 
 export function renderHostedWorkspaceConfig(manifest: RemoteWorkspaceManifest, account: RemoteWorkspaceAccount) {
-  const host = manifest.local ? "127.0.0.1" : `${account.name}.${manifest.domain}`
-  return {
+  const shared = (manifest.hostnameMode ?? "subdomain") === "shared"
+  const host = manifest.local ? "127.0.0.1" : shared ? manifest.publicHostname! : `${account.name}.${manifest.domain}`
+  const config = {
     displayName: account.name,
     sshHost: host,
     sshPort: account.sshPort,
     sshUser: "workspace",
     workspaceRoot: "/workspace",
     publicHostKey: "",
+  }
+  if (!shared) return config
+  const webPort = account.webPort!
+  return {
+    ...config,
+    authMode: "bearer" as const,
+    webHost: host,
+    webPort,
+    webOrigin: `https://${host}:${webPort}`,
   }
 }
 
@@ -208,7 +309,12 @@ export async function addRemoteWorkspaceAccount(args: {
   } else {
     validateDomain(manifest.domain)
   }
+  const hostnameMode = validateManifestHostname(manifest)
+  if (hostnameMode === "shared") await validateSharedTls(manifest.tls)
   validateAccounts([...manifest.accounts, args.account])
+  if (hostnameMode === "shared" && args.account.webPort === undefined) {
+    throw new Error("Shared hostname mode requires an HTTPS port for every account")
+  }
   const key = parseOpenSshPublicKey(await readFile(args.publicKeyPath, "utf8"))
   const secrets = path.join(outputDir, "secrets", args.account.name)
   const state = path.join(outputDir, "state", args.account.name)
@@ -279,6 +385,9 @@ export async function generateRemoteWorkspaceFiles(outputDirInput: string) {
   } else {
     validateDomain(manifest.domain)
   }
+  const hostnameMode = validateManifestHostname(manifest)
+  const sharedHostname = hostnameMode === "shared"
+  if (sharedHostname) await validateSharedTls(manifest.tls)
   validateAccounts(manifest.accounts)
   const hostKeyByAccount = new Map<string, string>()
   for (const account of manifest.accounts) {
@@ -299,6 +408,9 @@ export async function generateRemoteWorkspaceFiles(outputDirInput: string) {
   const localPorts = manifest.local
     ? `      - "127.0.0.1:8080:80"\n      - "127.0.0.1:8443:443"`
     : `      - "80:80"\n      - "443:443"`
+  const caddyPorts = sharedHostname
+    ? manifest.accounts.map((account) => `      - ${quoteYaml(`${account.webPort}:${account.webPort}`)}`).join("\n")
+    : localPorts
   const services: string[] = []
   for (const account of manifest.accounts) {
     const network = `account_${account.name}`
@@ -382,14 +494,17 @@ export async function generateRemoteWorkspaceFiles(outputDirInput: string) {
     restart: unless-stopped`)
   }
   const accountNetworks = manifest.accounts.map((account) => `  account_${account.name}:\n    driver: bridge`).join("\n")
+  const caddyTlsVolumes = sharedHostname && manifest.tls?.mode === "external"
+    ? `\n      - type: bind\n        source: ${quoteYaml(await realpath(manifest.tls!.certFile))}\n        target: /run/caddy/external-cert.pem\n        read_only: true\n      - type: bind\n        source: ${quoteYaml(await realpath(manifest.tls!.keyFile))}\n        target: /run/caddy/external-key.pem\n        read_only: true`
+    : ""
   const caddyBlock = `  caddy:
     image: caddy:2.10.2-alpine
     ports:
-${localPorts}
+${caddyPorts}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
-      - caddy_config:/config
+      - caddy_config:/config${caddyTlsVolumes}
     networks:
 ${caddyNetworks}
     restart: unless-stopped`
@@ -406,6 +521,10 @@ networks:
 ${accountNetworks}
 `
   const caddyfile = manifest.accounts.map((account) => {
+    if (sharedHostname) {
+      const tlsDirective = manifest.tls?.mode === "internal" ? "  tls internal\n" : "  tls /run/caddy/external-cert.pem /run/caddy/external-key.pem\n"
+      return `${manifest.publicHostname}:${account.webPort} {\n${tlsDirective}  reverse_proxy http://kanna_${account.name}:3210 {\n    header_up -Cookie\n    header_down -Set-Cookie\n  }\n}`
+    }
     const site = manifest.local ? `${account.name}.localhost` : `${account.name}.${manifest.domain}`
     return `${site} {\n${manifest.local ? "  tls internal\n" : ""}  reverse_proxy http://kanna_${account.name}:3210\n}`
   }).join("\n\n") + "\n"

@@ -1,27 +1,32 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { setClientAuthMode } from "../app/auth-client"
 import { fetchVisualizationHeights, recordVisualizationHeight, rememberedVisualizationHeights, rememberVisualizationHeights } from "./visualization-heights"
 
 const URL_A = "/api/chats/chat-1/media/visualization-abc.html"
 
 describe("the heights a browser has measured visualizations at", () => {
-  const original = { localStorage: globalThis.localStorage, fetch: globalThis.fetch }
+  const original = { localStorage: globalThis.localStorage, fetch: globalThis.fetch, window: globalThis.window }
   let stored: Map<string, string>
   let requests: Array<{ url: string; method: string; body: unknown }>
 
   beforeEach(() => {
+    setClientAuthMode(null)
     stored = new Map()
     requests = []
     Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
       getItem: (key: string) => stored.get(key) ?? null,
       setItem: (key: string, value: string) => { stored.set(key, value) },
     } })
+    Object.defineProperty(globalThis, "window", { configurable: true, value: { location: { origin: "http://localhost", href: "http://localhost/" } } })
     globalThis.fetch = (async (url: string, init?: RequestInit) => {
       requests.push({ url, method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : undefined })
       return Response.json({ heights: [[400, 610]] })
     }) as unknown as typeof fetch
   })
   afterEach(() => {
+    setClientAuthMode(null)
     Object.defineProperty(globalThis, "localStorage", { configurable: true, value: original.localStorage })
+    Object.defineProperty(globalThis, "window", { configurable: true, value: original.window })
     globalThis.fetch = original.fetch
   })
 

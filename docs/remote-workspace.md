@@ -1,14 +1,87 @@
 # 远程 Kanna 工作区
 
-这套部署为每个账号启动独立的 Kanna app、SSH sidecar、网络、工作区和持久 HOME。Caddy 根据 `<账号>.<域名>` 转发 HTTPS 请求；SSH 只接受该账号提供的公钥。Kanna app 固定以非 root UID/GID 运行，SSH 登录映射到普通 `workspace` 用户。SSH shell 保持可用，供 Mutagen 启动远程同步 helper；root 登录、密码认证、端口/代理转发均关闭。
+这套部署为每个账号启动独立的 Kanna app、SSH sidecar、网络、工作区和持久 HOME。默认子域模式由 Caddy 根据 `<账号>.<域名>` 转发 HTTPS 请求；shared 模式改用同一 hostname 的账号专属 HTTPS 端口。SSH 只接受该账号提供的公钥。Kanna app 固定以非 root UID/GID 运行，SSH 登录映射到普通 `workspace` 用户。SSH shell 保持可用，供 Mutagen 启动远程同步 helper；root 登录、密码认证、端口/代理转发均关闭。
 
 > 本机 Linux/Docker 两账号验收已通过：镜像构建、账号隔离、SSH 公钥登录、Caddy local CA 的 HTTPS、Mutagen 双向同步与冲突恢复、备份恢复和 Linux PTY 行为均在 Docker E2E 中验证。公网域名/DNS/ACME 和浏览器对公网证书的信任尚未验证；真实 Codex 账号登录及模型任务也未在此环境运行。GitHub CI 的当前状态见 [PR #1](https://github.com/Zhao-zixi/codex-web-linux/pull/1)，不要将其状态从本地验收推断出来。
 
 ## 支持范围与前置条件
 
-部署主机要求 Linux、Docker Engine、Docker Compose v2、Bun 1.4.2 或更高版本、OpenSSH 客户端工具、`jq`、Mutagen CLI，以及可以写入持久目录的 UID/GID。公网部署需要域名 DNS 记录指向主机，并开放 HTTP/HTTPS 和每个账号单独的 SSH TCP 端口。首版只接受 DNS 名称或 IPv4 地址；IPv6 literal 不支持，Mutagen 连接请使用 DNS 名称或本地 SSH alias。
+部署主机要求 Linux、Docker Engine、Docker Compose v2、Bun 1.4.2 或更高版本、OpenSSH 客户端工具、`jq`、Mutagen CLI，以及可以写入持久目录的 UID/GID。公网部署需要域名 DNS 记录指向主机，并开放每个账号单独的 SSH TCP 端口。子域模式的 ACME HTTPS 需要按其配置开放 80/443；shared 高端口模式使用所配置的 HTTPS 端口，不依赖公网 80/443。首版只接受 DNS 名称或 IPv4 地址；IPv6 literal 不支持，Mutagen 连接请使用 DNS 名称或本地 SSH alias。
 
 开发与生成 CLI 使用 Bun。请从 [Bun 官方安装说明](https://bun.sh/docs/installation) 安装，不要通过未经审阅的 `curl | sh` 命令安装。Mutagen 请从 [Mutagen 官方安装文档](https://mutagen.io/documentation/introduction/installation/) 选择对应平台的发行版；Docker 请按 [Docker Engine 官方文档](https://docs.docker.com/engine/install/) 安装。`doctor` 会检查 Docker daemon、Compose、`ssh-keygen`、Mutagen、`jq` 和已初始化状态的目录权限；任一必需项失败都会返回非零状态。
+
+## 单域名、多 HTTPS 端口部署（fnOS）
+
+如果域名 `fnos.zixizhao.top` 已指向 fnOS，且 80、443、8443 正被 fnOS 服务使用，可以让工作区在同一 hostname 的独立高端口提供 HTTPS。此方式不新增 DNS 记录，也不改变 fnOS 原有服务监听；例如 `elim` 使用 `https://fnos.zixizhao.top:8444` 和 SSH TCP 2222，`zzx` 使用 `https://fnos.zixizhao.top:8445` 和 SSH TCP 2223。确保这些高端口未被其它服务占用，并在主机防火墙及路由器 NAT 中分别放行/转发 8444、8445、2222、2223。不要转发或改写 fnOS 的 80、443、8443 规则。
+
+使用 external TLS 时，需要一张由客户端信任、且 SAN 覆盖 `fnos.zixizhao.top` 的现有证书链和对应私钥。运维应先确认公钥证书与私钥配对，并验证证书链和有效期。把证书和私钥保存在部署目录之外或专用证书目录，给 Caddy 容器只读挂载；私钥文件应限制为管理员可读，绝不能提交 Git、放入账号 bundle 或发给工作区用户。CLI 会检查文件路径与权限，不会替代证书信任和配对校验；不要把证书或私钥内容贴进终端记录、聊天或 issue。
+
+下面的初始化参数已由当前 CLI 提供。将示例中的证书路径替换为管理员实际维护的 PEM 文件路径：
+
+```sh
+bun run remote-workspace -- init \
+  --hostname-mode shared \
+  --tls-mode external \
+  --public-hostname fnos.zixizhao.top \
+  --tls-cert-file /srv/kanna-certs/fnos-fullchain.pem \
+  --tls-key-file /srv/kanna-certs/fnos-key.pem \
+  --account elim:2222:8444 --pubkey elim=/root/.kanna/remote-workspace-client-keys/elim/id_ed25519.pub \
+  --account zzx:2223:8445 --pubkey zzx=/root/.kanna/remote-workspace-client-keys/zzx/id_ed25519.pub \
+  --output .remote-workspace
+bun run remote-workspace -- generate
+bun run remote-workspace -- doctor
+bun run remote-workspace -- up
+```
+
+证书续期由现有证书管理流程完成。先在同一证书目录写入临时文件并校验证书链和 key 匹配，再原子替换 Caddy 挂载的证书路径。由于 bind mount 在原子替换后可能仍指向旧 inode，应只重建 Caddy 容器以重新打开挂载文件：
+
+```sh
+docker compose -f .remote-workspace/compose.yaml up --force-recreate -d --no-deps caddy
+```
+
+随后从外部确认两个 HTTPS 入口都提供新证书；这项操作只重建 Caddy，不要重启或改动 fnOS。证书自动续期与该容器更新步骤尚未在公网环境验收。
+
+### 可选方案：Caddy internal CA
+
+如果没有可用的外部可信证书，可以选择由 Caddy 为 `fnos.zixizhao.top` 签发内部 CA 证书。高端口 TLS 直接由 Caddy 提供，不依赖公网 80/443，也不需要 ACME；但每台客户端必须先信任 Caddy 的 public root CA，浏览器才会认可 HTTPS。internal CA 已在隔离的 Compose 验证中通过 public root 导出和严格证书链 TLS smoke check；这不是完整应用流程或公网部署验收。用户尚未在 external 与 internal TLS 之间作正式选择，公网 NAT 也仍未验证。
+
+必须显式选择 `--tls-mode internal`；`--tls-mode` 默认值是 external，shared external 必须提供证书和私钥路径，缺失配置会报错，不会回退到 internal。internal 模式不能同时传入 external 证书和私钥参数。CLI 形式如下：
+
+```sh
+bun run remote-workspace -- init \
+  --hostname-mode shared \
+  --tls-mode internal \
+  --public-hostname fnos.zixizhao.top \
+  --account elim:2222:8444 --pubkey elim=/root/.kanna/remote-workspace-client-keys/elim/id_ed25519.pub \
+  --account zzx:2223:8445 --pubkey zzx=/root/.kanna/remote-workspace-client-keys/zzx/id_ed25519.pub \
+  --output .remote-workspace
+bun run remote-workspace -- generate
+bun run remote-workspace -- doctor
+bun run remote-workspace -- up
+```
+
+Caddy internal CA 的根私钥只能留在 Caddy 的持久数据 volume 中，不能导出、复制给客户端或放进仓库。备份与恢复必须保留该 Caddy 持久数据，否则重建后 CA 身份可能改变，客户端会拒绝新证书。启动后只导出 public `root.crt`，并计算 SHA-256 指纹；`--output-file` 指定的目标必须尚不存在：
+
+```sh
+bun run scripts/remote-workspace.ts export-ca \
+  --output .remote-workspace \
+  --output-file /tmp/fnos-zixizhao-root.crt
+sha256sum /tmp/fnos-zixizhao-root.crt
+```
+
+该文件是公开 CA 证书，不含根私钥。实现验收已核对导出文件是 CA 证书、文件模式为 `0644`，并确认 Caddy 重启前后的 SHA-256 指纹一致。管理员应通过独立可信渠道把文件提供给客户端，并用可信渠道提供 SHA-256 指纹；用户须在导入前自行核对指纹。
+
+信任范围取决于客户端的证书库。Linux Chromium 默认使用该操作系统用户的 NSS 数据库；仅创建另一个 Chrome profile 不一定会隔离 CA 信任，安装到用户库也可能影响该用户的其它应用。若要收窄信任范围，优先使用独立系统用户或专用浏览器容器，或将 CA 安装到 Firefox 专用 profile 的证书库。参阅 [Chromium Linux 证书管理说明](https://chromium.googlesource.com/chromium/src/+/main/docs/linux/cert_management.md)。不要修改宿主机或 fnOS 全局 CA。停用此入口时，从实际安装 CA 的证书库移除它；如果同时要隔离同 hostname 的 Cookie，再使用独立浏览器 profile，并清理该 origin 的站点数据与 Service Worker。Cookie profile 隔离与 CA 信任隔离是两项不同设置。
+
+### 同一 hostname 的认证边界
+
+同一 hostname 的不同端口属于不同 browser origin，但 Cookie 按 hostname 作用域，不按端口隔离。因此 shared 模式的网页登录凭据使用每个完整 origin 独立的 `sessionStorage` bearer token，并通过 `Authorization` 发送；不会将认证 Cookie 转发给账号上游。WebSocket 使用一次性短票据通过 subprotocol 完成认证；origin-scoped Service Worker 为原生媒体请求取得 token，同时保留流式传输和 Range 请求。可信 Caddy 在转发时剥离客户端 `Cookie` 和上游 `Set-Cookie`。
+
+端口隔离仍不能隔离同一 hostname 下的 Cookie：来自某个端口的脚本可能读取该 hostname 上非 `HttpOnly` 的旧 fnOS Cookie。不要把 shared 工作区视为对 fnOS 现有非 `HttpOnly` Cookie 的安全隔离边界，也不要在工作区页面内加载不可信脚本。将来若复用曾部署在该 hostname 的端口，应先清理对应 origin 的站点数据，并注销/移除该 origin 注册的 Service Worker，再重新使用该端口。原有子域模式继续使用原有 Cookie 登录方式。
+
+公网入口和 NAT 转发目前尚未验收。部署后应从外网分别验证两个 HTTPS URL 的证书主机名与信任链、账号登录隔离、WebSocket、音频/媒体流和 Range 请求，并确认 SSH 端口只到达对应 sidecar；同时确认 fnOS 的 80、443、8443 服务仍正常。完成这些检查前，不要把公网访问描述为已验证。
+
+若高端口入口或证书检查失败，可先停止这套 Compose 部署并撤销路由器/防火墙新增的四条转发规则；Docker Compose `down` 不要附加 `-v`，以保留账号 HOME、Codex 登录态和 workspace。修复后从原 `.remote-workspace/` 状态目录重新 `generate`、`doctor`、`up`。回滚期间确认 fnOS 自己的服务仍正常；不要为了排障重启 fnOS 或覆盖其端口配置。SSH 私钥始终由账号用户在自己的电脑上生成或从其既有密钥管理器取得，管理员只接收对应 `.pub` 公钥；如果私钥遗失，应按用户密钥管理流程在客户端轮换并重新授权公钥，不得从仓库或部署目录恢复私钥。
 
 ### Linux amd64 安装 Mutagen
 
@@ -48,12 +121,14 @@ mutagen version
 bun install --frozen-lockfile
 ```
 
-每个账号必须先从客户端提供自己的 OpenSSH 公钥文件。可以在客户端生成新密钥，也可以使用已有公钥；不要把私钥上传到部署主机。示例：
+每个账号必须先从客户端提供自己的 OpenSSH 公钥文件。可以在客户端生成新密钥，也可以使用已有公钥；不要把私钥上传到部署主机。子域模式的通用示例：
 
 ```sh
 ssh-keygen -t ed25519 -f ~/.ssh/kanna-alice -C alice
 ssh-keygen -t ed25519 -f ~/.ssh/kanna-bob -C bob
 ```
+
+当前 fnOS shared 部署使用已获授权生成的 Ed25519 密钥，密钥文件保存在仓库之外的 `/root/.kanna/remote-workspace-client-keys/<account>/id_ed25519` 与 `id_ed25519.pub`。初始化只使用 `.pub` 公钥路径。私钥须由对应账号用户通过安全渠道取到自己的客户端，存放于客户端密钥管理位置并限制访问；不得提交 Git、放进部署 bundle、粘贴到命令参数或发给其他账号。若换新密钥，应由账号用户在客户端生成，再向管理员交付 `.pub` 文件。
 
 公钥应为 `.pub` 文件中的单行裸 OpenSSH key，不可带 `command=` 等 authorized_keys 前缀。为每个账号分配不同 SSH 端口，并确保公网防火墙放行这些端口。运行 `init` 会创建随机 app 密码并写入权限受限的状态目录，不会把密码打印到终端；它不会生成或保存客户端私钥。
 
@@ -144,7 +219,7 @@ bash .remote-workspace/sync.sh terminate alice-project
 
 ## 备份、恢复和升级
 
-停写后备份 `.remote-workspace/manifest.json`、`.env`、`secrets/`、`state/`，以及 `compose.yaml`、`Caddyfile`。这些数据包含 app 密码、SSH host 私钥、Codex 登录态和工作区文件，备份必须加密并限制访问。不要只备份容器镜像，也不要把备份放进 Git。要恢复时，在维护窗口将备份解密到原部署目录，校验目录 owner/mode 和文件完整性，然后运行 `doctor`、`generate` 并启动 Compose；保留原 SSH host key 可避免客户端看到身份变化。
+停写后备份 `.remote-workspace/manifest.json`、`.env`、`secrets/`、`state/`，以及 `compose.yaml`、`Caddyfile` 和 Caddy 持久数据 volume。数据包含 app 密码、SSH host 私钥、Codex 登录态、工作区文件和 Caddy 状态；若使用 internal CA，volume 还包含不可导出的 CA 私钥，备份必须加密并限制管理员访问。不要把备份放进 Git，也不要单独复制或导出 CA 私钥。要恢复时，在维护窗口恢复原部署目录及 Caddy volume，校验权限和文件完整性，然后运行 `doctor`、`generate` 并启动 Compose；保留原 SSH host key 与 Caddy CA 数据可避免客户端看到身份变化。
 
 升级前备份并检查变更，确认镜像 tag 和生成文件后再 `up`：
 

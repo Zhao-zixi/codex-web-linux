@@ -6,6 +6,7 @@ import {
   withVisualizationHeight,
   type VisualizationHeights,
 } from "../../shared/visualization"
+import { kannaFetch } from "../app/auth-client"
 
 /**
  * The heights this browser has measured visualizations at, so a frame is
@@ -48,7 +49,7 @@ export async function fetchVisualizationHeights(url: string, signal?: AbortSigna
   const endpoint = visualizationHeightsUrl(url)
   if (!endpoint) return []
   try {
-    const response = await fetch(endpoint, { signal })
+    const response = await kannaFetch(endpoint, { signal })
     return response.ok ? readVisualizationHeights((await response.json() as { heights?: unknown }).heights) : []
   } catch {
     return []
@@ -69,7 +70,7 @@ export function recordVisualizationHeight(url: string, known: VisualizationHeigh
   rememberVisualizationHeights(url, next)
   const endpoint = visualizationHeightsUrl(url)
   if (endpoint) {
-    void fetch(endpoint, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ width: bucket, height: after }) }).catch(() => {})
+  void kannaFetch(endpoint, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ width: bucket, height: after }) }).catch(() => {})
   }
   return next
 }

@@ -38,7 +38,12 @@ interface SubscriptionEntry<TSnapshot, TEvent = never> {
  * /api/cloud/ws-endpoint so each (re)connect picks up the current tunnel URL
  * and a fresh connect token.
  */
-export type WsUrlSource = string | (() => Promise<string>)
+export interface WsConnection {
+  url: string
+  protocols?: string | string[]
+}
+
+export type WsUrlSource = string | (() => Promise<string | WsConnection>)
 
 export class KannaSocket {
   private readonly urlSource: WsUrlSource
@@ -201,11 +206,12 @@ export class KannaSocket {
     // dispose) started meanwhile.
     const seq = ++this.connectSeq
     this.urlSource()
-      .then((url) => {
+      .then((connection) => {
         if (!this.started || seq !== this.connectSeq) {
           return
         }
-        this.openSocket(url)
+        if (typeof connection === "string") this.openSocket(connection)
+        else this.openSocket(connection.url, connection.protocols)
       })
       .catch(() => {
         if (!this.started || seq !== this.connectSeq) {
@@ -216,8 +222,8 @@ export class KannaSocket {
       })
   }
 
-  private openSocket(url: string) {
-    this.ws = new WebSocket(url)
+  private openSocket(url: string, protocols?: string | string[]) {
+    this.ws = new WebSocket(url, protocols)
 
     this.ws.addEventListener("open", () => {
       this.reconnectDelayMs = 750

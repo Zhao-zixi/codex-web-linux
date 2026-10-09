@@ -1,0 +1,11 @@
+FROM mcr.microsoft.com/playwright:v1.64.0-noble
+
+RUN apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libnss3-tools \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install --global --no-audit --no-fund playwright@1.64.0 \
+    && node -e 'if (require("/usr/lib/node_modules/playwright/package.json").version !== "1.64.0") process.exit(1)' \
+    && command -v certutil \
+    && test -x /ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux64/chrome-headless-shell
+
+WORKDIR /test

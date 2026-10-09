@@ -37,6 +37,40 @@ describe("hosted workspace configuration", () => {
     })
   })
 
+  test("accepts only a complete HTTPS bearer origin and returns its metadata", () => {
+    const config = parseHostedWorkspaceConfig({
+      displayName: "elim",
+      sshHost: "fnos.zixizhao.top",
+      sshPort: 2222,
+      sshUser: "workspace",
+      workspaceRoot: "/workspace",
+      authMode: "bearer",
+      webHost: "fnos.zixizhao.top",
+      webPort: 8444,
+      webOrigin: "https://fnos.zixizhao.top:8444",
+      publicHostKey: testPublicHostKey,
+    })
+    expect(config).toMatchObject({
+      authMode: "bearer",
+      webHost: "fnos.zixizhao.top",
+      webPort: 8444,
+      webOrigin: "https://fnos.zixizhao.top:8444",
+    })
+    const { authMode: _authMode, webHost: _webHost, webPort: _webPort, webOrigin: _webOrigin, ...legacy } = config
+    expect(legacy).toMatchObject({ displayName: "elim", sshHost: "fnos.zixizhao.top", sshPort: 2222 })
+    expect(() => parseHostedWorkspaceConfig({
+      displayName: "elim",
+      sshHost: "fnos.zixizhao.top",
+      sshPort: 2222,
+      sshUser: "workspace",
+      workspaceRoot: "/workspace",
+      authMode: "bearer",
+      webHost: "fnos.zixizhao.top",
+      webPort: 8444,
+      webOrigin: "https://fnos.zixizhao.top:8445",
+    })).toThrow("Invalid hosted workspace webOrigin")
+  })
+
   test("rejects invalid host, port, user, and paths outside /workspace", () => {
     const base = { displayName: "workspace", sshHost: "sync.example.test", sshPort: 22, sshUser: "kanna", workspaceRoot: "/workspace" }
     expect(parseHostedWorkspaceConfig({ ...base, sshUser: "runner" }).sshUser).toBe("runner")

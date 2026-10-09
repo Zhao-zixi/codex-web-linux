@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
+import { kannaFetch } from "../auth-client"
 import { Check, Copy } from "lucide-react"
 import { Button } from "../../components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card"
@@ -65,7 +66,7 @@ export function RemoteWorkspaceSection() {
 
   useEffect(() => {
     let cancelled = false
-    void fetch("/api/hosted-workspace", { credentials: "same-origin", cache: "no-store" })
+    void kannaFetch("/api/hosted-workspace", { cache: "no-store" })
       .then(async (response) => {
         if (!response.ok) throw new Error("Unable to read hosted workspace settings")
         return response.json() as Promise<HostedWorkspace | { enabled: false }>

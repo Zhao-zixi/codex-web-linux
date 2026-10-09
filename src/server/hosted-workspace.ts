@@ -8,6 +8,10 @@ export interface HostedWorkspaceConfig {
   sshUser: string
   workspaceRoot: string
   publicHostKey?: string
+  authMode?: "bearer"
+  webHost?: string
+  webPort?: number
+  webOrigin?: string
 }
 
 export type HostedWorkspaceSnapshot = HostedWorkspaceConfig | { enabled: false }
@@ -31,7 +35,7 @@ function isValidSshHost(value: unknown): value is string {
 
 export function parseHostedWorkspaceConfig(value: unknown): HostedWorkspaceConfig {
   if (!isRecord(value)) throw new Error("Hosted workspace config must be an object")
-  const { displayName, sshHost, sshPort, sshUser, workspaceRoot, publicHostKey } = value
+  const { displayName, sshHost, sshPort, sshUser, workspaceRoot, publicHostKey, authMode, webHost, webPort, webOrigin } = value
   if (!validText(displayName, 80)) throw new Error("Invalid hosted workspace displayName")
   if (!isValidSshHost(sshHost)) throw new Error("Invalid hosted workspace sshHost")
   if (!Number.isInteger(sshPort) || (sshPort as number) < 1 || (sshPort as number) > 65535) throw new Error("Invalid hosted workspace sshPort")
@@ -40,7 +44,32 @@ export function parseHostedWorkspaceConfig(value: unknown): HostedWorkspaceConfi
   if (publicHostKey !== undefined && !isSshPublicHostKey(publicHostKey)) {
     throw new Error("Invalid hosted workspace publicHostKey")
   }
-  return { displayName, sshHost, sshPort: sshPort as number, sshUser, workspaceRoot, ...(publicHostKey ? { publicHostKey } : {}) }
+  if (authMode !== undefined && authMode !== "bearer") throw new Error("Invalid hosted workspace authMode")
+  if (authMode === "bearer") {
+    if (!isValidSshHost(webHost)) throw new Error("Invalid hosted workspace webHost")
+    if (!Number.isInteger(webPort) || (webPort as number) < 1024 || (webPort as number) > 65535) throw new Error("Invalid hosted workspace webPort")
+    if (!validText(webOrigin, 320)) throw new Error("Invalid hosted workspace webOrigin")
+    let parsedOrigin: URL
+    try {
+      parsedOrigin = new URL(webOrigin)
+    } catch {
+      throw new Error("Invalid hosted workspace webOrigin")
+    }
+    if (parsedOrigin.protocol !== "https:" || parsedOrigin.origin !== webOrigin || parsedOrigin.hostname !== webHost || parsedOrigin.port !== String(webPort)) {
+      throw new Error("Invalid hosted workspace webOrigin")
+    }
+  } else if (webHost !== undefined || webPort !== undefined || webOrigin !== undefined) {
+    throw new Error("Hosted workspace web origin requires bearer authentication")
+  }
+  return {
+    displayName,
+    sshHost,
+    sshPort: sshPort as number,
+    sshUser,
+    workspaceRoot,
+    ...(publicHostKey ? { publicHostKey } : {}),
+    ...(authMode === "bearer" ? { authMode, webHost: webHost as string, webPort: webPort as number, webOrigin: webOrigin as string } : {}),
+  }
 }
 
 function isSshPublicHostKey(value: unknown): value is string {

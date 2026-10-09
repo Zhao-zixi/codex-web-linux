@@ -60,6 +60,9 @@ const BACKGROUND_CHAT_PUSH_INTERVAL_MS = 2_000
 export interface ClientState {
   subscriptions: Map<string, SubscriptionTopic>
   snapshotSignatures: Map<string, string>
+  /** Opaque bearer session identity; never a bearer token or one-use ticket. */
+  authSessionId?: string
+  authOrigin?: string
   /**
    * Absolute transcript span last sent per chat subscription, so the next push
    * can carry only the entries past it. Reset whenever the subscription is
@@ -139,6 +142,7 @@ interface CreateWsRouterArgs {
   > | null
   /** Overrides `BACKGROUND_CHAT_PUSH_INTERVAL_MS`; tests shorten it. */
   backgroundChatPushIntervalMs?: number
+  authSessionActive?: (sessionId: string, origin: string) => boolean
   /**
    * The chat actions, shared with the orchestrator so an agent's tools run
    * the same code as these commands. Built here when not handed in.
@@ -190,7 +194,18 @@ interface SnapshotComputationCache {
  */
 const COMPRESS_FRAME_MIN_BYTES = 1024
 
+const socketAuthChecks = new WeakMap<ServerWebSocket<ClientState>, () => boolean>()
+
+function socketIsAuthorized(ws: ServerWebSocket<ClientState>) {
+  const check = socketAuthChecks.get(ws)
+  if (!check || check()) return true
+  socketAuthChecks.delete(ws)
+  ws.close(1008, "Authentication expired")
+  return false
+}
+
 function sendFrame(ws: ServerWebSocket<ClientState>, payload: string) {
+  if (!socketIsAuthorized(ws)) return
   ws.send(payload, payload.length >= COMPRESS_FRAME_MIN_BYTES)
 }
 
@@ -253,6 +268,7 @@ export function createWsRouter({
   usageLimits,
   providerAuth,
   backgroundChatPushIntervalMs = BACKGROUND_CHAT_PUSH_INTERVAL_MS,
+  authSessionActive,
   chatCommands: providedChatCommands,
 }: CreateWsRouterArgs) {
   const sockets = new Set<ServerWebSocket<ClientState>>()
@@ -2029,9 +2045,14 @@ export function createWsRouter({
       return { sockets: sockets.size, subscriptions, subscriptionProviderEntries: providerEntries, chatWindows: windows }
     },
     handleOpen(ws: ServerWebSocket<ClientState>) {
+      if (ws.data.authSessionId && ws.data.authOrigin && authSessionActive) {
+        socketAuthChecks.set(ws, () => authSessionActive(ws.data.authSessionId!, ws.data.authOrigin!))
+        if (!socketIsAuthorized(ws)) return
+      }
       sockets.add(ws)
     },
     handleClose(ws: ServerWebSocket<ClientState>) {
+      socketAuthChecks.delete(ws)
       sockets.delete(ws)
       ws.data.subscriptions.clear()
       ws.data.snapshotSignatures?.clear()
@@ -2043,6 +2064,11 @@ export function createWsRouter({
       ws.data.chatWindowChecks?.clear()
       ws.data.sidebarPatchBases?.clear()
       for (const id of [...(ws.data.chatBackgroundPushes?.keys() ?? [])]) clearBackgroundChatPush(ws, id)
+    },
+    closeAuthSession(sessionId: string) {
+      for (const ws of sockets) {
+        if (ws.data.authSessionId === sessionId) ws.close(1008, "Signed out")
+      }
     },
     broadcastSnapshots,
     broadcastChatStateImmediately,
@@ -2059,6 +2085,7 @@ export function createWsRouter({
     autoArchiveStaleChats: () => maybeAutoArchiveStaleChats(),
     deleteStaleChats: () => maybeDeleteStaleChats(),
     async handleMessage(ws: ServerWebSocket<ClientState>, raw: string | Buffer | ArrayBuffer | Uint8Array) {
+      if (!socketIsAuthorized(ws)) return
       let parsed: unknown
       try {
         parsed = JSON.parse(String(raw))

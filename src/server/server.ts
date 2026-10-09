@@ -160,8 +160,17 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   // Runs alongside the store setup below (~0.5 s for a zsh with nvm) and is
   // awaited before anything can start an agent.
   const shellPathReady = inheritShellPath()
-  const auth = options.password ? createAuthManager(options.password, { trustProxy: options.trustProxy ?? false }) : null
   const hostedWorkspace = options.hostedWorkspace ?? await readHostedWorkspaceConfig(process.env.KANNA_HOSTED_WORKSPACE_CONFIG)
+  const hostedBearerAuth = !("enabled" in hostedWorkspace) && hostedWorkspace.authMode === "bearer"
+  const hostedWebOrigin = !("enabled" in hostedWorkspace) ? hostedWorkspace.webOrigin : undefined
+  if (hostedBearerAuth && !hostedWebOrigin) throw new Error("Bearer hosted workspace mode requires a configured web origin")
+  const auth = options.password
+    ? createAuthManager(options.password, {
+      trustProxy: options.trustProxy ?? false,
+      mode: hostedBearerAuth ? "bearer" : "cookie",
+      ...(hostedBearerAuth && hostedWebOrigin ? { expectedOrigin: hostedWebOrigin } : {}),
+    })
+    : null
   if (!("enabled" in hostedWorkspace) && !auth) {
     throw new Error("Hosted workspace mode requires password authentication")
   }
@@ -371,6 +380,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     machineDisplayName,
     updateManager,
     providerAuth,
+    ...(auth?.mode === "bearer" ? { authSessionActive: auth.isSessionActive } : {}),
   })
   // Overlay the account's live Cursor and Codex model lists on the static
   // catalog (no-op when the CLI is missing or logged out); broadcasts on change.
@@ -543,11 +553,13 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
             return withOriginAgentCluster(Response.json({ error: "Not found" }, { status: 404 }))
           }
 
-          const upgradeWebSocket = () => {
+          const upgradeWebSocket = (protocol?: string, authSessionId?: string, authOrigin?: string) => {
             const upgraded = serverInstance.upgrade(req, {
+              ...(protocol ? { headers: { "Sec-WebSocket-Protocol": protocol } } : {}),
               data: {
                 subscriptions: new Map(),
                 snapshotSignatures: new Map(),
+                ...(authSessionId && authOrigin ? { authSessionId, authOrigin } : {}),
               },
             })
             return upgraded ? undefined : new Response("WebSocket upgrade failed", { status: 400 })
@@ -588,9 +600,21 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
               return withOriginAgentCluster(new Response(null, { status: 405, headers: { Allow: "POST" } }))
             }
 
-            return withOriginAgentCluster(auth
+            const sessionId = auth?.mode === "bearer" ? auth.getSessionId(req) : null
+            const response = auth
               ? auth.handleLogout(req)
-              : Response.json({ ok: true }))
+              : Response.json({ ok: true })
+            if (sessionId && response.ok) router.closeAuthSession(sessionId)
+            return withOriginAgentCluster(response)
+          }
+
+          if (url.pathname === "/auth/ws-ticket") {
+            if (req.method !== "POST") {
+              return withOriginAgentCluster(new Response(null, { status: 405, headers: { Allow: "POST" } }))
+            }
+            return withOriginAgentCluster(auth
+              ? auth.handleWebSocketTicket(req)
+              : Response.json({ error: "Unauthorized" }, { status: 401 }))
           }
 
           // Proxied requests skip password auth: the kanna.sh proxy already
@@ -607,6 +631,13 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
             }
 
             if (url.pathname === "/ws") {
+              if (auth.mode === "bearer") {
+                const sessionId = auth.consumeWebSocketTicket(req)
+                if (!sessionId) {
+                  return withOriginAgentCluster(new Response("Unauthorized", { status: 401 }))
+                }
+                return withOriginAgentCluster(upgradeWebSocket("kanna.ws.v1", sessionId, hostedWebOrigin))
+              }
               // A valid cloud connect token is an alternative WS credential
               // (minted through the proxied /api/cloud/ws-endpoint call).
               if (!allowCloudWsUpgrade()) {

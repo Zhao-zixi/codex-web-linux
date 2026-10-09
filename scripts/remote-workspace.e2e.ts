@@ -82,6 +82,10 @@ function sshAlias(host: string, port: number) {
   return `kanna-${slug}-${fnv1a64(host)}-${port}`
 }
 
+function localPortProxyCommand(port: number) {
+  return `node -e ${shellQuote(`const net=require("node:net");const socket=net.connect(${port},"127.0.0.1");process.stdin.pipe(socket);socket.pipe(process.stdout);socket.on("error",()=>process.exit(1))`)}`
+}
+
 async function unusedPort() {
   const server = net.createServer()
   await new Promise<void>((resolve, reject) => {
@@ -654,10 +658,19 @@ run("docker", ["info"], { timeout: 15_000 })
 const root = await mkdtemp(path.join(os.tmpdir(), "kanna-remote-workspace-e2e-"))
 const outputDir = path.join(root, "deployment")
 const clientKeys = { alice: path.join(root, "alice-client-ed25519"), bob: path.join(root, "bob-client-ed25519") }
+const sharedMode = process.env.REMOTE_WORKSPACE_E2E_SHARED === "1" || process.argv.includes("--shared")
+const sharedHostname = "fnos.zixizhao.top"
 const alicePort = await unusedPort()
 const bobPort = await unusedPort()
 const httpPort = await unusedPort()
 const httpsPort = await unusedPort()
+const aliceWebPort = sharedMode ? await unusedPort() : httpsPort
+const bobWebPort = sharedMode ? await unusedPort() : httpsPort
+const aliceWebHost = sharedMode ? sharedHostname : "alice.localhost"
+const bobWebHost = sharedMode ? sharedHostname : "bob.localhost"
+const aliceOrigin = `https://${aliceWebHost}:${aliceWebPort}`
+let projectPath = "/workspace/kanna-e2e-project"
+let projectId = ""
 const projectName = "project with spaces 中文"
 const aliceLocal = path.join(root, "alice-local", projectName)
 const bobLocal = path.join(root, "bob-local", "bob-project")
@@ -670,8 +683,8 @@ const mutagenSshPath = path.join(root, "mutagen-ssh")
 const mutagenConfig = path.join(root, "mutagen-ssh-config")
 const env: NodeJS.ProcessEnv = {
   ...process.env,
-  NO_PROXY: [process.env.NO_PROXY, "localhost", "127.0.0.1", "::1", "alice.localhost", "bob.localhost"].filter(Boolean).join(","),
-  no_proxy: [process.env.no_proxy, "localhost", "127.0.0.1", "::1", "alice.localhost", "bob.localhost"].filter(Boolean).join(","),
+  NO_PROXY: [process.env.NO_PROXY, "localhost", "127.0.0.1", "::1", "alice.localhost", "bob.localhost", sharedHostname].filter(Boolean).join(","),
+  no_proxy: [process.env.no_proxy, "localhost", "127.0.0.1", "::1", "alice.localhost", "bob.localhost", sharedHostname].filter(Boolean).join(","),
   MUTAGEN_DATA_DIRECTORY: path.join(root, "mutagen-data"),
   MUTAGEN_SSH_PATH: mutagenSshPath,
 }
@@ -738,20 +751,22 @@ async function waitForContainerProcessGone(account: "alice" | "bob", processInfo
   throw new Error(`${label} PID ${processInfo.pid} remained after cleanup: state=${current.state} ppid=${current.parentPid} pgid=${current.processGroup} sid=${current.sessionId} starttime=${current.startTime} command=${command}`)
 }
 
-function ssh(account: "alice" | "bob", port: number, command: string) {
+function ssh(account: "alice" | "bob", port: number, command: string, identityFile = clientKeys[account]) {
   const hostKeyFile = path.join(outputDir, "config", `${account}.known_hosts`)
-  return run("ssh", [
+  const args = [
     "-F", "/dev/null",
-    "-i", clientKeys[account],
+    "-i", identityFile,
     "-o", "IdentitiesOnly=yes",
     "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=3",
     "-o", "StrictHostKeyChecking=yes",
     "-o", `UserKnownHostsFile=${hostKeyFile}`,
     "-p", String(port),
-    `workspace@127.0.0.1`,
+    ...(sharedMode ? ["-o", `ProxyCommand=${localPortProxyCommand(port)}`] : []),
+    sharedMode ? `workspace@${sharedHostname}` : "workspace@127.0.0.1",
     command,
-  ], { env, timeout: 10_000 })
+  ]
+  return run("ssh", args, { env, timeout: 10_000 })
 }
 
 try {
@@ -767,48 +782,64 @@ try {
 
   await initializeRemoteWorkspace({
     outputDir,
-    domain: "localhost",
-    local: true,
-    accounts: [{ name: "alice", sshPort: alicePort }, { name: "bob", sshPort: bobPort }],
+    domain: sharedMode ? sharedHostname : "localhost",
+    ...(!sharedMode ? { local: true } : {
+      hostnameMode: "shared" as const,
+      publicHostname: sharedHostname,
+      tls: { mode: "internal" as const },
+    }),
+    accounts: [
+      { name: "alice", sshPort: alicePort, ...(sharedMode ? { webPort: aliceWebPort } : {}) },
+      { name: "bob", sshPort: bobPort, ...(sharedMode ? { webPort: bobWebPort } : {}) },
+    ],
     runtimeUid: uid,
     runtimeGid: gid,
     publicKeys: { alice: `${clientKeys.alice}.pub`, bob: `${clientKeys.bob}.pub` },
   })
-  const manifest = JSON.parse(await readFile(path.join(outputDir, "manifest.json"), "utf8")) as { domain?: string; local?: boolean; runtimeUid?: number }
-  diagnosticFacts.push(`Manifest local=${manifest.local} domain=${manifest.domain} Alice origin=https://alice.${manifest.domain}:${httpsPort}`)
+  const manifest = JSON.parse(await readFile(path.join(outputDir, "manifest.json"), "utf8")) as { domain?: string; local?: boolean; hostnameMode?: string; runtimeUid?: number }
+  diagnosticFacts.push(`Manifest mode=${manifest.hostnameMode ?? (manifest.local ? "local" : "subdomain")} domain=${manifest.domain} Alice origin=${aliceOrigin}`)
   diagnosticFacts.push(`Selected local published ports: HTTP=${httpPort}, HTTPS=${httpsPort}; SSH Alice=${alicePort}, Bob=${bobPort}`)
   await generateRemoteWorkspaceFiles(outputDir)
   // Local mode defaults to 8080/8443, which may be occupied by another developer stack.
   const composePath = path.join(outputDir, "compose.yaml")
   const composeContents = await readFile(composePath, "utf8")
-  await writeFile(composePath, composeContents
-    .replace('127.0.0.1:8080:80', `127.0.0.1:${httpPort}:80`)
-    .replace('127.0.0.1:8443:443', `127.0.0.1:${httpsPort}:443`))
-  const dynamicCompose = await readFile(composePath, "utf8")
-  if (!dynamicCompose.includes(`127.0.0.1:${httpPort}:80`) || !dynamicCompose.includes(`127.0.0.1:${httpsPort}:443`)) {
-    throw new Error("Local Caddy port replacement did not preserve loopback-only bindings")
+  if (sharedMode) {
+    const loopbackCompose = composeContents
+      .replaceAll(`"${aliceWebPort}:${aliceWebPort}"`, `"127.0.0.1:${aliceWebPort}:${aliceWebPort}"`)
+      .replaceAll(`"${bobWebPort}:${bobWebPort}"`, `"127.0.0.1:${bobWebPort}:${bobWebPort}"`)
+      .replace(`"${alicePort}:2222"`, `"127.0.0.1:${alicePort}:2222"`)
+      .replace(`"${bobPort}:2222"`, `"127.0.0.1:${bobPort}:2222"`)
+    await writeFile(composePath, loopbackCompose)
+    for (const port of [alicePort, bobPort, aliceWebPort, bobWebPort]) {
+      if (!loopbackCompose.includes(`127.0.0.1:${port}:`)) throw new Error(`Shared test port ${port} is not loopback-only`)
+    }
+  } else {
+    await writeFile(composePath, composeContents
+      .replace('127.0.0.1:8080:80', `127.0.0.1:${httpPort}:80`)
+      .replace('127.0.0.1:8443:443', `127.0.0.1:${httpsPort}:443`))
+    const dynamicCompose = await readFile(composePath, "utf8")
+    if (!dynamicCompose.includes(`127.0.0.1:${httpPort}:80`) || !dynamicCompose.includes(`127.0.0.1:${httpsPort}:443`)) {
+      throw new Error("Local Caddy port replacement did not preserve loopback-only bindings")
+    }
   }
   await mkdir(mutagenSshPath, { mode: 0o700 })
-  const aliases = [sshAlias("127.0.0.1", alicePort), sshAlias("127.0.0.1", bobPort)]
-  await writeFile(mutagenConfig, [
-    `Host ${aliases[0]}`,
-    "  HostName 127.0.0.1",
-    `  Port ${alicePort}`,
-    "  User workspace",
-    `  IdentityFile ${clientKeys.alice}`,
-    `  UserKnownHostsFile ${path.join(outputDir, "config", "alice.known_hosts")}`,
-    "  StrictHostKeyChecking yes",
-    "  IdentitiesOnly yes",
-    `Host ${aliases[1]}`,
-    "  HostName 127.0.0.1",
-    `  Port ${bobPort}`,
-    "  User workspace",
-    `  IdentityFile ${clientKeys.bob}`,
-    `  UserKnownHostsFile ${path.join(outputDir, "config", "bob.known_hosts")}`,
-    "  StrictHostKeyChecking yes",
-    "  IdentitiesOnly yes",
-    "",
-  ].join("\n"))
+  const sshHost = sharedMode ? sharedHostname : "127.0.0.1"
+  const aliases = [sshAlias(sshHost, alicePort), sshAlias(sshHost, bobPort)]
+  const sshConfig = (account: "alice" | "bob", port: number, alias: string) => {
+    const proxyCommand = sharedMode ? `  ProxyCommand ${localPortProxyCommand(port)}` : null
+    return [
+      `Host ${alias}`,
+      `  HostName ${sshHost}`,
+      `  Port ${port}`,
+      "  User workspace",
+      `  IdentityFile ${clientKeys[account]}`,
+      `  UserKnownHostsFile ${path.join(outputDir, "config", `${account}.known_hosts`)}`,
+      "  StrictHostKeyChecking yes",
+      "  IdentitiesOnly yes",
+      ...(proxyCommand ? [proxyCommand] : []),
+    ]
+  }
+  await writeFile(mutagenConfig, [...sshConfig("alice", alicePort, aliases[0]!), ...sshConfig("bob", bobPort, aliases[1]!), ""].join("\n"))
   for (const tool of ["ssh", "scp"]) {
     const binary = spawnSync("which", [tool], { encoding: "utf8" }).stdout.trim()
     if (!binary) throw new Error(`Unable to find ${tool} for isolated Mutagen SSH setup`)
@@ -866,31 +897,54 @@ try {
     assertEqual(runtime.app.uid ?? "", String(uid), `${account} Bun process remains nonroot`)
   }
   diagnosticFacts.push(`Docker init reaper is PID 1; Kanna Bun child is UID ${uid} in both app containers`)
-  const actualHttpBinding = compose(["port", "caddy", "80"]).trim()
-  const actualHttpsBinding = compose(["port", "caddy", "443"]).trim()
-  diagnosticFacts.push(`Compose published bindings: HTTP=${actualHttpBinding}, HTTPS=${actualHttpsBinding}`)
-  assertEqual(actualHttpBinding, `127.0.0.1:${httpPort}`, "Caddy HTTP loopback port publication")
-  assertEqual(actualHttpsBinding, `127.0.0.1:${httpsPort}`, "Caddy HTTPS loopback port publication")
+  if (sharedMode) {
+    const actualAliceBinding = compose(["port", "caddy", String(aliceWebPort)]).trim()
+    const actualBobBinding = compose(["port", "caddy", String(bobWebPort)]).trim()
+    diagnosticFacts.push(`Shared Caddy HTTPS published bindings: Alice=${actualAliceBinding}, Bob=${actualBobBinding}; SSH clients use 127.0.0.1 through isolated per-account proxy commands`)
+    if (!actualAliceBinding.endsWith(`:${aliceWebPort}`) || !actualBobBinding.endsWith(`:${bobWebPort}`)) throw new Error("Shared Caddy HTTPS ports were not published as configured")
+  } else {
+    const actualHttpBinding = compose(["port", "caddy", "80"]).trim()
+    const actualHttpsBinding = compose(["port", "caddy", "443"]).trim()
+    diagnosticFacts.push(`Compose published bindings: HTTP=${actualHttpBinding}, HTTPS=${actualHttpsBinding}`)
+    assertEqual(actualHttpBinding, `127.0.0.1:${httpPort}`, "Caddy HTTP loopback port publication")
+    assertEqual(actualHttpsBinding, `127.0.0.1:${httpsPort}`, "Caddy HTTPS loopback port publication")
+  }
 
   const deadline = Date.now() + 90_000
   let aliceReady = false
   let bobReady = false
+  let aliceSshFailure = "not attempted"
+  let bobSshFailure = "not attempted"
   while (Date.now() < deadline && (!aliceReady || !bobReady)) {
     if (!aliceReady) {
-      try { ssh("alice", alicePort, "id -u") ; aliceReady = true } catch {}
+      try { ssh("alice", alicePort, "id -u") ; aliceReady = true } catch (error) { aliceSshFailure = String(error instanceof Error ? error.message : error).slice(-500) }
     }
     if (!bobReady) {
-      try { ssh("bob", bobPort, "id -u") ; bobReady = true } catch {}
+      try { ssh("bob", bobPort, "id -u") ; bobReady = true } catch (error) { bobSshFailure = String(error instanceof Error ? error.message : error).slice(-500) }
     }
     if (!aliceReady || !bobReady) await Bun.sleep(1000)
   }
-  if (!aliceReady || !bobReady) throw new Error("SSH sidecars did not become ready before the deadline")
+  if (!aliceReady || !bobReady) throw new Error(`SSH sidecars did not become ready before the deadline (Alice: ${aliceSshFailure}; Bob: ${bobSshFailure})`)
   assertEqual(ssh("alice", alicePort, "id -u"), String(uid), "alice SSH runtime UID")
   assertEqual(ssh("bob", bobPort, "id -u"), String(uid), "bob SSH runtime UID")
   assertEqual(compose(["exec", "-T", "kanna_alice", "id", "-u"]), String(uid), "alice Kanna container UID")
   assertEqual(compose(["exec", "-T", "kanna_bob", "id", "-u"]), String(uid), "bob Kanna container UID")
+  if (sharedMode) {
+    for (const attempt of [
+      { client: "bob" as const, account: "alice" as const, port: alicePort },
+      { client: "alice" as const, account: "bob" as const, port: bobPort },
+    ]) {
+      const wrongKey = spawnSync("ssh", [
+        "-F", "/dev/null", "-i", clientKeys[attempt.client], "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
+        "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=yes",
+        "-o", `UserKnownHostsFile=${path.join(outputDir, "config", `${attempt.account}.known_hosts`)}`,
+        "-o", `ProxyCommand=${localPortProxyCommand(attempt.port)}`, "-p", String(attempt.port), `workspace@${sharedHostname}`, "id -u",
+      ], { env, encoding: "utf8", timeout: 10_000 })
+      if (wrongKey.error || wrongKey.status === 0) throw new Error(`${attempt.client} SSH identity was accepted by the ${attempt.account} account`)
+    }
+    diagnosticFacts.push("Shared SSH isolation: each account's client key was rejected by the other account; own-account keys reached their configured account")
+  }
   assertEqual(compose(["exec", "-T", "kanna_alice", "codex", "--version"]), "codex-cli 0.161.0", "pinned Codex CLI version")
-  const aliceOrigin = `https://alice.localhost:${httpsPort}`
   let localCa = ""
   const caDeadline = Date.now() + 30_000
   while (Date.now() < caDeadline && !localCa) {
@@ -901,14 +955,13 @@ try {
     if (!localCa) await Bun.sleep(500)
   }
   if (!localCa) throw new Error("Caddy local root CA did not become available")
-  diagnosticFacts.push(`HTTPS transport: real Node ${run("node", ["--version"]).trim()} helper; hostname=127.0.0.1 port=${httpsPort} servername=alice.localhost Host=alice.localhost:${httpsPort} path=/health rejectUnauthorized=true CA=Caddy-local-root`)
-  const alicePassword = (await readFile(path.join(outputDir, "secrets", "alice", "app-password"), "utf8")).trim()
+  diagnosticFacts.push(`HTTPS transport: real Node ${run("node", ["--version"]).trim()} helper; hostname=127.0.0.1 servername=${aliceWebHost} Host=${aliceWebHost}:${aliceWebPort} path=/health rejectUnauthorized=true CA=Caddy-local-root`)
   let healthReady = false
   let healthFailure = "no HTTP response was received"
   const healthDeadline = Date.now() + 30_000
   while (Date.now() < healthDeadline && !healthReady) {
     try {
-      const health = await hostedHttpsRequest({ host: "alice.localhost", port: httpsPort, ca: localCa, path: "/health", method: "GET" })
+      const health = await hostedHttpsRequest({ host: aliceWebHost, port: aliceWebPort, ca: localCa, path: "/health", method: "GET" })
       healthFailure = `HTTP ${health.status}: ${health.body.slice(0, 200)}`
       diagnosticFacts.push(`HTTPS /health readiness: ${healthFailure}`)
       if (health.status === 200) healthReady = true
@@ -924,10 +977,18 @@ try {
     const caPath = path.join(root, "caddy-local-root-ca.pem")
     await writeFile(caPath, localCa, { mode: 0o600 })
     await chmod(caPath, 0o600)
-    const comparison = diagnoseStrictHttpsHealth({ host: "alice.localhost", port: httpsPort, caPath })
+    const comparison = diagnoseStrictHttpsHealth({ host: aliceWebHost, port: aliceWebPort, caPath })
     diagnosticFacts.push(`HTTPS /health failure comparison: ${comparison}`)
     throw new Error(`Alice hosted HTTPS /health did not become ready (${healthFailure}); ${comparison}`)
   }
+  if (sharedMode) {
+    const bobHealth = await hostedHttpsRequest({ host: bobWebHost, port: bobWebPort, ca: localCa, path: "/health", method: "GET" })
+    assertEqual(String(bobHealth.status), "200", "Bob same-host distinct-port strict TLS health")
+    diagnosticFacts.push(`Strict TLS health succeeded for same shared hostname at Alice:${aliceWebPort} and Bob:${bobWebPort}; ports are local test publications, not public routing evidence`)
+  }
+  let alicePassword: string | undefined
+  if (!sharedMode) {
+  alicePassword = (await readFile(path.join(outputDir, "secrets", "alice", "app-password"), "utf8")).trim()
   const login = await loginOnHostedApp("alice.localhost", aliceOrigin, alicePassword, localCa, httpsPort)
   if (login.status !== 200) throw new Error(`Alice /auth/login rejected HTTP ${login.status}: ${login.body.slice(0, 200)}`)
   const setCookie = login.headers["set-cookie"]?.[0]
@@ -983,11 +1044,11 @@ try {
   assertEqual(String(await websocketUpgrade("alice.localhost", aliceOrigin, aliceCookie, localCa, httpsPort)), "101", "same-origin authenticated WebSocket upgrade")
   assertEqual(String(await websocketUpgrade("alice.localhost", `https://bob.localhost:${httpsPort}`, aliceCookie, localCa, httpsPort)), "403", "sibling-origin authenticated WebSocket rejection")
 
-  let projectPath = "/workspace/kanna-e2e-project"
+  projectPath = "/workspace/kanna-e2e-project"
   const workspaceSocket = await openAuthenticatedWebSocket("alice.localhost", aliceOrigin, aliceCookie, localCa, httpsPort)
   wsCommand(workspaceSocket.socket, "e2e-project-create", { type: "project.create", localPath: projectPath, title: "remote workspace E2E" })
   const projectCreated = await workspaceSocket.waitFor((message) => message.type === "ack" && message.id === "e2e-project-create", "project.create ack")
-  let projectId = (projectCreated.result as { projectId?: string } | undefined)?.projectId
+  projectId = (projectCreated.result as { projectId?: string } | undefined)?.projectId ?? ""
   if (!projectId) throw new Error("project.create acknowledgement did not include projectId")
   const bobRemotePtyPath = "/workspace/bob-project"
   ssh("bob", bobPort, `mkdir -p ${shellQuote(bobRemotePtyPath)}`)
@@ -1080,6 +1141,7 @@ try {
     composeArgs: ["compose", "-p", project, "-f", path.join(outputDir, "compose.yaml"), "exec", "-T", "-w", "/workspace", "kanna_alice", "codex", "app-server"],
   })
   diagnosticFacts.push(`Codex app-server initialize: ${appServer.summary}; stdoutJsonLines=${appServer.parsedLineCount}; stderr=${appServer.stderr || "empty"}`)
+  }
 
   const aliceRemote = `/workspace/${projectName}`
   const bobRemote = "/workspace/bob-project"
@@ -1180,12 +1242,14 @@ try {
   let postRestartHealth = false
   while (Date.now() < postRestartHealthDeadline && !postRestartHealth) {
     try {
-      const health = await hostedHttpsRequest({ host: "alice.localhost", port: httpsPort, ca: localCa, path: "/health", method: "GET" })
+      const health = await hostedHttpsRequest({ host: aliceWebHost, port: aliceWebPort, ca: localCa, path: "/health", method: "GET" })
       postRestartHealth = health.status === 200
     } catch {}
     if (!postRestartHealth) await Bun.sleep(500)
   }
   if (!postRestartHealth) throw new Error("Alice app did not become healthy after container restart")
+  if (!sharedMode) {
+  if (!alicePassword) throw new Error("Alice app password was not loaded for legacy auth verification")
   const restartedLogin = await loginOnHostedApp("alice.localhost", aliceOrigin, alicePassword, localCa, httpsPort)
   if (restartedLogin.status !== 200) throw new Error(`Alice /auth/login after restart returned HTTP ${restartedLogin.status}: ${restartedLogin.body.slice(0, 200)}`)
   const restartedCookie = restartedLogin.headers["set-cookie"]?.[0]?.split(";", 1)[0]
@@ -1206,6 +1270,7 @@ try {
     "kanna-e2e-pty-marker"
   )
   restartedSocket.socket.close()
+  }
 
   const backupPath = path.join(root, "deployment-backup.tar")
   const aliceHostKey = await readFile(path.join(outputDir, "state", "alice", "ssh-host-ed25519.pub"))

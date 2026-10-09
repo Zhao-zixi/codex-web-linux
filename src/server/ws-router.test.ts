@@ -51,6 +51,7 @@ function withSidebarGroupDefaults(group: {
 
 class FakeWebSocket {
   readonly sent: unknown[] = []
+  readonly closed: Array<{ code: number; reason: string }> = []
   readonly data = {
     subscriptions: new Map(),
     protectedDraftChatIds: new Set<string>(),
@@ -58,6 +59,10 @@ class FakeWebSocket {
 
   send(message: string) {
     this.sent.push(JSON.parse(message))
+  }
+
+  close(code?: number, reason?: string) {
+    this.closed.push({ code: code ?? 1000, reason: reason ?? "" })
   }
 }
 
@@ -414,6 +419,19 @@ function createTestRouter(overrides: Partial<CreateWsRouterArgs> = {}) {
 }
 
 describe("ws-router", () => {
+  test("closes bearer sockets before accepting a command after session expiry", async () => {
+    let active = true
+    const router = createTestRouter({ authSessionActive: () => active })
+    const ws = Object.assign(new FakeWebSocket(), {
+      data: { subscriptions: new Map(), protectedDraftChatIds: new Set<string>(), authSessionId: "opaque-session", authOrigin: "https://fnos.example.test:8444" },
+    })
+    router.handleOpen(ws as never)
+    active = false
+    await router.handleMessage(ws as never, JSON.stringify({ v: PROTOCOL_VERSION, type: "command", id: "expired", command: { type: "system.ping" } }))
+    expect(ws.closed).toEqual([{ code: 1008, reason: "Authentication expired" }])
+    expect(ws.sent).toHaveLength(0)
+  })
+
   test("renames a discovered project by path and updates all project lists", async () => {
     const projectPath = await mkdtemp(path.join(tmpdir(), "kanna-rename-project-"))
     try {

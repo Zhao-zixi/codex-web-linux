@@ -7,6 +7,7 @@ import {
 } from "lucide-react"
 import { useLocation, useNavigate, useOutletContext, useParams } from "react-router-dom"
 import { getKeybindingsFilePathDisplay, SDK_CLIENT_APP } from "../../shared/branding"
+import { kannaFetch } from "./auth-client"
 import { getResolvedKeybindings } from "../lib/keybindings"
 import { cn } from "../lib/utils"
 import { ChangelogSection, useChangelog } from "./settings/ChangelogSection"
@@ -118,7 +119,7 @@ export function SettingsPage() {
   useEffect(() => {
     let cancelled = false
 
-    void fetch("/auth/status", {
+    void kannaFetch("/auth/status", {
       method: "GET",
       cache: "no-store",
       headers: {

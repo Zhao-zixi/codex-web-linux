@@ -30,12 +30,14 @@ import { useKannaState } from "./useKannaState"
 import { useMigrateChannelPins } from "./useMigrateChannelPins"
 import { useSidebarStore } from "../stores/sidebarStore"
 import type { AppSettingsSnapshot } from "../../shared/types"
+import { ensureBearerServiceWorker, getClientAuthMode, kannaFetch, setClientAuthMode, storeBearerSession } from "./auth-client"
 
 const AUTH_STATUS_RETRY_DELAY_MS = 500
 
 interface AuthStatusResponse {
   enabled: boolean
   authenticated: boolean
+  authMode?: "cookie" | "bearer"
 }
 
 type AppAuthState =
@@ -139,6 +141,7 @@ function useAppAuthState() {
       response = await fetch("/auth/status", {
         method: "GET",
         cache: "no-store",
+        credentials: "omit",
         headers: {
           Accept: "application/json",
         },
@@ -158,6 +161,20 @@ function useAppAuthState() {
     }
 
     const payload = await response.json() as Partial<AuthStatusResponse>
+    if (payload.authMode) setClientAuthMode(payload.authMode)
+    if (payload.authMode === "bearer") {
+      try {
+        await ensureBearerServiceWorker()
+        const bearerStatus = await kannaFetch("/auth/status", { cache: "no-store", headers: { Accept: "application/json" } })
+        if (bearerStatus.ok) Object.assign(payload, await bearerStatus.json())
+      } catch {}
+    }
+    if (payload.authMode === "cookie" && !payload.authenticated) {
+      try {
+        const legacyStatus = await fetch("/auth/status", { cache: "no-store", credentials: "same-origin", headers: { Accept: "application/json" } })
+        if (legacyStatus.ok) Object.assign(payload, await legacyStatus.json())
+      } catch {}
+    }
     setState(getAppAuthStateFromStatus(payload))
   }, [])
 
@@ -173,6 +190,7 @@ function useAppAuthState() {
   const submitPassword = useCallback(async (password: string) => {
     const response = await fetch("/auth/login", {
       method: "POST",
+      credentials: getClientAuthMode() === "bearer" ? "omit" : "same-origin",
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
@@ -183,6 +201,12 @@ function useAppAuthState() {
     if (!response.ok) {
       setState({ status: "locked", error: "Incorrect password. Try again." })
       return
+    }
+
+    const payload = await response.json() as { token?: string; expiresAt?: number }
+    if (payload.token && payload.expiresAt) {
+      storeBearerSession(payload.token, payload.expiresAt)
+      await ensureBearerServiceWorker()
     }
 
     await refresh()

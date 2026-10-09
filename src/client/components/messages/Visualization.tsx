@@ -7,6 +7,7 @@ import { ViewerSurface } from "../viewer/ViewerSurface"
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip"
 import { type VisualizationArtifact, VISUALIZATION_EXPAND_BUTTON, visualizationHeight, visualizationLink, visualizationDownload, visualizationWidthBucket } from "../../../shared/visualization"
 import { prepareVisualizationDocument, type VisualizationTheme } from "../../../shared/visualization-host"
+import { kannaFetch } from "../../app/auth-client"
 
 /** Read actual host tokens, rather than deriving dark mode from the OS. This also
  * covers custom transcript backgrounds and theme changes while a widget is live. */
@@ -104,7 +105,7 @@ function VisualizationFrame({ artifact, onLoaded, onEscape }: {
     if (knownFor.current !== artifact.url) setKnown(rememberedVisualizationHeights(artifact.url))
     knownFor.current = artifact.url
     Object.assign(live.current, { loadedAt: 0, recordedBucket: 0 })
-    fetch(artifact.url, { signal: controller.signal }).then(async response => {
+    kannaFetch(artifact.url, { signal: controller.signal }).then(async response => {
       if (!response.ok) throw new Error("Visualization unavailable")
       const [html, { visualizationFontCss }] = await Promise.all([response.text(), import("./visualization-fonts")])
       if (!controller.signal.aborted) setDocument(prepareVisualizationDocument(html, visualizationTheme(), visualizationFontCss))

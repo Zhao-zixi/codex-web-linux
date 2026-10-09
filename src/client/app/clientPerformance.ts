@@ -1,4 +1,5 @@
 import { CLIENT_PERFORMANCE_METRICS, type ClientPerformanceMetric } from "../../shared/performance"
+import { kannaFetch } from "./auth-client"
 
 const metrics = new Map<ClientPerformanceMetric, { count: number; total: number; max: number }>()
 
@@ -40,7 +41,7 @@ export function startClientPerformance(sample: () => Partial<Record<ClientPerfor
     sending = true
     controller = new AbortController()
     const timeout = window.setTimeout(() => controller?.abort(), 5000)
-    void fetch("/api/diagnostics/client", {
+    void kannaFetch("/api/diagnostics/client", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ clientId, metrics: summary }), signal: controller.signal,
     }).catch(() => {}).finally(() => {

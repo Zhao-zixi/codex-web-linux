@@ -2,17 +2,29 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { createRequire } from "node:module"
 import { persistProjectUpload } from "./uploads"
 import { startKannaServer } from "./server"
 import { createAuthManager, shouldRejectHostedCrossOrigin } from "./auth"
+import type { HostedWorkspaceSnapshot } from "./hosted-workspace"
 
 const tempDirs: string[] = []
+const WebSocket = createRequire(import.meta.url)("ws") as new (
+  address: string,
+  protocols?: string | string[],
+  options?: { headers?: Record<string, string> }
+) => {
+  protocol: string
+  once(event: "open", listener: () => void): void
+  once(event: "error", listener: (error: Error) => void): void
+  once(event: "close", listener: (code: number) => void): void
+}
 
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
 })
 
-async function startPasswordServer(options: { trustProxy?: boolean; port?: number; hostedWorkspace?: { enabled: false } | { displayName: string; sshHost: string; sshPort: number; sshUser: string; workspaceRoot: string } } = {}) {
+async function startPasswordServer(options: { trustProxy?: boolean; port?: number; hostedWorkspace?: HostedWorkspaceSnapshot } = {}) {
   const projectDir = await mkdtemp(path.join(tmpdir(), "kanna-auth-test-"))
   const dataDir = await mkdtemp(path.join(tmpdir(), "kanna-auth-data-"))
   tempDirs.push(projectDir)
@@ -59,7 +71,7 @@ describe("password auth", () => {
   })
 
   test("serves the app shell to unauthenticated browser requests", async () => {
-    const { server } = await startPasswordServer({ port: 54321 })
+    const { server } = await startPasswordServer()
 
     try {
       const response = await fetch(`http://localhost:${server.port}/chat/demo`, { headers: { Accept: "text/html" } })
@@ -160,6 +172,169 @@ describe("password auth", () => {
     } finally {
       await server.stop()
     }
+  })
+
+  test("uses origin-bound bearer sessions without cookie fallback in shared-host mode", async () => {
+    const port = 54324
+    const { server } = await startPasswordServer({
+      port: 0,
+      trustProxy: true,
+      hostedWorkspace: {
+        displayName: "elim",
+        sshHost: "fnos.example.test",
+        sshPort: 2222,
+        sshUser: "workspace",
+        workspaceRoot: "/workspace",
+        authMode: "bearer",
+        webHost: "localhost",
+        webPort: port,
+        webOrigin: `https://localhost:${port}`,
+      },
+    })
+    const origin = `https://localhost:${port}`
+    const url = `http://localhost:${server.port}`
+    const hostedFetch = (pathname: string, init: RequestInit = {}) => {
+      const headers = new Headers(init.headers)
+      headers.set("Host", `localhost:${port}`)
+      return fetch(`${url}${pathname}`, { ...init, headers })
+    }
+
+    try {
+      const login = await hostedFetch("/auth/login", {
+        method: "POST",
+        headers: { Origin: origin, "X-Forwarded-Proto": "https", "Content-Type": "application/json" },
+        body: JSON.stringify({ password: "secret" }),
+      })
+      expect(login.status).toBe(200)
+      expect(login.headers.get("set-cookie")).toBeNull()
+      const loginPayload = await login.json() as { token: string; expiresAt: number }
+      expect(loginPayload.token).toMatch(/^[A-Za-z0-9_-]{32,128}$/)
+      expect(loginPayload.expiresAt).toBeGreaterThan(Date.now())
+
+      const cookieOnlyStatus = await hostedFetch("/auth/status", {
+        headers: { Origin: origin, "X-Forwarded-Proto": "https", Cookie: `kanna_session=${loginPayload.token}` },
+      })
+      expect(await cookieOnlyStatus.json()).toEqual({ enabled: true, authenticated: false, authMode: "bearer" })
+
+      const cookieOnlyApi = await hostedFetch("/api/hosted-workspace", {
+        headers: { Origin: origin, "X-Forwarded-Proto": "https", Cookie: `kanna_session=${loginPayload.token}` },
+      })
+      expect(cookieOnlyApi.status).toBe(401)
+
+      const bearerApi = await hostedFetch("/api/hosted-workspace", {
+        headers: { Origin: origin, "X-Forwarded-Proto": "https", Authorization: `Bearer ${loginPayload.token}` },
+      })
+      expect(bearerApi.status).toBe(200)
+      expect(await bearerApi.json()).toMatchObject({ authMode: "bearer", webOrigin: origin })
+      const bearerWithoutOrigin = await hostedFetch("/api/hosted-workspace", {
+        headers: { "X-Forwarded-Proto": "https", Authorization: `Bearer ${loginPayload.token}` },
+      })
+      expect(bearerWithoutOrigin.status).toBe(200)
+
+      const crossPort = await hostedFetch("/api/hosted-workspace", {
+        headers: { Origin: "https://localhost:54325", "X-Forwarded-Proto": "https", Authorization: `Bearer ${loginPayload.token}` },
+      })
+      expect(crossPort.status).toBe(401)
+
+      const ticketResponse = await hostedFetch("/auth/ws-ticket", {
+        method: "POST",
+        headers: { Origin: origin, "X-Forwarded-Proto": "https", Authorization: `Bearer ${loginPayload.token}` },
+      })
+      expect(ticketResponse.status).toBe(200)
+      const { ticket } = await ticketResponse.json() as { ticket: string }
+      const ws = new WebSocket(`ws://localhost:${server.port}/ws`, ["kanna.ws.v1", `kanna.ticket.${ticket}`], {
+        headers: { Host: `localhost:${port}`, Origin: origin, "X-Forwarded-Proto": "https" },
+      })
+      await new Promise<void>((resolve, reject) => {
+        ws.once("open", resolve)
+        ws.once("error", reject)
+      })
+      expect(ws.protocol).toBe("kanna.ws.v1")
+      expect(ws.protocol).not.toContain(ticket)
+      const closeCode = new Promise<number>((resolve) => ws.once("close", (code) => resolve(code)))
+
+      const logout = await hostedFetch("/auth/logout", {
+        method: "POST",
+        headers: { Origin: origin, "X-Forwarded-Proto": "https", Authorization: `Bearer ${loginPayload.token}` },
+      })
+      expect(logout.status).toBe(200)
+      expect(logout.headers.get("set-cookie")).toBeNull()
+      expect(await closeCode).toBe(1008)
+      const afterLogout = await hostedFetch("/api/hosted-workspace", {
+        headers: { Origin: origin, "X-Forwarded-Proto": "https", Authorization: `Bearer ${loginPayload.token}` },
+      })
+      expect(afterLogout.status).toBe(401)
+    } finally {
+      await server.stop()
+    }
+  })
+
+  test("consumes a bearer WebSocket ticket once and binds it to origin and session expiry", async () => {
+    const auth = createAuthManager("secret", { mode: "bearer", trustProxy: true, sessionTtlMs: 1000 })
+    const origin = "https://fnos.example.test:8444"
+    const request = (url: string, headers: Record<string, string>) => new Request(url, {
+      headers: { "X-Forwarded-Proto": "https", ...headers },
+    })
+    const loginRequest = new Request("http://fnos.example.test:8444/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ password: "secret" }),
+      headers: {
+        "X-Forwarded-Proto": "https",
+        Origin: origin,
+        "Content-Type": "application/json",
+      },
+    })
+    const login = await auth.handleLogin(loginRequest, "/")
+    const { token } = await login.json() as { token: string }
+    expect(login.headers.get("set-cookie")).toBeNull()
+
+    const ticketResponse = auth.handleWebSocketTicket(request("http://fnos.example.test:8444/auth/ws-ticket", {
+      Origin: origin,
+      Authorization: `Bearer ${token}`,
+    }))
+    expect(ticketResponse.status).toBe(200)
+    const { ticket } = await ticketResponse.json() as { ticket: string }
+    expect(ticketResponse.headers.get("cache-control")).toBe("no-store")
+    const upgrade = (hostPort: string) => request(`http://${hostPort}/ws`, {
+      Origin: `https://${hostPort}`,
+      "Sec-WebSocket-Protocol": `kanna.ws.v1, kanna.ticket.${ticket}`,
+    })
+    expect(auth.consumeWebSocketTicket(upgrade("fnos.example.test:8445"))).toBeNull()
+    expect(auth.consumeWebSocketTicket(upgrade("fnos.example.test:8444"))).toBeNull()
+
+    const secondResponse = auth.handleWebSocketTicket(request("http://fnos.example.test:8444/auth/ws-ticket", {
+      Origin: origin,
+      Authorization: `Bearer ${token}`,
+    }))
+    const secondTicket = (await secondResponse.json() as { ticket: string }).ticket
+    const secondUpgrade = request("http://fnos.example.test:8444/ws", {
+      Origin: origin,
+      "Sec-WebSocket-Protocol": `kanna.ws.v1, kanna.ticket.${secondTicket}`,
+    })
+    const sessionId = auth.consumeWebSocketTicket(secondUpgrade)
+    expect(sessionId).toBeTruthy()
+    expect(auth.isSessionActive(sessionId!, origin)).toBe(true)
+    expect(auth.consumeWebSocketTicket(secondUpgrade)).toBeNull()
+
+    const logout = auth.handleLogout(request("http://fnos.example.test:8444/auth/logout", {
+      Origin: origin,
+      Authorization: `Bearer ${token}`,
+    }))
+    expect(logout.headers.get("set-cookie")).toBeNull()
+    expect(auth.isSessionActive(sessionId!, origin)).toBe(false)
+
+    const expiredAuth = createAuthManager("secret", { mode: "bearer", trustProxy: true, sessionTtlMs: 1 })
+    const shortLogin = await expiredAuth.handleLogin(new Request("http://fnos.example.test:8444/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ password: "secret" }),
+      headers: { Origin: origin, "X-Forwarded-Proto": "https", "Content-Type": "application/json" },
+    }), "/")
+    const shortToken = (await shortLogin.json() as { token: string }).token
+    await Bun.sleep(3)
+    expect(expiredAuth.handleWebSocketTicket(request("http://fnos.example.test:8444/auth/ws-ticket", {
+      Origin: origin,
+      Authorization: `Bearer ${shortToken}`,
+    })).status).toBe(401)
   })
 
   test("rejects an invalid password", async () => {
@@ -284,7 +459,7 @@ describe("password auth", () => {
   })
 
   test("honors forwarded proto when trustProxy is on", async () => {
-    const { server } = await startPasswordServer({ port: 54322, trustProxy: true })
+    const { server } = await startPasswordServer({ trustProxy: true })
 
     try {
       const redirect = await fetch(`http://localhost:${server.port}/auth/login?next=%2F`, {
@@ -323,7 +498,7 @@ describe("password auth", () => {
   })
 
   test("ignores invalid forwarded proto values", async () => {
-    const { server } = await startPasswordServer({ port: 54323, trustProxy: true })
+    const { server } = await startPasswordServer({ trustProxy: true })
 
     try {
       const redirect = await fetch(`http://localhost:${server.port}/auth/login?next=%2F`, {

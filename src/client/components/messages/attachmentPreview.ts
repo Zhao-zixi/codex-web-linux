@@ -1,4 +1,5 @@
 import type { ChatAttachment } from "../../../shared/types"
+import { kannaFetch } from "../../app/auth-client"
 
 export const TEXT_PREVIEW_LIMIT_BYTES = 1024 * 1024
 export const JSON_PREVIEW_LIMIT_BYTES = 256 * 1024
@@ -120,7 +121,7 @@ export async function fetchTextPreview(url: string, limitBytes: number): Promise
     : null
 
   try {
-    const response = await fetch(resolvePreviewUrl(url), {
+    const response = await kannaFetch(resolvePreviewUrl(url), {
       signal: controller?.signal,
       headers: {
         Accept: "text/plain, text/markdown, application/json, text/csv, text/tab-separated-values, */*",

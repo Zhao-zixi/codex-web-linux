@@ -51,6 +51,8 @@
     "remote-workspace": "bun run ./scripts/remote-workspace.ts",
     "test:remote-workspace": "bun test ./scripts/remote-workspace-lib.test.ts",
     "test:remote-workspace:e2e": "bun run ./scripts/remote-workspace.e2e.ts",
+    "test:remote-workspace:shared-e2e": "bun run ./scripts/remote-workspace.e2e.ts --shared",
+    "test:remote-workspace:shared-browser": "bun run ./scripts/remote-workspace.shared-browser.e2e.ts",
     "prepublishOnly": "bun run build",
     "smoke:package": "bun run ./scripts/smoke-package.ts"
   },

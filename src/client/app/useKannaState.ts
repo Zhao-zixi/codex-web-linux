@@ -55,7 +55,8 @@ import {
 } from "./chatTranscriptCache"
 import { DEFAULT_TRANSCRIPT_WINDOW_ASSISTANT_MESSAGES, trimTranscriptWindow } from "../../shared/transcript-window"
 import { CLOUD_WS_ENDPOINT_PATH, type CloudWsEndpointResponse } from "../../shared/cloud-api"
-import { KannaSocket, type SocketStatus } from "./socket"
+import { KannaSocket, type SocketStatus, type WsConnection } from "./socket"
+import { clearBearerSession, isBearerAuthMode, kannaFetch, requestWebSocketTicket } from "./auth-client"
 import { SIDEBAR_COLLAPSED_STORAGE_KEY } from "../lib/storageKeys"
 import { useAppSettingsSync } from "./useAppSettingsSync"
 import { useBackgroundChatSubscriptions } from "./useBackgroundChatSubscriptions"
@@ -116,9 +117,13 @@ function sameOriginWsUrl() {
  * same-origin. Any failure falls back to same-origin, keeping local behavior
  * unchanged.
  */
-async function wsUrlProvider(): Promise<string> {
+async function wsUrlProvider(): Promise<string | WsConnection> {
+  if (isBearerAuthMode()) {
+    const ticket = await requestWebSocketTicket()
+    return { url: sameOriginWsUrl(), protocols: ["kanna.ws.v1", `kanna.ticket.${ticket}`] }
+  }
   try {
-    const response = await fetch(CLOUD_WS_ENDPOINT_PATH, {
+    const response = await kannaFetch(CLOUD_WS_ENDPOINT_PATH, {
       headers: { Accept: "application/json" },
     })
     if (response.ok) {
@@ -906,7 +911,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
 
   const handleSignOut = useCallback(async () => {
     try {
-      const response = await fetch("/auth/logout", {
+      const response = await kannaFetch("/auth/logout", {
         method: "POST",
         headers: {
           Accept: "application/json",
@@ -915,6 +920,10 @@ export function useKannaState(activeChatId: string | null): KannaState {
 
       if (!response.ok) {
         throw new Error(`Sign out failed with status ${response.status}`)
+      }
+
+      if (isBearerAuthMode()) {
+        clearBearerSession()
       }
 
       setCommandError(null)

@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
-import { existsSync, statSync } from "node:fs"
+import { chmodSync, existsSync, readFileSync, rmSync, statSync } from "node:fs"
+import { X509Certificate } from "node:crypto"
 import path from "node:path"
 import { spawnSync } from "node:child_process"
 import {
@@ -16,19 +17,26 @@ function usage() {
   console.log(`Remote Kanna workspace deployment
 
 Commands:
-  init --account name:port --pubkey name=/path/key.pub [options]
+  init --account name:ssh-port[:https-port] --pubkey name=/path/key.pub [options]
   generate [--output directory]
   up [--output directory]
   doctor [--output directory]
-  add-account --account name:port --pubkey /path/key.pub [--output directory]
+  export-ca [--output directory] [--output-file file]
+  add-account --account name:ssh-port[:https-port] --pubkey /path/key.pub [--output directory]
 
 Options:
   --output directory  Deployment state directory (default ${DEFAULT_OUTPUT})
   --domain name       Public base domain with DNS for each <account>.<domain>
+  --hostname-mode     shared to use one hostname and a distinct HTTPS port per account
+  --public-hostname   Hostname used by shared mode (for example fnos.example.com)
+  --tls-cert-file     Absolute path to an external PEM certificate chain
+  --tls-key-file      Absolute path to an external PEM private key (mode 0600)
+  --tls-mode          shared hostname TLS mode: external (default) or internal
+  --output-file       Public CA export destination (default ./fnos-root-ca.crt)
   --local             Bind HTTPS and SSH to loopback for local testing
   --uid number        Container account UID (default 1000)
   --gid number        Container account GID (default 1000)
-  --account name:port Add an account; repeat for init
+  --account name:ssh-port[:https-port] Add an account; repeat for init
   --pubkey name=path  OpenSSH public key per account; required for init
 `)
 }
@@ -68,9 +76,13 @@ function single(options: Record<string, string | string[] | boolean>, name: stri
 }
 
 function parseAccount(value: string) {
-  const separator = value.lastIndexOf(":")
-  if (separator < 1) throw new Error(`Account must be name:port: ${value}`)
-  return { name: validateAccountName(value.slice(0, separator)), sshPort: Number(value.slice(separator + 1)) }
+  const parts = value.split(":")
+  if (parts.length < 2 || parts.length > 3 || !parts[0]) throw new Error(`Account must be name:ssh-port[:https-port]: ${value}`)
+  return {
+    name: validateAccountName(parts[0]!),
+    sshPort: Number(parts[1]),
+    ...(parts[2] === undefined ? {} : { webPort: Number(parts[2]) }),
+  }
 }
 
 function parseNamedPublicKey(value: string) {
@@ -118,12 +130,38 @@ try {
       publicKeys[name] = filePath
     }
     const local = options.local === true
-    const domain = local ? "localhost" : validateDomain(single(options, "domain") ?? "")
+    const hostnameMode = single(options, "hostname-mode", "subdomain")!
+    if (hostnameMode !== "shared" && hostnameMode !== "subdomain") throw new Error("--hostname-mode must be shared or subdomain")
+    const publicHostnameOption = single(options, "public-hostname")
+    const tlsCertFile = single(options, "tls-cert-file")
+    const tlsKeyFile = single(options, "tls-key-file")
+    if (hostnameMode !== "shared" && (values(options, "tls-mode").length > 0 || tlsCertFile || tlsKeyFile)) {
+      throw new Error("TLS mode and external certificate flags require --hostname-mode shared")
+    }
+    const tlsMode = single(options, "tls-mode", "external")!
+    if (tlsMode !== "external" && tlsMode !== "internal") throw new Error("--tls-mode must be external or internal")
+    if (tlsMode === "internal" && (tlsCertFile || tlsKeyFile)) throw new Error("--tls-mode internal cannot be combined with --tls-cert-file or --tls-key-file")
+    const tls = tlsMode === "internal"
+      ? { mode: "internal" as const }
+      : tlsCertFile || tlsKeyFile
+        ? { mode: "external" as const, certFile: tlsCertFile ?? "", keyFile: tlsKeyFile ?? "" }
+        : undefined
+    const domain = local ? "localhost" : validateDomain(hostnameMode === "shared" ? publicHostnameOption ?? single(options, "domain") ?? "" : single(options, "domain") ?? "")
     const callerUid = typeof process.getuid === "function" ? process.getuid() : 1000
     const callerGid = typeof process.getgid === "function" ? process.getgid() : 1000
     const runtimeUid = Number(single(options, "uid", String(callerUid || 1000)))
     const runtimeGid = Number(single(options, "gid", String(callerGid || 1000)))
-    await initializeRemoteWorkspace({ outputDir: output, domain, local, accounts, publicKeys, runtimeUid, runtimeGid })
+    await initializeRemoteWorkspace({
+      outputDir: output,
+      domain,
+      local,
+      accounts,
+      publicKeys,
+      runtimeUid,
+      runtimeGid,
+      hostnameMode,
+      ...(hostnameMode === "shared" ? { publicHostname: domain, tls } : {}),
+    })
     console.log(`Initialized private deployment state in ${output}`)
     console.log("Next: bun run remote-workspace -- generate")
   } else if (command === "generate") {
@@ -136,6 +174,25 @@ try {
       status = run("docker", ["compose", "-f", path.join(output, "compose.yaml"), "up", "-d", "--build"])
     })
     process.exit(status)
+  } else if (command === "export-ca") {
+    withOutputDir(output, () => {})
+    const manifest = JSON.parse(await Bun.file(path.join(output, "manifest.json")).text()) as { hostnameMode?: string; tls?: { mode?: string } }
+    if (manifest.hostnameMode !== "shared" || manifest.tls?.mode !== "internal") {
+      throw new Error("Public CA export is available only for shared mode with explicit internal TLS")
+    }
+    const destination = path.resolve(single(options, "output-file", "./fnos-root-ca.crt")!)
+    if (existsSync(destination)) throw new Error("Refusing to overwrite the public CA destination")
+    run("docker", ["compose", "-f", path.join(output, "compose.yaml"), "cp", "caddy:/data/caddy/pki/authorities/local/root.crt", destination], { cwd: output })
+    try {
+      chmodSync(destination, 0o644)
+      const certificate = new X509Certificate(readFileSync(destination))
+      if (!certificate.ca) throw new Error("Exported certificate is not a CA certificate")
+      console.log(`Public CA saved to ${destination}`)
+      console.log(`SHA-256 fingerprint: ${certificate.fingerprint256}`)
+    } catch (error) {
+      rmSync(destination, { force: true })
+      throw error
+    }
   } else if (command === "doctor") {
     let failed = false
     const check = (label: string, executable: string, args: string[]) => {

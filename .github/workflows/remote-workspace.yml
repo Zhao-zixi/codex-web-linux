@@ -70,3 +70,13 @@ jobs:
       - run: |
           export no_proxy="$NO_PROXY"
           bun run test:remote-workspace:e2e
+      - name: Build pinned Playwright browser E2E image
+        run: docker build -t kanna-remote-workspace-browser-e2e:1.64.0 -f deploy/remote-workspace/Dockerfile.browser-e2e .
+      - name: Run strict-CA shared hostname browser E2E
+        run: |
+          export no_proxy="$NO_PROXY"
+          bun run test:remote-workspace:shared-browser
+      - name: Run shared hostname SSH and Mutagen E2E
+        run: |
+          export no_proxy="$NO_PROXY"
+          bun run test:remote-workspace:shared-e2e

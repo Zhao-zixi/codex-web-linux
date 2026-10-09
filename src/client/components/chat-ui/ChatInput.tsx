@@ -18,6 +18,7 @@ import { cn, generateUUID } from "../../lib/utils"
 import { useComposer } from "../../hooks/useComposer"
 import { useIsStandalone } from "../../hooks/useIsStandalone"
 import { useVoiceRecorder } from "../../hooks/useVoiceRecorder"
+import { kannaFetch } from "../../app/auth-client"
 import { RecordingWaveform } from "./RecordingWaveform"
 import { useShallow } from "zustand/react/shallow"
 import { useChatInputStore } from "../../stores/chatInputStore"
@@ -693,7 +694,7 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
           // a parse error.
           formData.append("clientFileSizes", String(file.size))
 
-          const response = await fetch(requestUrl, {
+          const response = await kannaFetch(requestUrl, {
             method: "POST",
             body: formData,
           })
@@ -892,7 +893,7 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
     if (!recording) return
     setTranscribing(true)
     try {
-      const response = await fetch("/api/transcribe", {
+      const response = await kannaFetch("/api/transcribe", {
         method: "POST",
         headers: { "Content-Type": recording.mimeType },
         body: recording.blob,
@@ -1442,7 +1443,7 @@ export const ChatInput = memo(ChatInputInner)
 async function deleteUploadedAttachment(attachment: ChatAttachment) {
   if (!attachment.contentUrl) return
   const deleteUrl = attachment.contentUrl.replace(/\/content$/, "")
-  await fetch(deleteUrl, { method: "DELETE" }).catch(() => undefined)
+  await kannaFetch(deleteUrl, { method: "DELETE" }).catch(() => undefined)
 }
 
 function hydrateComposerAttachments(attachments: ChatAttachment[]): ComposerAttachment[] {

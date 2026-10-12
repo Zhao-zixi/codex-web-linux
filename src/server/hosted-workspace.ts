@@ -55,7 +55,7 @@ export function parseHostedWorkspaceConfig(value: unknown): HostedWorkspaceConfi
     } catch {
       throw new Error("Invalid hosted workspace webOrigin")
     }
-    if (parsedOrigin.protocol !== "https:" || parsedOrigin.origin !== webOrigin || parsedOrigin.hostname !== webHost || parsedOrigin.port !== String(webPort)) {
+    if ((parsedOrigin.protocol !== "https:" && parsedOrigin.protocol !== "http:") || parsedOrigin.origin !== webOrigin || parsedOrigin.hostname !== webHost || parsedOrigin.port !== String(webPort)) {
       throw new Error("Invalid hosted workspace webOrigin")
     }
   } else if (webHost !== undefined || webPort !== undefined || webOrigin !== undefined) {

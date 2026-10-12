@@ -73,13 +73,13 @@ describe("remote workspace input validation", () => {
     expect(() => validateAccounts([
       { name: "alice", sshPort: 2222, webPort: 8444 },
       { name: "bob", sshPort: 2223, webPort: 8444 },
-    ])).toThrow("Duplicate HTTPS port")
+    ])).toThrow("Duplicate web port")
     expect(() => validateAccounts([
       { name: "alice", sshPort: 8444, webPort: 8444 },
-    ])).toThrow("HTTPS port conflicts with an SSH port")
+    ])).toThrow("Web port conflicts with an SSH port")
     expect(() => validateAccounts([
       { name: "alice", sshPort: 2222, webPort: 1023 },
-    ])).toThrow("Invalid HTTPS port")
+    ])).toThrow("Invalid web port")
   })
 })
 
@@ -295,6 +295,39 @@ describe("remote workspace generation", () => {
     expect(generated.compose).not.toContain('"80:80"')
     expect(generated.compose).not.toContain('"443:443"')
     expect(generated.compose.match(/caddy_data:\/data/g)).toHaveLength(1)
+  })
+
+  test("none shared mode generates explicit plain HTTP origins without TLS ports or CA configuration", async () => {
+    const root = await tempDir()
+    const outputDir = path.join(root, "deployment")
+    const elimKey = await publicKey(root, "elim")
+    const zzxKey = await publicKey(root, "zzx")
+    await initializeRemoteWorkspace({
+      outputDir,
+      domain: "fnos.example.test",
+      publicHostname: "fnos.example.test",
+      hostnameMode: "shared",
+      tls: { mode: "none" },
+      accounts: [
+        { name: "elim", sshPort: 2222, webPort: 8444 },
+        { name: "zzx", sshPort: 2223, webPort: 8445 },
+      ],
+      runtimeUid: typeof process.getuid === "function" && process.getuid() > 0 ? process.getuid() : 1000,
+      runtimeGid: typeof process.getgid === "function" && process.getgid() > 0 ? process.getgid() : 1000,
+      publicKeys: { elim: elimKey, zzx: zzxKey },
+    })
+    const generated = await generateRemoteWorkspaceFiles(outputDir)
+    expect(generated.caddyfile).toContain("http://fnos.example.test:8444 {")
+    expect(generated.caddyfile).toContain("http://fnos.example.test:8445 {")
+    expect(generated.caddyfile).not.toContain("tls ")
+    expect(generated.compose).toContain('"8444:8444"')
+    expect(generated.compose).toContain('"8445:8445"')
+    expect(generated.compose).not.toContain('"80:80"')
+    expect(generated.compose).not.toContain('"443:443"')
+    expect(generated.compose).not.toContain("external-cert.pem")
+    expect(generated.manifest.tls).toEqual({ mode: "none" })
+    const accountConfig = JSON.parse(await readFile(path.join(outputDir, "config/elim.json"), "utf8")) as Record<string, unknown>
+    expect(accountConfig.webOrigin).toBe("http://fnos.example.test:8444")
   })
 
   test("rejects shared-hostname TLS paths unless the key is absolute, private and readable", async () => {

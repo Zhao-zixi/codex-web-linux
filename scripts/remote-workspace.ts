@@ -17,12 +17,12 @@ function usage() {
   console.log(`Remote Kanna workspace deployment
 
 Commands:
-  init --account name:ssh-port[:https-port] --pubkey name=/path/key.pub [options]
+  init --account name:ssh-port[:web-port] --pubkey name=/path/key.pub [options]
   generate [--output directory]
   up [--output directory]
   doctor [--output directory]
   export-ca [--output directory] [--output-file file]
-  add-account --account name:ssh-port[:https-port] --pubkey /path/key.pub [--output directory]
+  add-account --account name:ssh-port[:web-port] --pubkey /path/key.pub [--output directory]
 
 Options:
   --output directory  Deployment state directory (default ${DEFAULT_OUTPUT})
@@ -36,7 +36,7 @@ Options:
   --local             Bind HTTPS and SSH to loopback for local testing
   --uid number        Container account UID (default 1000)
   --gid number        Container account GID (default 1000)
-  --account name:ssh-port[:https-port] Add an account; repeat for init
+  --account name:ssh-port[:web-port] Add an account; repeat for init
   --pubkey name=path  OpenSSH public key per account; required for init
 `)
 }
@@ -77,7 +77,7 @@ function single(options: Record<string, string | string[] | boolean>, name: stri
 
 function parseAccount(value: string) {
   const parts = value.split(":")
-  if (parts.length < 2 || parts.length > 3 || !parts[0]) throw new Error(`Account must be name:ssh-port[:https-port]: ${value}`)
+  if (parts.length < 2 || parts.length > 3 || !parts[0]) throw new Error(`Account must be name:ssh-port[:web-port]: ${value}`)
   return {
     name: validateAccountName(parts[0]!),
     sshPort: Number(parts[1]),

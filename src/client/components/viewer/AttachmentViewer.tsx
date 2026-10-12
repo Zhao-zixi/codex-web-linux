@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, ChevronsUpDown, ExternalLink, File, FileImage, FileJson, FileText, FileVideo, Link2, Sheet } from "lucide-react"
+import { ArrowDown, ArrowUp, ChevronsUpDown, Download, ExternalLink, File, FileImage, FileJson, FileText, FileVideo, Link2, Sheet } from "lucide-react"
 import { memo, startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { cn } from "../../lib/utils"
 import { formatAttachmentSize } from "../messages/AttachmentCard"
@@ -136,14 +136,14 @@ export function AttachmentViewer({ attachment, onClose }: { attachment: ViewerAt
       toolbar={(
         <>
           <ViewerIconButton label="Copy link" onClick={() => void navigator.clipboard?.writeText(absoluteUrl(attachment.url))}><Link2 /></ViewerIconButton>
-          <ViewerIconButton label="Open in new tab" onClick={() => {
+          <ViewerIconButton label={needsProtectedAssetFetch(attachment.url) ? "Download" : "Open in new tab"} onClick={() => {
             const url = absoluteUrl(attachment.url)
             if (needsProtectedAssetFetch(url)) {
               void downloadProtectedAsset(url, attachment.name).catch(() => {})
               return
             }
             window.open(url, "_blank", "noopener,noreferrer")
-          }}><ExternalLink /></ViewerIconButton>
+          }}>{needsProtectedAssetFetch(attachment.url) ? <Download /> : <ExternalLink />}</ViewerIconButton>
         </>
       )}
       bodyClassName={kind === "image" || kind === "video" ? "bg-muted/30" : undefined}
@@ -187,24 +187,31 @@ function AttachmentBody({ attachment, kind, content, view }: {
   content: LoadState | null
   view: RenderView
 }) {
+  const [mediaError, setMediaError] = useState(false)
   const mediaKind = kind === "image" || kind === "video" || kind === "pdf" ? kind : "image"
-  const mediaUrl = useProtectedMediaUrl(kind === "image" || kind === "video" || kind === "pdf" ? attachment.url : "", mediaKind)
+  const protectedUrl = kind === "image" || kind === "video" || kind === "pdf" ? attachment.url : ""
+  const mediaUrl = useProtectedMediaUrl(protectedUrl, mediaKind, () => setMediaError(true))
+  useEffect(() => setMediaError(false), [attachment.url])
+  const pending = needsProtectedAssetFetch(attachment.url) && !mediaUrl && !mediaError
+  const unavailable = <div role="alert" className="flex min-h-24 items-center justify-center p-6 text-sm text-muted-foreground">{mediaError ? "Preview unavailable. Download the file to view it." : "Loading preview…"}</div>
   if (kind === "image") {
     return (
       <div className="flex min-h-full items-center justify-center p-6">
-        {mediaUrl ? <img src={mediaUrl} alt={attachment.name} className="max-h-full max-w-full rounded-lg object-contain shadow-sm" /> : null}
+        {mediaError || pending ? unavailable : mediaUrl ? <img src={mediaUrl} alt={attachment.name} onError={() => setMediaError(true)} className="max-h-full max-w-full rounded-lg object-contain shadow-sm" /> : null}
       </div>
     )
   }
   if (kind === "video") {
     return (
       <div className="flex min-h-full items-center justify-center p-6">
-        {mediaUrl ? <video src={mediaUrl} controls className="max-h-full max-w-full rounded-lg" aria-label={attachment.name} /> : null}
+        {mediaError || pending ? unavailable : mediaUrl ? <video src={mediaUrl} controls onError={() => setMediaError(true)} className="max-h-full max-w-full rounded-lg" aria-label={attachment.name} /> : null}
       </div>
     )
   }
   if (kind === "pdf") {
-    return <iframe src={mediaUrl || undefined} title={attachment.name} sandbox={needsProtectedAssetFetch(attachment.url) ? "" : undefined} className="size-full border-0" />
+    return mediaError || pending
+      ? unavailable
+      : <iframe src={mediaUrl || undefined} title={attachment.name} onError={() => setMediaError(true)} sandbox={needsProtectedAssetFetch(attachment.url) ? "" : undefined} className="size-full border-0" />
   }
   if (kind === "external") {
     return (
@@ -223,7 +230,8 @@ function AttachmentBody({ attachment, kind, content, view }: {
           }}
           className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm transition-colors hover:bg-muted"
         >
-          <ExternalLink className="size-3.5" /> Open in new tab
+            {needsProtectedAssetFetch(attachment.url) ? <Download className="size-3.5" /> : <ExternalLink className="size-3.5" />}
+            {needsProtectedAssetFetch(attachment.url) ? "Download" : "Open in new tab"}
         </button>
       </div>
     )

@@ -13,6 +13,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react"
+import { useEffect, useState } from "react"
 import type { ChatAttachment } from "../../../shared/types"
 import { cn } from "../../lib/utils"
 import { classifyAttachmentIcon, type AttachmentIconKind } from "./attachmentPreview"
@@ -39,7 +40,9 @@ export function AttachmentImageCard({
   size = "transcript",
 }: AttachmentImageCardProps) {
   const source = attachment.contentUrl || previewUrl
-  const imageSource = useProtectedMediaUrl(source ?? "", "image")
+  const [previewError, setPreviewError] = useState(false)
+  const imageSource = useProtectedMediaUrl(source ?? "", "image", () => setPreviewError(true))
+  useEffect(() => setPreviewError(false), [source])
   const isComposer = size === "composer"
 
   return (
@@ -52,10 +55,11 @@ export function AttachmentImageCard({
           isComposer ? "min-w-[80px]" : "min-w-[200px]",
         )}
       >
-        {source ? (
+        {source && imageSource ? (
           <img
             src={imageSource || undefined}
             alt={attachment.displayName}
+            onError={() => setPreviewError(true)}
             className={cn(
               "rounded-xl object-contain bg-muted",
               isComposer
@@ -71,6 +75,7 @@ export function AttachmentImageCard({
             )}
           >
             <FileImage className={cn(isComposer ? "size-6" : "size-8")} />
+            {previewError ? <span className="ml-2 text-xs">Preview unavailable</span> : null}
           </div>
         )}
         <div

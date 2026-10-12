@@ -3,7 +3,7 @@ import { Navigate, Outlet, Route, Routes, useLocation, useNavigate, useParams } 
 import { Flower } from "lucide-react"
 import { StandaloneShareDialog } from "../components/chat-ui/StandaloneShareDialog"
 import { CommandPalette } from "../components/command-palette/CommandPalette"
-import { AppDialogProvider } from "../components/ui/app-dialog"
+import { AppDialogProvider, useAppDialog } from "../components/ui/app-dialog"
 import { Button } from "../components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card"
 import { Input } from "../components/ui/input"
@@ -31,6 +31,7 @@ import { useMigrateChannelPins } from "./useMigrateChannelPins"
 import { useSidebarStore } from "../stores/sidebarStore"
 import type { AppSettingsSnapshot } from "../../shared/types"
 import { ensureBearerServiceWorker, getClientAuthMode, kannaFetch, setClientAuthMode, storeBearerSession } from "./auth-client"
+import { shouldUseBearerServiceWorker } from "./protected-assets"
 
 const AUTH_STATUS_RETRY_DELAY_MS = 500
 
@@ -163,7 +164,7 @@ function useAppAuthState() {
     const payload = await response.json() as Partial<AuthStatusResponse>
     if (payload.authMode) setClientAuthMode(payload.authMode)
     if (payload.authMode === "bearer") {
-      if (window.isSecureContext) {
+      if (shouldUseBearerServiceWorker()) {
         try {
           await ensureBearerServiceWorker()
         } catch {
@@ -171,8 +172,10 @@ function useAppAuthState() {
           return
         }
       }
-      const bearerStatus = await kannaFetch("/auth/status", { cache: "no-store", headers: { Accept: "application/json" } })
-      if (bearerStatus.ok) Object.assign(payload, await bearerStatus.json())
+      try {
+        const bearerStatus = await kannaFetch("/auth/status", { cache: "no-store", headers: { Accept: "application/json" } })
+        if (bearerStatus.ok) Object.assign(payload, await bearerStatus.json())
+      } catch {}
     }
     if (payload.authMode === "cookie" && !payload.authenticated) {
       try {
@@ -211,7 +214,7 @@ function useAppAuthState() {
     const payload = await response.json() as { token?: string; expiresAt?: number }
     if (payload.token && payload.expiresAt) {
       storeBearerSession(payload.token, payload.expiresAt)
-      if (window.isSecureContext) {
+      if (shouldUseBearerServiceWorker()) {
         try {
           await ensureBearerServiceWorker()
         } catch {
@@ -531,9 +534,11 @@ export function App() {
   }
 
   return (
-    <TooltipProvider>
-      <AppDialogProvider>
-        <Routes>
+    <>
+      <TooltipProvider>
+        <AppDialogProvider>
+          <ProtectedDownloadAlert />
+          <Routes>
           {/* Rendered outside the layout: opened as a bare OAuth popup. */}
           <Route path="/oauth/openrouter/callback" element={<OpenRouterCallbackPage />} />
           <Route element={<KannaLayout />}>
@@ -557,8 +562,26 @@ export function App() {
             {/* Every state of the Tasks and Workflow widgets, on made-up data. */}
             <Route path="/workflows" element={<Suspense fallback={null}><WorkflowsGalleryPage /></Suspense>} />
           </Route>
-        </Routes>
-      </AppDialogProvider>
-    </TooltipProvider>
+          </Routes>
+        </AppDialogProvider>
+      </TooltipProvider>
+    </>
   )
+}
+
+function ProtectedDownloadAlert() {
+  const dialog = useAppDialog()
+  useEffect(() => {
+    let alertOpen = false
+    const onDownloadError = () => {
+      if (alertOpen) return
+      alertOpen = true
+      void dialog.alert({ title: "Download failed", description: "Check your session and try again." }).finally(() => {
+        alertOpen = false
+      })
+    }
+    window.addEventListener("kanna:protected-download-error", onDownloadError)
+    return () => window.removeEventListener("kanna:protected-download-error", onDownloadError)
+  }, [dialog])
+  return null
 }

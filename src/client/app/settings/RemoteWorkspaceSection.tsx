@@ -4,6 +4,7 @@ import { Check, Copy } from "lucide-react"
 import { Button } from "../../components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card"
 import { Input } from "../../components/ui/input"
+import { copyTextToClipboard } from "../../lib/clipboard"
 import {
   buildKnownHostsEntry,
   buildMutagenCreateCommand,
@@ -25,7 +26,7 @@ interface HostedWorkspace {
 }
 
 async function copyText(value: string) {
-  await navigator.clipboard.writeText(value)
+  if (!await copyTextToClipboard(value)) throw new Error("Clipboard copy failed")
 }
 
 function CopyCommand({ label, command }: { label: string; command: string }) {
@@ -119,7 +120,7 @@ export function RemoteWorkspaceSection() {
           <div className="font-medium">2. 固定 SSH 主机身份</div>
           {workspace.publicHostKey
             ? <>
-              <p className="text-muted-foreground">此公钥由已登录的 HTTPS 服务提供。请将复制的这一行保存到 <code className="break-all">{knownHostsPath}</code>，再追加下方 SSH 配置片段；不要用 ssh-keyscan 的结果替代此值。</p>
+              <p className="text-muted-foreground">此公钥由已登录的 Kanna 服务提供。请将复制的这一行保存到 <code className="break-all">{knownHostsPath}</code>，再追加下方 SSH 配置片段；不要用 ssh-keyscan 的结果替代此值。</p>
               <CopyCommand label="专用 known_hosts 文件内容" command={buildKnownHostsEntry({ sshHost: workspace.sshHost, sshPort: workspace.sshPort, publicHostKey: workspace.publicHostKey })} />
             </>
             : <p className="text-muted-foreground">管理员尚未提供 SSH 主机公钥。请先联系管理员完成主机密钥配置；在拿到可信公钥前不会生成连接命令。</p>}

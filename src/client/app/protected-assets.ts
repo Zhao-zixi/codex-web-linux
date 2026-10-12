@@ -1,18 +1,27 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { getClientAuthMode, kannaFetch, registerAuthResourceCleanup } from "./auth-client"
 
 const activeRequests = new Set<AbortController>()
 const activeObjectUrls = new Set<string>()
 
 /** Plain-HTTP bearer pages cannot authorize browser-native API requests with a Service Worker. */
-export function needsProtectedAssetFetch(url: string) {
-  if (typeof window === "undefined" || window.isSecureContext || getClientAuthMode() !== "bearer") return false
+export function needsProtectedAssetFetch(url?: string) {
+  if (typeof window === "undefined" || window.location.protocol !== "http:" || window.isSecureContext || getClientAuthMode() !== "bearer" || !url) return false
   try {
     const parsed = new URL(url, window.location.href)
     return parsed.origin === window.location.origin && parsed.pathname.startsWith("/api/")
   } catch {
     return false
   }
+}
+
+/** HTTPS always requires the existing Service Worker path; only insecure HTTP uses fetch fallback. */
+export function shouldUseBearerServiceWorker() {
+  return typeof window !== "undefined" && (window.location.protocol !== "http:" || window.isSecureContext)
+}
+
+function reportDownloadError() {
+  window.dispatchEvent(new CustomEvent("kanna:protected-download-error"))
 }
 
 function makeObjectUrl(blob: Blob) {
@@ -36,8 +45,10 @@ export function clearProtectedAssets() {
 registerAuthResourceCleanup(clearProtectedAssets)
 
 /** Fetches only safe inline media; callers must never use this URL for HTML or SVG documents. */
-export function useProtectedMediaUrl(url: string, kind: "image" | "video" | "pdf") {
+export function useProtectedMediaUrl(url: string, kind: "image" | "video" | "pdf", onError?: (error: Error) => void) {
   const [objectUrl, setObjectUrl] = useState<string | null>(null)
+  const onErrorRef = useRef(onError)
+  onErrorRef.current = onError
   const fetchRequired = needsProtectedAssetFetch(url)
 
   useEffect(() => {
@@ -54,14 +65,17 @@ export function useProtectedMediaUrl(url: string, kind: "image" | "video" | "pdf
       const blob = await response.blob()
       const contentType = response.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase() ?? ""
       const allowed = kind === "image"
-        ? /^image\/(?:png|jpeg|gif|webp|avif|bmp)$/.test(contentType)
+        ? /^image\/(?:png|jpeg|gif|webp|avif|bmp|svg\+xml)$/.test(contentType)
         : kind === "video"
           ? contentType.startsWith("video/")
           : contentType === "application/pdf"
-      if (!allowed || controller.signal.aborted) return
+      if (controller.signal.aborted) return
+      if (!allowed) throw new Error("This media type cannot be previewed securely over HTTP.")
       createdUrl = makeObjectUrl(blob)
       setObjectUrl(createdUrl)
-    }).catch(() => {}).finally(() => activeRequests.delete(controller))
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted) onErrorRef.current?.(error instanceof Error ? error : new Error("Media request failed."))
+    }).finally(() => activeRequests.delete(controller))
     return () => {
       controller.abort()
       activeRequests.delete(controller)
@@ -93,6 +107,9 @@ export async function downloadProtectedAsset(url: string, filename: string) {
     // Safari may begin consuming the object URL after click returns.
     window.setTimeout(() => releaseObjectUrl(objectUrl), 60_000)
     return true
+  } catch (error) {
+    if (!controller.signal.aborted) reportDownloadError()
+    throw error
   } finally {
     activeRequests.delete(controller)
   }

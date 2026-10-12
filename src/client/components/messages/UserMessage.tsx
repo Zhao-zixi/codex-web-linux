@@ -8,6 +8,7 @@ import { AttachmentFileCard, AttachmentImageCard } from "./AttachmentCard"
 import { openViewer, viewerAttachmentFromChat } from "../../stores/viewerStore"
 import { useTranscriptRenderOptions } from "./render-context"
 import { cn } from "../../lib/utils"
+import { downloadProtectedAsset, needsProtectedAssetFetch } from "../../app/protected-assets"
 
 interface Props {
   content: string
@@ -66,7 +67,9 @@ export function UserMessageAttachments({ attachments, align = "end" }: { attachm
     const target = classifyAttachmentPreview(attachment)
     if (target.openInNewTab) {
       if (typeof window !== "undefined") {
-        window.open(new URL(attachment.contentUrl, document.baseURI || window.location.href).toString(), "_blank", "noopener,noreferrer")
+        const url = new URL(attachment.contentUrl, document.baseURI || window.location.href).toString()
+        if (needsProtectedAssetFetch(url)) void downloadProtectedAsset(url, attachment.displayName).catch(() => {})
+        else window.open(url, "_blank", "noopener,noreferrer")
       }
       return
     }

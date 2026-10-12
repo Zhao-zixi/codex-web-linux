@@ -16,6 +16,7 @@ import {
 import type { ChatAttachment } from "../../../shared/types"
 import { cn } from "../../lib/utils"
 import { classifyAttachmentIcon, type AttachmentIconKind } from "./attachmentPreview"
+import { useProtectedMediaUrl } from "../../app/protected-assets"
 
 type BaseAttachmentCardProps = {
   attachment: ChatAttachment
@@ -38,6 +39,7 @@ export function AttachmentImageCard({
   size = "transcript",
 }: AttachmentImageCardProps) {
   const source = attachment.contentUrl || previewUrl
+  const imageSource = useProtectedMediaUrl(source ?? "", "image")
   const isComposer = size === "composer"
 
   return (
@@ -52,7 +54,7 @@ export function AttachmentImageCard({
       >
         {source ? (
           <img
-            src={source}
+            src={imageSource || undefined}
             alt={attachment.displayName}
             className={cn(
               "rounded-xl object-contain bg-muted",

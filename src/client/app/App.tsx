@@ -163,11 +163,16 @@ function useAppAuthState() {
     const payload = await response.json() as Partial<AuthStatusResponse>
     if (payload.authMode) setClientAuthMode(payload.authMode)
     if (payload.authMode === "bearer") {
-      try {
-        await ensureBearerServiceWorker()
-        const bearerStatus = await kannaFetch("/auth/status", { cache: "no-store", headers: { Accept: "application/json" } })
-        if (bearerStatus.ok) Object.assign(payload, await bearerStatus.json())
-      } catch {}
+      if (window.isSecureContext) {
+        try {
+          await ensureBearerServiceWorker()
+        } catch {
+          setState({ status: "locked", error: "Secure workspace media authorization could not start. Reload the page or contact the administrator." })
+          return
+        }
+      }
+      const bearerStatus = await kannaFetch("/auth/status", { cache: "no-store", headers: { Accept: "application/json" } })
+      if (bearerStatus.ok) Object.assign(payload, await bearerStatus.json())
     }
     if (payload.authMode === "cookie" && !payload.authenticated) {
       try {
@@ -206,7 +211,14 @@ function useAppAuthState() {
     const payload = await response.json() as { token?: string; expiresAt?: number }
     if (payload.token && payload.expiresAt) {
       storeBearerSession(payload.token, payload.expiresAt)
-      await ensureBearerServiceWorker()
+      if (window.isSecureContext) {
+        try {
+          await ensureBearerServiceWorker()
+        } catch {
+          setState({ status: "locked", error: "Secure workspace media authorization could not start. Reload the page or contact the administrator." })
+          return
+        }
+      }
     }
 
     await refresh()

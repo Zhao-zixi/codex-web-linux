@@ -19,6 +19,7 @@ import { useComposer } from "../../hooks/useComposer"
 import { useIsStandalone } from "../../hooks/useIsStandalone"
 import { useVoiceRecorder } from "../../hooks/useVoiceRecorder"
 import { kannaFetch } from "../../app/auth-client"
+import { downloadProtectedAsset, needsProtectedAssetFetch } from "../../app/protected-assets"
 import { RecordingWaveform } from "./RecordingWaveform"
 import { useShallow } from "zustand/react/shallow"
 import { useChatInputStore } from "../../stores/chatInputStore"
@@ -1063,7 +1064,9 @@ const ChatInputInner = forwardRef<ChatInputHandle, Props>(function ChatInput({
     const target = classifyAttachmentPreview(attachment)
     if (target.openInNewTab) {
       if (typeof window !== "undefined") {
-        window.open(new URL(attachment.contentUrl, window.location.origin).toString(), "_blank", "noopener,noreferrer")
+        const url = new URL(attachment.contentUrl, window.location.origin).toString()
+        if (needsProtectedAssetFetch(url)) void downloadProtectedAsset(url, attachment.displayName).catch(() => {})
+        else window.open(url, "_blank", "noopener,noreferrer")
       }
       return
     }

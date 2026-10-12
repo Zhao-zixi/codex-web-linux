@@ -14,6 +14,7 @@ export interface RemoteWorkspaceAccount {
 export type RemoteWorkspaceTls =
   | { mode: "external"; certFile: string; keyFile: string }
   | { mode: "internal" }
+  | { mode: "none" }
 
 export interface RemoteWorkspaceManifest {
   version: 1
@@ -71,14 +72,14 @@ export function validateAccounts(accounts: RemoteWorkspaceAccount[]) {
     if (ports.has(account.sshPort)) throw new Error(`Duplicate SSH port: ${account.sshPort}`)
     ports.add(account.sshPort)
     if (account.webPort !== undefined) {
-      if (!Number.isInteger(account.webPort) || account.webPort < 1024 || account.webPort > 65535) throw new Error(`Invalid HTTPS port for ${account.name}`)
-      if (webPorts.has(account.webPort)) throw new Error(`Duplicate HTTPS port: ${account.webPort}`)
-      if (ports.has(account.webPort)) throw new Error(`HTTPS port conflicts with an SSH port: ${account.webPort}`)
+      if (!Number.isInteger(account.webPort) || account.webPort < 1024 || account.webPort > 65535) throw new Error(`Invalid web port for ${account.name}`)
+      if (webPorts.has(account.webPort)) throw new Error(`Duplicate web port: ${account.webPort}`)
+      if (ports.has(account.webPort)) throw new Error(`Web port conflicts with an SSH port: ${account.webPort}`)
       webPorts.add(account.webPort)
     }
   }
   for (const port of webPorts) {
-    if (ports.has(port)) throw new Error(`HTTPS port conflicts with an SSH port: ${port}`)
+    if (ports.has(port)) throw new Error(`Web port conflicts with an SSH port: ${port}`)
   }
 }
 
@@ -105,8 +106,8 @@ async function validateExternalTls(tls: RemoteWorkspaceTls) {
 
 async function validateSharedTls(tls: RemoteWorkspaceTls | undefined) {
   if (!tls) throw new Error("Shared hostname mode requires an explicit TLS mode")
-  if (tls.mode === "internal") {
-    if ("certFile" in tls || "keyFile" in tls) throw new Error("Internal TLS mode cannot include external certificate paths")
+  if (tls.mode === "internal" || tls.mode === "none") {
+    if ("certFile" in tls || "keyFile" in tls) throw new Error("This TLS mode cannot include external certificate paths")
     return
   }
   if (tls.mode !== "external") throw new Error("Invalid TLS mode")
@@ -121,10 +122,10 @@ function validateManifestHostname(manifest: RemoteWorkspaceManifest) {
     if (!manifest.publicHostname) throw new Error("Shared hostname mode requires a public hostname")
     if (validateDomain(manifest.publicHostname) !== manifest.publicHostname) throw new Error("Public hostname must be normalized")
     if (manifest.domain !== manifest.publicHostname) throw new Error("Shared hostname domain must match public hostname")
-    if (manifest.accounts.some((account) => account.webPort === undefined)) throw new Error("Shared hostname mode requires a distinct HTTPS port for every account")
+    if (manifest.accounts.some((account) => account.webPort === undefined)) throw new Error("Shared hostname mode requires a distinct web port for every account")
     if (!manifest.tls) throw new Error("Shared hostname mode requires an explicit TLS mode")
-    if (manifest.tls.mode === "internal") {
-      if ("certFile" in manifest.tls || "keyFile" in manifest.tls) throw new Error("Internal TLS mode cannot include external certificate paths")
+    if (manifest.tls.mode === "internal" || manifest.tls.mode === "none") {
+      if ("certFile" in manifest.tls || "keyFile" in manifest.tls) throw new Error("This TLS mode cannot include external certificate paths")
     } else if (manifest.tls.mode === "external") {
       // Validated asynchronously by init/add-account/generate.
     } else {
@@ -176,7 +177,7 @@ export async function initializeRemoteWorkspace(options: InitRemoteWorkspaceOpti
   const domain = options.local ? "localhost" : validateDomain(publicHostname ?? options.domain)
   validateAccounts(options.accounts)
   if (hostnameMode === "shared") {
-    if (options.accounts.some((account) => account.webPort === undefined)) throw new Error("Shared hostname mode requires a distinct HTTPS port for every account")
+    if (options.accounts.some((account) => account.webPort === undefined)) throw new Error("Shared hostname mode requires a distinct web port for every account")
     await validateSharedTls(options.tls)
   } else if (options.tls || options.publicHostname) {
     throw new Error("External hostname and TLS settings require shared hostname mode")
@@ -291,7 +292,7 @@ export function renderHostedWorkspaceConfig(manifest: RemoteWorkspaceManifest, a
     authMode: "bearer" as const,
     webHost: host,
     webPort,
-    webOrigin: `https://${host}:${webPort}`,
+    webOrigin: `${manifest.tls?.mode === "none" ? "http" : "https"}://${host}:${webPort}`,
   }
 }
 
@@ -313,7 +314,7 @@ export async function addRemoteWorkspaceAccount(args: {
   if (hostnameMode === "shared") await validateSharedTls(manifest.tls)
   validateAccounts([...manifest.accounts, args.account])
   if (hostnameMode === "shared" && args.account.webPort === undefined) {
-    throw new Error("Shared hostname mode requires an HTTPS port for every account")
+    throw new Error("Shared hostname mode requires a web port for every account")
   }
   const key = parseOpenSshPublicKey(await readFile(args.publicKeyPath, "utf8"))
   const secrets = path.join(outputDir, "secrets", args.account.name)
@@ -522,8 +523,13 @@ ${accountNetworks}
 `
   const caddyfile = manifest.accounts.map((account) => {
     if (sharedHostname) {
-      const tlsDirective = manifest.tls?.mode === "internal" ? "  tls internal\n" : "  tls /run/caddy/external-cert.pem /run/caddy/external-key.pem\n"
-      return `${manifest.publicHostname}:${account.webPort} {\n${tlsDirective}  reverse_proxy http://kanna_${account.name}:3210 {\n    header_up -Cookie\n    header_down -Set-Cookie\n  }\n}`
+      const address = manifest.tls?.mode === "none" ? `http://${manifest.publicHostname}:${account.webPort}` : `${manifest.publicHostname}:${account.webPort}`
+      const tlsDirective = manifest.tls?.mode === "internal"
+        ? "  tls internal\n"
+        : manifest.tls?.mode === "external"
+          ? "  tls /run/caddy/external-cert.pem /run/caddy/external-key.pem\n"
+          : ""
+      return `${address} {\n${tlsDirective}  reverse_proxy http://kanna_${account.name}:3210 {\n    header_up -Cookie\n    header_down -Set-Cookie\n  }\n}`
     }
     const site = manifest.local ? `${account.name}.localhost` : `${account.name}.${manifest.domain}`
     return `${site} {\n${manifest.local ? "  tls internal\n" : ""}  reverse_proxy http://kanna_${account.name}:3210\n}`

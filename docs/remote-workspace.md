@@ -1,20 +1,46 @@
 # 远程 Kanna 工作区
 
-这套部署为每个账号启动独立的 Kanna app、SSH sidecar、网络、工作区和持久 HOME。默认子域模式由 Caddy 根据 `<账号>.<域名>` 转发 HTTPS 请求；shared 模式改用同一 hostname 的账号专属 HTTPS 端口。SSH 只接受该账号提供的公钥。Kanna app 固定以非 root UID/GID 运行，SSH 登录映射到普通 `workspace` 用户。SSH shell 保持可用，供 Mutagen 启动远程同步 helper；root 登录、密码认证、端口/代理转发均关闭。
+这套部署为每个账号启动独立的 Kanna app、SSH sidecar、网络、工作区和持久 HOME。默认子域模式由 Caddy 根据 `<账号>.<域名>` 转发 HTTPS 请求；shared 模式改用同一 hostname 的账号专属端口，可显式使用 HTTP（`tls.mode: none`）或可选 TLS。SSH 只接受该账号提供的公钥。Kanna app 固定以非 root UID/GID 运行，SSH 登录映射到普通 `workspace` 用户。SSH shell 保持可用，供 Mutagen 启动远程同步 helper；root 登录、密码认证、端口/代理转发均关闭。
 
 > 本机 Linux/Docker 验收已通过：镜像构建、两账号隔离、SSH 公钥登录、Mutagen 双向同步与冲突恢复、备份恢复、Linux PTY 行为，以及 shared internal CA 下的严格 TLS 浏览器流程和 SSH/Mutagen E2E。浏览器验证覆盖双 origin 登录、媒体和 Range 请求、下载、Service Worker 生命周期及注销。公网域名/DNS/NAT、浏览器对公网证书的信任和真实 Codex 账号模型任务尚未验证。GitHub CI 的当前状态见 [PR #2](https://github.com/Zhao-zixi/codex-web-linux/pull/2)，不要将其状态从本机验收推断出来。
 
 ## 支持范围与前置条件
 
-部署主机要求 Linux、Docker Engine、Docker Compose v2、Bun 1.4.2 或更高版本、OpenSSH 客户端工具、`jq`、Mutagen CLI，以及可以写入持久目录的 UID/GID。公网部署需要域名 DNS 记录指向主机，并开放每个账号单独的 SSH TCP 端口。子域模式的 ACME HTTPS 需要按其配置开放 80/443；shared 高端口模式使用所配置的 HTTPS 端口，不依赖公网 80/443。首版只接受 DNS 名称或 IPv4 地址；IPv6 literal 不支持，Mutagen 连接请使用 DNS 名称或本地 SSH alias。
+部署主机要求 Linux、Docker Engine、Docker Compose v2、Bun 1.4.2 或更高版本、OpenSSH 客户端工具、`jq`、Mutagen CLI，以及可以写入持久目录的 UID/GID。公网部署需要域名 DNS 记录指向主机，并开放每个账号单独的 SSH TCP 端口。子域模式的 ACME HTTPS 需要按其配置开放 80/443；shared 高端口模式使用所配置的 HTTP 或 HTTPS 端口，不依赖公网 80/443。首版只接受 DNS 名称或 IPv4 地址；IPv6 literal 不支持，Mutagen 连接请使用 DNS 名称或本地 SSH alias。
 
 开发与生成 CLI 使用 Bun。请从 [Bun 官方安装说明](https://bun.sh/docs/installation) 安装，不要通过未经审阅的 `curl | sh` 命令安装。Mutagen 请从 [Mutagen 官方安装文档](https://mutagen.io/documentation/introduction/installation/) 选择对应平台的发行版；Docker 请按 [Docker Engine 官方文档](https://docs.docker.com/engine/install/) 安装。`doctor` 会检查 Docker daemon、Compose、`ssh-keygen`、Mutagen、`jq` 和已初始化状态的目录权限；任一必需项失败都会返回非零状态。
 
-## 单域名、多 HTTPS 端口部署（fnOS）
+## 单域名、多端口部署（fnOS）
 
-如果域名 `fnos.zixizhao.top` 已指向 fnOS，且 80、443、8443 正被 fnOS 服务使用，可以让工作区在同一 hostname 的独立高端口提供 HTTPS。此方式不新增 DNS 记录，也不改变 fnOS 原有服务监听；例如 `elim` 使用 `https://fnos.zixizhao.top:8444` 和 SSH TCP 2222，`zzx` 使用 `https://fnos.zixizhao.top:8445` 和 SSH TCP 2223。确保这些高端口未被其它服务占用，并在主机防火墙及路由器 NAT 中分别放行/转发 8444、8445、2222、2223。不要转发或改写 fnOS 的 80、443、8443 规则。
+如果域名 `fnos.zixizhao.top` 已指向 fnOS，且 80、443、8443 正被 fnOS 服务使用，可在同一 hostname 使用独立高端口。首版建议显式设置 `tls.mode` 为 `none`，直接通过 HTTP 访问：`elim` 使用 `http://fnos.zixizhao.top:8444` 和 SSH TCP 2222，`zzx` 使用 `http://fnos.zixizhao.top:8445` 和 SSH TCP 2223。此方式不新增 DNS 记录，也不改变 fnOS 原有服务监听。确保这些高端口未被其它服务占用，并在主机防火墙及路由器 NAT 中分别放行/转发 8444、8445、2222、2223。不要转发或改写 fnOS 的 80、443、8443 规则。
 
-使用 external TLS 时，需要一张由客户端信任、且 SAN 覆盖 `fnos.zixizhao.top` 的现有证书链和对应私钥。运维应先确认公钥证书与私钥配对，并验证证书链和有效期。把证书和私钥保存在部署目录之外或专用证书目录，给 Caddy 容器只读挂载；私钥文件应限制为管理员可读，绝不能提交 Git、放入账号 bundle 或发给工作区用户。CLI 会检查文件路径与权限，不会替代证书信任和配对校验；不要把证书或私钥内容贴进终端记录、聊天或 issue。
+HTTP 会明文传输网页、登录凭据和会话内容。HTTP 下不会启用 Service Worker，媒体附件会全量载入；大文件建议通过 SSH/Mutagen 在本机处理。远程麦克风录音受浏览器安全上下文限制，HTTP 页面通常无法使用麦克风。
+
+首次部署时，在仓库根目录运行以下命令。`init` 只需执行一次；它创建账号密码和初始状态。`generate`、`doctor`、`up` 按顺序运行：
+
+```sh
+bun install --frozen-lockfile
+bun run remote-workspace -- init \
+  --hostname-mode shared \
+  --tls-mode none \
+  --public-hostname fnos.zixizhao.top \
+  --account elim:2222:8444 --pubkey elim=/root/.kanna/remote-workspace-client-keys/elim/id_ed25519.pub \
+  --account zzx:2223:8445 --pubkey zzx=/root/.kanna/remote-workspace-client-keys/zzx/id_ed25519.pub \
+  --output .remote-workspace
+bun run remote-workspace -- generate
+bun run remote-workspace -- doctor
+bun run remote-workspace -- up
+```
+
+如果 `.remote-workspace/manifest.json` 已存在，不要重新运行 `init`。在维护窗口备份后，只把该 manifest 的 `tls.mode` 改为 `none`，保留 hostname、账号、端口、UID/GID 等字段；随后运行 `generate` 和 `up`。这会保留已有账号密码、SSH host key、HOME 和 Codex 登录态。
+
+账号登录密码写在服务端 `.remote-workspace/secrets/<账号>/app-password`，例如 `elim` 对应 `.remote-workspace/secrets/elim/app-password`，`zzx` 对应 `.remote-workspace/secrets/zzx/app-password`。若仓库位于 `/vol1/1000/codex-web-linux`，绝对路径分别为 `/vol1/1000/codex-web-linux/.remote-workspace/secrets/elim/app-password` 和 `/vol1/1000/codex-web-linux/.remote-workspace/secrets/zzx/app-password`。此文件只供服务端管理员读取；不要读取或打印密码值。
+
+当前客户端 SSH 私钥路径为服务端仓库外的 `/root/.kanna/remote-workspace-client-keys/<账号>/id_ed25519`；对应公钥是同目录的 `id_ed25519.pub`。初始化只引用公钥。管理员通过已有安全渠道交付私钥给本人；本人将私钥保存在自己的客户端，并在网页设置生成的 SSH config snippet 中填写本地私钥路径。不要读取、打印或复制私钥值，也不要把私钥放入仓库或部署 bundle。
+
+可选 HTTPS 模式仍受支持：`--tls-mode external` 使用客户端已信任的证书与私钥；`--tls-mode internal` 使用 Caddy internal CA，客户端须信任其 public root CA。首版 HTTP 无需配置证书。
+
+可选：使用 external TLS 时，需要一张由客户端信任、且 SAN 覆盖 `fnos.zixizhao.top` 的现有证书链和对应私钥。运维应先确认公钥证书与私钥配对，并验证证书链和有效期。把证书和私钥保存在部署目录之外或专用证书目录，给 Caddy 容器只读挂载；私钥文件应限制为管理员可读，绝不能提交 Git、放入账号 bundle 或发给工作区用户。CLI 会检查文件路径与权限，不会替代证书信任和配对校验；不要把证书或私钥内容贴进终端记录、聊天或 issue。
 
 下面的初始化参数已由当前 CLI 提供。将示例中的证书路径替换为管理员实际维护的 PEM 文件路径：
 
@@ -43,7 +69,7 @@ docker compose -f .remote-workspace/compose.yaml up --force-recreate -d --no-dep
 
 ### 可选方案：Caddy internal CA
 
-如果没有可用的外部可信证书，可以选择由 Caddy 为 `fnos.zixizhao.top` 签发内部 CA 证书。高端口 TLS 直接由 Caddy 提供，不依赖公网 80/443，也不需要 ACME；但每台客户端必须先信任 Caddy 的 public root CA，浏览器才会认可 HTTPS。internal CA 下的完整本机严格 TLS 浏览器流程和 shared SSH/Mutagen E2E 已通过，覆盖双 origin 登录、媒体与 Range、下载、Service Worker 和注销。用户尚未在 external 与 internal TLS 之间作正式选择，公网 NAT 仍未验证。
+如果没有可用的外部可信证书，可以选择由 Caddy 为 `fnos.zixizhao.top` 签发内部 CA 证书。高端口 TLS 直接由 Caddy 提供，不依赖公网 80/443，也不需要 ACME；但每台客户端必须先信任 Caddy 的 public root CA，浏览器才会认可 HTTPS。internal CA 下的本机严格 TLS 浏览器流程和 shared SSH/Mutagen E2E 已通过，覆盖双 origin 登录、媒体与 Range、下载、Service Worker 和注销。HTTP 首版不需要安装 CA；公网 NAT 仍未验证。
 
 必须显式选择 `--tls-mode internal`；`--tls-mode` 默认值是 external，shared external 必须提供证书和私钥路径，缺失配置会报错，不会回退到 internal。internal 模式不能同时传入 external 证书和私钥参数。CLI 形式如下：
 
@@ -168,7 +194,7 @@ bun run remote-workspace -- up
 
 ## 登录 Kanna 与 Codex
 
-在 `https://<账号>.<域名>` 登录时，使用初始化时生成的该账号 app 密码。密钥文件只存于部署状态目录；终端输出不会展示它。若忘记密码，当前 CLI 没有安全的密码轮换子命令；请先安排维护窗口并做好备份，再按审阅过的手工恢复流程操作，不能直接重跑 `init` 覆盖状态。
+在 `http://fnos.zixizhao.top:8444`（elim）或 `http://fnos.zixizhao.top:8445`（zzx）登录时，使用初始化时生成的该账号 app 密码。密码文件只存于部署状态目录；终端输出不会展示密码值。若忘记密码，当前 CLI 没有安全的密码轮换子命令；请先安排维护窗口并做好备份，再按审阅过的手工恢复流程操作，不能直接重跑 `init` 覆盖状态。
 
 Codex 凭据按账号单独设置。用户登录自己的 Kanna 后，可在网页 Terminal（终端进程运行于该账号 app 容器）执行 `codex login --device-auth`，再用自己的浏览器完成设备授权。SSH sidecar 没有 app 的 HOME 或 `.codex`，不要在那里执行登录。管理员也可在初装时协助执行对应 app 容器中的命令：
 
@@ -204,7 +230,7 @@ bash .remote-workspace/sync.sh list
 bash .remote-workspace/sync.sh flush alice-project
 ```
 
-`create` 的第三个参数是远端项目名单一路径段，可包含中文和空格，不可包含 `/`、反斜线或控制字符；远端位置是 `/workspace/<项目名>`。alias 从 SSH 主机名和端口确定，不依赖 display name。同步使用 Mutagen `two-way-safe`，保留本地 `.git`，不把 `.git` 同步到远端。`sync.sh` 会检查 alias 确实固定到对应 HostName/Port、开启 `StrictHostKeyChecking yes` 并使用专用 known_hosts 文件；同一 SSH 配置也用于 Mutagen 的后续连接。不要通过宽松 host key 检查来解决连接失败。每个账号只挂载自己的工作区，不能访问其他账号的目录。
+`create` 的第三个参数是远端项目名单一路径段，可包含中文和空格，不可包含 `/`、反斜线或控制字符；远端位置是 `/workspace/<项目名>`。alias 从 SSH 主机名和端口确定，不依赖 display name。同步使用 Mutagen `two-way-safe`，保留本地 `.git`，不把 `.git` 同步到远端。`sync.sh` 会检查 alias 确实固定到对应 HostName/Port、开启 `StrictHostKeyChecking yes` 并使用专用 known_hosts 文件；同一 SSH 配置也用于 Mutagen 的后续连接。不要通过宽松 host key 检查来解决连接失败。每个账号只挂载自己的工作区，不能访问其他账号的目录。每位用户分别使用自己的账号 bundle、SSH 配置和本地私钥创建 Mutagen session；elim 可用 `bash .remote-workspace/sync.sh create elim "/path/to/local-project" "项目名" elim-project`，zzx 将第一个参数改为 `zzx`，并使用自己的本地目录和 session 名。
 
 ```sh
 bash .remote-workspace/sync.sh flush alice-project

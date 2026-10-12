@@ -27,11 +27,11 @@ Commands:
 Options:
   --output directory  Deployment state directory (default ${DEFAULT_OUTPUT})
   --domain name       Public base domain with DNS for each <account>.<domain>
-  --hostname-mode     shared to use one hostname and a distinct HTTPS port per account
+  --hostname-mode     shared to use one hostname and a distinct web port per account
   --public-hostname   Hostname used by shared mode (for example fnos.example.com)
   --tls-cert-file     Absolute path to an external PEM certificate chain
   --tls-key-file      Absolute path to an external PEM private key (mode 0600)
-  --tls-mode          shared hostname TLS mode: external (default) or internal
+  --tls-mode          shared hostname TLS mode: external (default), internal, or none (plain HTTP)
   --output-file       Public CA export destination (default ./fnos-root-ca.crt)
   --local             Bind HTTPS and SSH to loopback for local testing
   --uid number        Container account UID (default 1000)
@@ -139,13 +139,16 @@ try {
       throw new Error("TLS mode and external certificate flags require --hostname-mode shared")
     }
     const tlsMode = single(options, "tls-mode", "external")!
-    if (tlsMode !== "external" && tlsMode !== "internal") throw new Error("--tls-mode must be external or internal")
+    if (tlsMode !== "external" && tlsMode !== "internal" && tlsMode !== "none") throw new Error("--tls-mode must be external, internal, or none")
     if (tlsMode === "internal" && (tlsCertFile || tlsKeyFile)) throw new Error("--tls-mode internal cannot be combined with --tls-cert-file or --tls-key-file")
+    if (tlsMode === "none" && (tlsCertFile || tlsKeyFile)) throw new Error("--tls-mode none cannot be combined with --tls-cert-file or --tls-key-file")
     const tls = tlsMode === "internal"
       ? { mode: "internal" as const }
-      : tlsCertFile || tlsKeyFile
-        ? { mode: "external" as const, certFile: tlsCertFile ?? "", keyFile: tlsKeyFile ?? "" }
-        : undefined
+      : tlsMode === "none"
+        ? { mode: "none" as const }
+        : tlsCertFile || tlsKeyFile
+          ? { mode: "external" as const, certFile: tlsCertFile ?? "", keyFile: tlsKeyFile ?? "" }
+          : undefined
     const domain = local ? "localhost" : validateDomain(hostnameMode === "shared" ? publicHostnameOption ?? single(options, "domain") ?? "" : single(options, "domain") ?? "")
     const callerUid = typeof process.getuid === "function" ? process.getuid() : 1000
     const callerGid = typeof process.getgid === "function" ? process.getgid() : 1000

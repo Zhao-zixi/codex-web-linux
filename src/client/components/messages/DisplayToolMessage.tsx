@@ -7,6 +7,7 @@ import { openViewer, viewerAttachmentFromDisplay } from "../../stores/viewerStor
 import { displayAttachments, type ChartToolPayload, type DisplayAttachment } from "../../../shared/display-tools"
 import type { ProcessedToolCall } from "./types"
 import { useToolPayload } from "./tool-payload-context"
+import { downloadProtectedAsset, needsProtectedAssetFetch, useProtectedMediaUrl } from "../../app/protected-assets"
 
 export function DisplayToolMessage({ message }: { message: ProcessedToolCall }) {
   // Older cached updates can lack the result body even though the server has it.
@@ -34,9 +35,24 @@ function errorText(result: unknown): string {
  * links rather than buttons.
  */
 function openInViewer(event: React.MouseEvent<HTMLAnchorElement>, attachment: DisplayAttachment) {
-  if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+  const modified = event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey
+  if (modified && !needsProtectedAssetFetch(attachment.url)) return
   event.preventDefault()
+  if (modified) {
+    void downloadProtectedAsset(attachment.url, attachment.name).catch(() => {})
+    return
+  }
   openViewer({ kind: "attachment", attachment: viewerAttachmentFromDisplay(attachment) })
+}
+
+function ProtectedImage({ url, name, className, onError }: { url: string; name: string; className: string; onError: () => void }) {
+  const src = useProtectedMediaUrl(url, "image")
+  return src ? <img src={src} alt={name} referrerPolicy="no-referrer" className={className} onError={onError} /> : null
+}
+
+function ProtectedVideo({ url, name, className, onError }: { url: string; name: string; className: string; onError: () => void }) {
+  const src = useProtectedMediaUrl(url, "video")
+  return src ? <video src={src} controls preload="metadata" className={className} onError={onError} aria-label={name} /> : null
 }
 
 export function AttachmentsCard({ attachments }: { attachments: DisplayAttachment[] }) {
@@ -79,7 +95,7 @@ export function AttachmentsCard({ attachments }: { attachments: DisplayAttachmen
               const imageLink = (
                 <a href={attachment.url} target="_blank" rel="noreferrer noopener" className="block" aria-label={`Open ${attachment.name}`} onClick={(event) => openInViewer(event, attachment)}>
                   {/* Load on mount because the image's dimensions determine the preview width. Every image has the same height. Only a panorama wider than the cap is cropped. */}
-                  <img src={attachment.url} alt={attachment.name} referrerPolicy="no-referrer" className="block h-56 w-auto max-w-[32rem] rounded-[10px] object-cover shadow-md" onError={onError} />
+                  <ProtectedImage url={attachment.url} name={attachment.name} className="block h-56 w-auto max-w-[32rem] rounded-[10px] object-cover shadow-md" onError={onError} />
                 </a>
               )
               return (
@@ -87,7 +103,7 @@ export function AttachmentsCard({ attachments }: { attachments: DisplayAttachmen
                   {imagePreview ? (
                     imageLink
                   ) : attachment.kind === "video" && !failed ? (
-                    <video src={attachment.url} controls preload="metadata" className={mediaClass} onError={onError} aria-label={attachment.name} />
+                    <ProtectedVideo url={attachment.url} name={attachment.name} className={mediaClass} onError={onError} />
                   ) : (
                     <a href={attachment.url} target="_blank" rel="noreferrer noopener" onClick={(event) => openInViewer(event, attachment)} className="flex max-w-80 items-center gap-3 rounded-[10px] border border-border bg-muted dark:bg-card p-3 text-sm hover:border-muted-foreground/50">
                       <FileText className="size-5 shrink-0 text-muted-foreground" />

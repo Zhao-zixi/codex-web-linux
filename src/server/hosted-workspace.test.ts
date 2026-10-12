@@ -37,7 +37,7 @@ describe("hosted workspace configuration", () => {
     })
   })
 
-  test("accepts only a complete HTTPS bearer origin and returns its metadata", () => {
+  test("accepts exact HTTP or HTTPS bearer origins and returns their metadata", () => {
     const config = parseHostedWorkspaceConfig({
       displayName: "elim",
       sshHost: "fnos.zixizhao.top",
@@ -56,6 +56,19 @@ describe("hosted workspace configuration", () => {
       webPort: 8444,
       webOrigin: "https://fnos.zixizhao.top:8444",
     })
+    const httpConfig = parseHostedWorkspaceConfig({
+      displayName: "elim",
+      sshHost: "fnos.zixizhao.top",
+      sshPort: 2222,
+      sshUser: "workspace",
+      workspaceRoot: "/workspace",
+      authMode: "bearer",
+      webHost: "fnos.zixizhao.top",
+      webPort: 8444,
+      webOrigin: "http://fnos.zixizhao.top:8444",
+      publicHostKey: testPublicHostKey,
+    })
+    expect(httpConfig.webOrigin).toBe("http://fnos.zixizhao.top:8444")
     const { authMode: _authMode, webHost: _webHost, webPort: _webPort, webOrigin: _webOrigin, ...legacy } = config
     expect(legacy).toMatchObject({ displayName: "elim", sshHost: "fnos.zixizhao.top", sshPort: 2222 })
     expect(() => parseHostedWorkspaceConfig({

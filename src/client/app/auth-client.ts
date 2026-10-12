@@ -7,8 +7,14 @@ let memoryToken: string | null = null
 let memoryTokenExpiresAt = 0
 let authWorkerRegistration: ServiceWorkerRegistration | null = null
 let authWorkerMessageListenerInstalled = false
+let clearAuthResources = () => {}
+
+export function registerAuthResourceCleanup(cleanup: () => void) {
+  clearAuthResources = cleanup
+}
 
 export function setClientAuthMode(mode: ClientAuthMode) {
+  if (mode !== "bearer") clearAuthResources()
   authMode = mode
   if (mode !== "bearer") {
     memoryToken = null
@@ -104,6 +110,7 @@ export function storeBearerSession(token: string, expiresAt: number) {
 }
 
 export function clearBearerSession() {
+  clearAuthResources()
   memoryToken = null
   memoryTokenExpiresAt = 0
   try {

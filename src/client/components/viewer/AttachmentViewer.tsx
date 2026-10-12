@@ -16,6 +16,7 @@ import { TranscriptMarkdown } from "../messages/shared"
 import { Skeleton } from "../ui/skeleton"
 import type { ViewerAttachment } from "../../stores/viewerStore"
 import { ViewerIconButton, ViewerPanes, ViewerSurface, ViewerToggle } from "./ViewerSurface"
+import { downloadProtectedAsset, needsProtectedAssetFetch, useProtectedMediaUrl } from "../../app/protected-assets"
 
 /** Rows and columns the table view reads: the viewer has the room, and a sort wants the rows. */
 const VIEWER_TABLE_LIMITS = { rows: 1_000, columns: 50 }
@@ -135,7 +136,14 @@ export function AttachmentViewer({ attachment, onClose }: { attachment: ViewerAt
       toolbar={(
         <>
           <ViewerIconButton label="Copy link" onClick={() => void navigator.clipboard?.writeText(absoluteUrl(attachment.url))}><Link2 /></ViewerIconButton>
-          <ViewerIconButton label="Open in new tab" onClick={() => window.open(absoluteUrl(attachment.url), "_blank", "noopener,noreferrer")}><ExternalLink /></ViewerIconButton>
+          <ViewerIconButton label="Open in new tab" onClick={() => {
+            const url = absoluteUrl(attachment.url)
+            if (needsProtectedAssetFetch(url)) {
+              void downloadProtectedAsset(url, attachment.name).catch(() => {})
+              return
+            }
+            window.open(url, "_blank", "noopener,noreferrer")
+          }}><ExternalLink /></ViewerIconButton>
         </>
       )}
       bodyClassName={kind === "image" || kind === "video" ? "bg-muted/30" : undefined}
@@ -179,22 +187,24 @@ function AttachmentBody({ attachment, kind, content, view }: {
   content: LoadState | null
   view: RenderView
 }) {
+  const mediaKind = kind === "image" || kind === "video" || kind === "pdf" ? kind : "image"
+  const mediaUrl = useProtectedMediaUrl(kind === "image" || kind === "video" || kind === "pdf" ? attachment.url : "", mediaKind)
   if (kind === "image") {
     return (
       <div className="flex min-h-full items-center justify-center p-6">
-        <img src={attachment.url} alt={attachment.name} className="max-h-full max-w-full rounded-lg object-contain shadow-sm" />
+        {mediaUrl ? <img src={mediaUrl} alt={attachment.name} className="max-h-full max-w-full rounded-lg object-contain shadow-sm" /> : null}
       </div>
     )
   }
   if (kind === "video") {
     return (
       <div className="flex min-h-full items-center justify-center p-6">
-        <video src={attachment.url} controls className="max-h-full max-w-full rounded-lg" aria-label={attachment.name} />
+        {mediaUrl ? <video src={mediaUrl} controls className="max-h-full max-w-full rounded-lg" aria-label={attachment.name} /> : null}
       </div>
     )
   }
   if (kind === "pdf") {
-    return <iframe src={attachment.url} title={attachment.name} className="size-full border-0" />
+    return <iframe src={mediaUrl || undefined} title={attachment.name} sandbox={needsProtectedAssetFetch(attachment.url) ? "" : undefined} className="size-full border-0" />
   }
   if (kind === "external") {
     return (
@@ -203,7 +213,14 @@ function AttachmentBody({ attachment, kind, content, view }: {
         <p className="text-sm text-muted-foreground">No preview for this kind of file.</p>
         <button
           type="button"
-          onClick={() => window.open(absoluteUrl(attachment.url), "_blank", "noopener,noreferrer")}
+          onClick={() => {
+            const url = absoluteUrl(attachment.url)
+            if (needsProtectedAssetFetch(url)) {
+              void downloadProtectedAsset(url, attachment.name).catch(() => {})
+              return
+            }
+            window.open(url, "_blank", "noopener,noreferrer")
+          }}
           className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm transition-colors hover:bg-muted"
         >
           <ExternalLink className="size-3.5" /> Open in new tab

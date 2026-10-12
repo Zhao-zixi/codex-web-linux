@@ -2,7 +2,7 @@
 
 这套部署为每个账号启动独立的 Kanna app、SSH sidecar、网络、工作区和持久 HOME。默认子域模式由 Caddy 根据 `<账号>.<域名>` 转发 HTTPS 请求；shared 模式改用同一 hostname 的账号专属端口，可显式使用 HTTP（`tls.mode: none`）或可选 TLS。SSH 只接受该账号提供的公钥。Kanna app 固定以非 root UID/GID 运行，SSH 登录映射到普通 `workspace` 用户。SSH shell 保持可用，供 Mutagen 启动远程同步 helper；root 登录、密码认证、端口/代理转发均关闭。
 
-> PR #2 记录了此前 shared internal CA 的本机 Linux/Docker 与严格 TLS 浏览器验收，包括双 origin 登录、媒体和 Range 请求、下载、Service Worker 生命周期及注销。它不验证本次 PR #3 的 HTTP fallback。本次 HTTP 改动没有手动运行测试或部署；公网域名/DNS/NAT、浏览器对公网证书的信任和真实 Codex 账号模型任务也尚未验证。请分别查看 [PR #2](https://github.com/Zhao-zixi/codex-web-linux/pull/2) 的历史验收和当前 PR 的 CI 状态。
+> PR #2 记录了此前 shared internal CA 的本机 Linux/Docker 与严格 TLS 浏览器验收，包括双 origin 登录、媒体和 Range 请求、下载、Service Worker 生命周期及注销。它不验证本次 PR #3 的 HTTP fallback。本次 HTTP 改动没有手动运行测试或部署验收；公网域名/DNS/NAT、浏览器对公网证书的信任和真实 Codex 账号模型任务也尚未验证。请分别查看 [PR #2](https://github.com/Zhao-zixi/codex-web-linux/pull/2) 的历史验收和当前 PR 的 CI 状态。
 
 ## 支持范围与前置条件
 

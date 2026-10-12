@@ -46,12 +46,12 @@ function openInViewer(event: React.MouseEvent<HTMLAnchorElement>, attachment: Di
 }
 
 function ProtectedImage({ url, name, className, onError }: { url: string; name: string; className: string; onError: () => void }) {
-  const src = useProtectedMediaUrl(url, "image")
+  const src = useProtectedMediaUrl(url, "image", onError)
   return src ? <img src={src} alt={name} referrerPolicy="no-referrer" className={className} onError={onError} /> : null
 }
 
 function ProtectedVideo({ url, name, className, onError }: { url: string; name: string; className: string; onError: () => void }) {
-  const src = useProtectedMediaUrl(url, "video")
+  const src = useProtectedMediaUrl(url, "video", onError)
   return src ? <video src={src} controls preload="metadata" className={className} onError={onError} aria-label={name} /> : null
 }
 

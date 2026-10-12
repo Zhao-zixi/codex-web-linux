@@ -55,7 +55,7 @@ export function AttachmentImageCard({
           isComposer ? "min-w-[80px]" : "min-w-[200px]",
         )}
       >
-        {source && imageSource ? (
+        {source && imageSource && !previewError ? (
           <img
             src={imageSource || undefined}
             alt={attachment.displayName}

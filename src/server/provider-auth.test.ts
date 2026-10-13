@@ -207,6 +207,7 @@ interface HarnessOptions {
   fetchLatestNpmVersion?: (pkg: string) => Promise<string>
   platform?: NodeJS.Platform
   claudeMinimumVersion?: string
+  cancelLoginWaitMs?: number
   /** Files that exist and are executable (npm or bun beside a CLI). */
   executables?: string[]
 }
@@ -261,6 +262,7 @@ function createHarness(options: HarnessOptions = {}) {
     sleep: async () => {},
     platform: options.platform ?? "darwin",
     now: () => now,
+    cancelLoginWaitMs: options.cancelLoginWaitMs,
   }
   const manager = new ProviderAuthManager(deps)
   return {
@@ -845,6 +847,36 @@ describe("flow lifecycle", () => {
     await tick()
     expect(first.killed).toBe(true)
     expect(second.killed).toBe(false)
+  })
+
+  test("cancelLoginAndWait does not resolve until the provider child has exited", async () => {
+    const child = new FakeChild()
+    const harness = createHarness({ exec: signedOutExec, spawnStreaming: () => child })
+    await harness.manager.refresh({ force: true })
+    harness.manager.startLogin("codex")
+    let settled = false
+    const cancelled = harness.manager.cancelLoginAndWait("codex").then(() => { settled = true })
+    await tick()
+    expect(child.killed).toBe(true)
+    expect(settled).toBe(true)
+    await cancelled
+  })
+
+  test("cancelLoginAndWait fails closed if a killed provider child remains alive", async () => {
+    class UnstoppableChild extends FakeChild { kill() { this.killed = true } }
+    const child = new UnstoppableChild()
+    const harness = createHarness({ exec: signedOutExec, spawnStreaming: () => child, cancelLoginWaitMs: 50 })
+    await harness.manager.refresh({ force: true })
+    harness.manager.startLogin("codex")
+    await expect(harness.manager.cancelLoginAndWait("codex")).rejects.toThrow("did not stop")
+    expect(child.killed).toBe(true)
+    let retrySettled = false
+    const retry = harness.manager.cancelLoginAndWait("codex").then(() => { retrySettled = true })
+    await tick()
+    expect(retrySettled).toBe(false)
+    child.exit(143)
+    await retry
+    expect(retrySettled).toBe(true)
   })
 
   test("startLogin throws when the CLI is missing", async () => {

@@ -2,6 +2,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto"
 import { readFile, stat } from "node:fs/promises"
 import path from "node:path"
 import type { Server, ServerWebSocket } from "bun"
+import { NativeProviderAccountChangedError } from "./native-provider-token"
 import type {
   AdminGatewayStateResponse,
   AdminProviderAuthStatus,
@@ -13,6 +14,9 @@ import type {
   GatewayUserSummary,
   InternalGatewayProviderAccessResponse,
   ManagedProvider,
+  NativeProviderTokenRequest,
+  NativeProviderTokenData,
+  NativeProviderTokenResponse,
 } from "../../shared/gateway-api"
 import { GatewayStore } from "./gateway-store"
 
@@ -73,6 +77,7 @@ interface GatewayProviderControl {
   cancel(provider: ManagedProvider): Promise<unknown>
   logout(provider: ManagedProvider): Promise<unknown>
   install(provider: ManagedProvider): Promise<unknown>
+  getNativeToken?(provider: ManagedProvider, options: NativeProviderTokenRequest): Promise<NativeProviderTokenData>
 }
 
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000
@@ -252,6 +257,9 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
   const socketsBySession = new Map<string, Set<GatewaySocket>>()
   const activeProviderRequests = new Map<string, Set<AbortController>>()
   const activeProviderRequestOwners = new WeakMap<AbortController, string>()
+  const providerSourceEpoch = new Map<ManagedProvider, number>([["codex", 0], ["claude", 0]])
+  const providerSourceBlocked = new Set<ManagedProvider>()
+  const providerSourceAwaitingLogin = new Set<ManagedProvider>()
   const loginAttempts = new Map<string, { count: number; resetAt: number }>()
   const pendingWsBySession = new Map<string, Set<AbortController>>()
   const pendingWsOwners = new WeakMap<AbortController, string>()
@@ -332,6 +340,71 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
         if (controllers.size === 0) activeProviderRequests.delete(id)
       }
     }
+  }
+
+  async function notifyManagedProviderRevoked(accountId: string, connectionId: string): Promise<boolean> {
+    const account = accounts.get(accountId)
+    if (!account) return false
+    try {
+      const token = (await readFile(account.accountTokenFile, "utf8")).trim()
+      if (!token) return false
+      const fetcher = config.providerFetch ?? fetch
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const response = await fetcher(new URL("/internal/managed-providers/revoke", account.appUrl), {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ connectionId }),
+            signal: AbortSignal.timeout(4_000),
+          })
+          if (response.ok) return true
+        } catch {}
+      }
+    } catch {}
+    return false
+  }
+
+  async function revokeManagedProviderTargets(targets: Array<{ accountId: string; connectionId: string }>): Promise<boolean> {
+    const unique = new Set(targets.map(({ accountId, connectionId }) => `${accountId}:${connectionId}`))
+    let succeeded = true
+    for (const value of unique) {
+      const separator = value.indexOf(":")
+      if (!await notifyManagedProviderRevoked(value.slice(0, separator), value.slice(separator + 1))) succeeded = false
+    }
+    return succeeded
+  }
+
+  function beginProviderAuthTransition(provider: ManagedProvider) {
+    const epoch = (providerSourceEpoch.get(provider) ?? 0) + 1
+    providerSourceEpoch.set(provider, epoch)
+    providerSourceBlocked.add(provider)
+    providerSourceAwaitingLogin.delete(provider)
+    return epoch
+  }
+
+  async function finishProviderAuthTransition(provider: ManagedProvider, epoch: number) {
+    if (providerSourceEpoch.get(provider) !== epoch) return
+    providerSourceAwaitingLogin.delete(provider)
+    try {
+      const status = (await providerControl.getStatuses()).find((item) => item.id === provider)
+      if (status?.authStatus === "signed_in" && providerSourceEpoch.get(provider) === epoch) providerSourceBlocked.delete(provider)
+    } catch {}
+  }
+
+  async function revokeManagedProviderForUsers(userIds: string[], connectionIds: string[]): Promise<boolean> {
+    const users = await store.listUsers()
+    return revokeManagedProviderTargets(users.flatMap((user) =>
+      userIds.includes(user.id) && user.accountId
+        ? connectionIds.filter((id) => user.connectionIds.includes(id)).map((connectionId) => ({ accountId: user.accountId!, connectionId }))
+        : [],
+    ))
+  }
+
+  async function revokeNativeProvider(provider: ManagedProvider): Promise<boolean> {
+    const connection = await store.getNativeConnection(provider)
+    if (!connection) return true
+    const users = (await store.listUsers()).filter((user) => user.enabled && user.accountId && user.connectionIds.includes(connection.id))
+    return revokeManagedProviderTargets(users.map((user) => ({ accountId: user.accountId!, connectionId: connection.id })))
   }
 
   function closeSessionSockets(sessionKey: string) {
@@ -425,7 +498,10 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
     if (accessMatch) {
       const assigned = await store.getAssignedConnectionsForAccount(configuredAccount.id)
       const response: InternalGatewayProviderAccessResponse = {
-        assigned: assigned.map(({ apiKey: _apiKey, ...summary }) => ({ ...summary, baseUrl: providerBaseUrl(summary.id, summary.provider) })),
+        assigned: assigned.map(({ apiKey: _apiKey, ...summary }) => ({
+          ...summary,
+          ...(summary.kind === "api_key" ? { baseUrl: providerBaseUrl(summary.id, summary.provider) } : {}),
+        })),
         selfFirst: true,
       }
       return Response.json(response, { headers: { "Cache-Control": "no-store" } })
@@ -434,9 +510,50 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
     const suffix = providerMatch![2]!
     const assignments = await store.getAssignedConnectionsForAccount(configuredAccount.id)
     const connection = assignments.find((item) => item.id === connectionId)
+    if (suffix === "/native-token") {
+      if (request.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } })
+      if (!connection || connection.kind !== "native" || providerSourceBlocked.has(connection.provider)) return jsonError("Provider access is unavailable", 401)
+      const authorization = await store.getNativeAuthorizationSnapshot(configuredAccount.id, connectionId)
+      if (!authorization || authorization.provider !== connection.provider || providerSourceBlocked.has(connection.provider)) return jsonError("Provider access is unavailable", 401)
+      const sourceEpoch = providerSourceEpoch.get(connection.provider) ?? 0
+      if (!providerControl.getNativeToken) return jsonError("Native provider authentication is unavailable", 503)
+      const body = await readJson<NativeProviderTokenRequest>(request)
+      if (!body || (body.forceRefresh !== undefined && typeof body.forceRefresh !== "boolean") ||
+        (body.previousAccountId !== undefined && (typeof body.previousAccountId !== "string" || body.previousAccountId.length > 256))) {
+        return jsonError("Invalid request", 400)
+      }
+      if (providerSourceBlocked.has(connection.provider) || providerSourceEpoch.get(connection.provider) !== sourceEpoch) {
+        return jsonError("Provider authentication changed", 401)
+      }
+      let token: NativeProviderTokenResponse
+      try {
+        token = { ...(await providerControl.getNativeToken(connection.provider, body)), connectionId }
+      } catch (error) {
+        if (error instanceof NativeProviderAccountChangedError) {
+          return jsonError("Native provider account changed; restart the managed session", 409)
+        }
+        return jsonError("Native provider sign-in required", 401)
+      }
+      const current = await store.getNativeAuthorizationSnapshot(configuredAccount.id, connectionId)
+      if (providerSourceBlocked.has(connection.provider) || providerSourceEpoch.get(connection.provider) !== sourceEpoch ||
+        !current || current.userId !== authorization.userId || current.authVersion !== authorization.authVersion ||
+        current.connectionId !== authorization.connectionId || current.provider !== authorization.provider) {
+        return jsonError("Provider access changed", 401)
+      }
+      if (token.connectionId !== connection.id || token.provider !== connection.provider ||
+        !token.accessToken || !Number.isSafeInteger(token.expiresAt) || token.expiresAt <= Date.now()) {
+        return jsonError("Native provider authentication is unavailable", 503)
+      }
+      if (token.provider === "codex" && (!token.chatgptAccountId ||
+        (body.previousAccountId && body.previousAccountId !== token.chatgptAccountId))) {
+        return jsonError("Native provider account changed; restart the managed session", 409)
+      }
+      return Response.json(token, { headers: { "Cache-Control": "no-store" } })
+    }
     if (!connection || !connectionProxyPath(connection.provider, suffix)) return jsonError("Not found", 404)
     const user = await store.getUserByAccount(configuredAccount.id)
     if (!user) return jsonError("Unauthorized", 401)
+    if (connection.kind !== "api_key" || !connection.apiKey) return jsonError("Not found", 404)
     return proxyManagedProvider(request, user.id, configuredAccount.id, connectionId, connection.provider, connection.apiKey, suffix)
   }
 
@@ -574,7 +691,28 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
       store.listConnections(),
       providerControl.getStatuses(),
     ])
-    return { users, connections, providerAuth }
+    for (const auth of providerAuth) {
+      if (providerSourceBlocked.has(auth.id) && providerSourceAwaitingLogin.has(auth.id) &&
+        auth.authStatus === "signed_in" && auth.flow.phase === "idle") {
+        providerSourceAwaitingLogin.delete(auth.id)
+        providerSourceBlocked.delete(auth.id)
+      }
+    }
+    const nativeByProvider = new Map(
+      await Promise.all((["codex", "claude"] as const).map(async (provider) => [provider, await store.getNativeConnection(provider)] as const)),
+    )
+    return {
+      users,
+      connections,
+      providerAuth: providerAuth.map((auth) => {
+        const connection = nativeByProvider.get(auth.id)
+        return {
+          ...auth,
+          ...(connection ? { connectionId: connection.id } : {}),
+          shareable: Boolean(connection?.enabled && auth.authStatus === "signed_in"),
+        }
+      }),
+    }
   }
 
   async function handleAdmin(request: Request, user: GatewayUserSummary, url: URL) {
@@ -609,11 +747,29 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
           if ([...sockets].every((socket) => socket.data.userId === userPatch[1])) socketsBySession.delete(sessionHash)
         }
       }
+      if (body.enabled === false || body.password !== undefined) {
+        const nativeIds = (await store.listConnections()).filter((connection) => connection.kind === "native").map((connection) => connection.id)
+        if (!await revokeManagedProviderForUsers([userPatch[1]!], nativeIds)) return jsonError("User access changed but managed workers could not be stopped", 503)
+      }
       return Response.json(withPassword, { headers: { "Cache-Control": "no-store" } })
     }
     if (url.pathname === "/api/admin/connections" && request.method === "POST") {
-      const body = await readJson<{ name?: unknown; provider?: unknown; apiKey?: unknown }>(request, 12 * 1024)
-      if (!body || typeof body.name !== "string" || typeof body.apiKey !== "string" || (body.provider !== "codex" && body.provider !== "claude")) return jsonError("Invalid request", 400)
+      const body = await readJson<{ name?: unknown; provider?: unknown; kind?: unknown; apiKey?: unknown }>(request, 12 * 1024)
+      if (!body || typeof body.name !== "string" || (body.provider !== "codex" && body.provider !== "claude") ||
+        (body.kind !== undefined && body.kind !== "api_key" && body.kind !== "native")) return jsonError("Invalid request", 400)
+      if (body.kind === "native") {
+        if (body.apiKey !== undefined) return jsonError("Invalid request", 400)
+        try {
+          if (!providerControl.getNativeToken) return jsonError("Native provider sign-in required", 409)
+          // Probe the official profile now so a CLI login performed after gateway
+          // startup is detected without relying on the manager's cached snapshot.
+          await providerControl.getNativeToken(body.provider, {})
+          return Response.json(await store.createNativeConnection({ name: body.name, provider: body.provider }), { status: 201, headers: { "Cache-Control": "no-store" } })
+        } catch {
+          return jsonError("Native provider sign-in required", 409)
+        }
+      }
+      if (typeof body.apiKey !== "string") return jsonError("Invalid request", 400)
       try {
         return Response.json(await store.createConnection({ name: body.name, provider: body.provider, apiKey: body.apiKey }), { status: 201, headers: { "Cache-Control": "no-store" } })
       } catch {
@@ -624,29 +780,46 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
     if (connection && request.method === "PATCH") {
       const body = await readJson<{ name?: unknown; enabled?: unknown; apiKey?: unknown }>(request, 12 * 1024)
       if (!body || (body.name !== undefined && typeof body.name !== "string") || (body.enabled !== undefined && typeof body.enabled !== "boolean") || (body.apiKey !== undefined && typeof body.apiKey !== "string")) return jsonError("Invalid request", 400)
+      const prior = (await store.listConnections()).find((item) => item.id === connection[1])
+      const revokeTargets = body.enabled === false && prior?.kind === "native"
+        ? (await store.listUsers()).filter((item) => item.enabled && item.accountId && item.connectionIds.includes(prior.id)).map((item) => ({ accountId: item.accountId!, connectionId: prior.id }))
+        : []
       try {
         const updated = await store.updateConnection(connection[1]!, body as { name?: string; enabled?: boolean; apiKey?: string })
         if (!updated) return jsonError("Connection not found", 404)
         abortProviderRequests(connection[1]!)
+        if (revokeTargets.length && !await revokeManagedProviderTargets(revokeTargets)) return jsonError("Connection disabled but managed workers could not be stopped", 503)
         return Response.json(updated, { headers: { "Cache-Control": "no-store" } })
       } catch {
         return jsonError("Invalid managed connection", 400)
       }
     }
     if (connection && request.method === "DELETE") {
+      const prior = (await store.listConnections()).find((item) => item.id === connection[1])
+      const revokeTargets = prior?.kind === "native"
+        ? (await store.listUsers()).filter((item) => item.enabled && item.accountId && item.connectionIds.includes(prior.id)).map((item) => ({ accountId: item.accountId!, connectionId: prior.id }))
+        : []
       const removed = await store.deleteConnection(connection[1]!)
       if (!removed) return jsonError("Connection not found", 404)
       abortProviderRequests(connection[1]!)
+      if (revokeTargets.length && !await revokeManagedProviderTargets(revokeTargets)) return jsonError("Connection deleted but managed workers could not be stopped", 503)
       return Response.json({ ok: true }, { headers: { "Cache-Control": "no-store" } })
     }
     const grants = url.pathname.match(/^\/api\/admin\/users\/([a-f0-9]{32})\/grants$/)
     if (grants && request.method === "PUT") {
       const body = await readJson<{ connectionIds?: unknown }>(request)
       if (!body || !Array.isArray(body.connectionIds) || body.connectionIds.some((id) => typeof id !== "string")) return jsonError("Invalid request", 400)
+      const requestedConnectionIds = body.connectionIds as string[]
+      const priorUser = (await store.listUsers()).find((item) => item.id === grants[1])
+      const nativeIds = new Set((await store.listConnections()).filter((item) => item.kind === "native").map((item) => item.id))
+      const removedNativeIds = (priorUser?.connectionIds ?? []).filter((id) => nativeIds.has(id) && !requestedConnectionIds.includes(id))
       try {
-        const updated = await store.setUserConnections(grants[1]!, body.connectionIds as string[])
+        const updated = await store.setUserConnections(grants[1]!, requestedConnectionIds)
         if (!updated) return jsonError("User not found", 404)
         abortProviderRequests(undefined, grants[1])
+        if (updated.accountId && removedNativeIds.length && !await revokeManagedProviderTargets(removedNativeIds.map((connectionId) => ({ accountId: updated.accountId!, connectionId })))) {
+          return jsonError("Grant removed but managed workers could not be stopped", 503)
+        }
         return Response.json(updated, { headers: { "Cache-Control": "no-store" } })
       } catch {
         return jsonError("Invalid grants", 400)
@@ -656,18 +829,41 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
     if (providerAuth && request.method === "POST") {
       const provider = providerAuth[1] as ManagedProvider
       const operation = providerAuth[2]!
+      let submittedCode: string | null = null
+      if (operation === "submit") {
+        const body = await readJson<{ code?: unknown }>(request)
+        if (!body || typeof body.code !== "string") return jsonError("Invalid request", 400)
+        submittedCode = body.code
+      }
+      const changesProviderAuth = ["start", "submit", "cancel", "logout"].includes(operation)
+      const transitionEpoch = changesProviderAuth ? beginProviderAuthTransition(provider) : null
       try {
-        if (operation === "start") return Response.json((await providerControl.start(provider)) ?? { ok: true }, { headers: { "Cache-Control": "no-store" } })
+        if (changesProviderAuth && !await revokeNativeProvider(provider)) {
+          return jsonError("Provider auth changed but managed workers could not be stopped", 503)
+        }
+        if (operation === "start") {
+          const result = await providerControl.start(provider)
+          if (transitionEpoch !== null && providerSourceEpoch.get(provider) === transitionEpoch) providerSourceAwaitingLogin.add(provider)
+          return Response.json(result ?? { ok: true }, { headers: { "Cache-Control": "no-store" } })
+        }
         if (operation === "submit") {
-          const body = await readJson<{ code?: unknown }>(request)
-          if (!body || typeof body.code !== "string") return jsonError("Invalid request", 400)
-          await providerControl.submit(provider, body.code)
+          await providerControl.submit(provider, submittedCode!)
+          if (transitionEpoch !== null) await finishProviderAuthTransition(provider, transitionEpoch)
           return Response.json({ ok: true }, { headers: { "Cache-Control": "no-store" } })
         }
-        if (operation === "cancel") return Response.json((await providerControl.cancel(provider)) ?? { ok: true }, { headers: { "Cache-Control": "no-store" } })
-        if (operation === "logout") return Response.json((await providerControl.logout(provider)) ?? { ok: true }, { headers: { "Cache-Control": "no-store" } })
+        if (operation === "cancel") {
+          const result = await providerControl.cancel(provider)
+          if (transitionEpoch !== null) await finishProviderAuthTransition(provider, transitionEpoch)
+          return Response.json(result ?? { ok: true }, { headers: { "Cache-Control": "no-store" } })
+        }
+        if (operation === "logout") {
+          const result = await providerControl.logout(provider)
+          if (transitionEpoch !== null && providerSourceEpoch.get(provider) === transitionEpoch) providerSourceAwaitingLogin.delete(provider)
+          return Response.json(result ?? { ok: true }, { headers: { "Cache-Control": "no-store" } })
+        }
         return Response.json((await providerControl.install(provider)) ?? { ok: true }, { headers: { "Cache-Control": "no-store" } })
       } catch {
+        if (transitionEpoch !== null && providerSourceEpoch.get(provider) === transitionEpoch) providerSourceAwaitingLogin.delete(provider)
         return jsonError("Provider operation failed", 400)
       }
     }

@@ -250,6 +250,8 @@ export interface ProviderAuthManagerDeps {
   sleep?: (ms: number) => Promise<void>
   platform?: NodeJS.Platform
   now?: () => number
+  /** Maximum wait for a cancelled provider CLI child to exit. */
+  cancelLoginWaitMs?: number
 }
 
 // ---------------------------------------------------------------------------
@@ -290,6 +292,7 @@ export class ProviderAuthManager {
   private readonly managedAvailable = new Set<AuthServiceId>()
   private readonly listeners = new Set<(snapshot: ProviderAuthSnapshot) => void>()
   private readonly flows = new Map<AuthServiceId, LoginFlowRuntime>()
+  private readonly retiringChildren = new Map<AuthServiceId, Set<StreamingChild>>()
   private readonly commandPaths = new Map<string, string | null>()
   /** Latest probe started per service; an older probe's result is dropped. */
   private readonly probeSeq = new Map<AuthServiceId, number>()
@@ -324,7 +327,7 @@ export class ProviderAuthManager {
         const snapshot = this.services.get(service)!
         const managedAvailable = this.managedAvailable.has(service)
         if (managedAvailable && snapshot.installed && snapshot.authStatus === "signed_out") {
-          return { ...snapshot, managedAvailable, authStatus: "signed_in" as const, statusDetail: "管理员已分配 API 连接；此连接与管理员个人订阅登录相互独立。" }
+          return { ...snapshot, managedAvailable, authStatus: "signed_in" as const, statusDetail: "管理员已分配可用连接；也可以登录自己的账号。" }
         }
         return managedAvailable ? { ...snapshot, managedAvailable } : snapshot
       }),
@@ -811,6 +814,33 @@ export class ProviderAuthManager {
     }
     this.teardownFlow(service)
     this.setLogin(service, { phase: "idle" })
+  }
+
+  async cancelLoginAndWait(service: AuthServiceId): Promise<void> {
+    const children = this.retiringChildren.get(service) ?? new Set<StreamingChild>()
+    const child = this.flows.get(service)?.child
+    if (child) children.add(child)
+    this.cancelLogin(service)
+    if (children.size === 0) return
+    this.retiringChildren.set(service, children)
+    for (const retiring of children) {
+      void retiring.exited.then(() => {
+        children.delete(retiring)
+        if (children.size === 0 && this.retiringChildren.get(service) === children) this.retiringChildren.delete(service)
+      }, () => {
+        children.delete(retiring)
+        if (children.size === 0 && this.retiringChildren.get(service) === children) this.retiringChildren.delete(service)
+      })
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const exited = await Promise.race([
+      Promise.all([...children].map((retiring) => retiring.exited.then(() => undefined, () => undefined))).then(() => true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), this.deps.cancelLoginWaitMs ?? 5_000)
+      }),
+    ])
+    if (timer) clearTimeout(timer)
+    if (!exited) throw new Error(`${AUTH_SERVICE_LABELS[service]} sign-in process did not stop.`)
   }
 
   private teardownFlow(service: AuthServiceId) {

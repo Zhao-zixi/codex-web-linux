@@ -55,6 +55,72 @@ async function collectStream(stream: AsyncIterable<any>) {
 }
 
 describe("CodexAppServerManager", () => {
+  test("does not publish a native session if revocation arrives while its token is resolving", async () => {
+    let tokenRequested!: () => void
+    const requested = new Promise<void>((resolve) => { tokenRequested = resolve })
+    let resolveToken!: (token: { accessToken: string; expiresAt: number; chatgptAccountId: string }) => void
+    const pendingToken = new Promise<{ accessToken: string; expiresAt: number; chatgptAccountId: string }>((resolve) => { resolveToken = resolve })
+    const process = new FakeCodexProcess((message, child) => {
+      if (message.method === "initialize") child.writeServerMessage({ id: message.id, result: {} })
+    })
+    const connectionId = "d".repeat(32)
+    const manager = new CodexAppServerManager({ spawnProcess: () => process as never })
+    const starting = manager.startSession({
+      chatId: "native-race", cwd: "/tmp/project", model: "gpt-5.4", sessionToken: null,
+      managedProvider: {
+        connectionId, name: "Admin Codex", kind: "native", provider: "codex",
+        getToken: async () => { tokenRequested(); return pendingToken },
+      },
+    })
+    await requested
+    manager.stopManagedProviderSessions(connectionId)
+    resolveToken({ accessToken: "short-lived", expiresAt: Date.now() + 60_000, chatgptAccountId: "acct" })
+    await expect(starting).rejects.toThrow("Codex session closed")
+    expect(process.killed).toBe(true)
+    expect(process.messages.some((message: any) => message.method === "account/login/start" || message.method === "thread/start")).toBe(false)
+  })
+
+  test("uses native ChatGPT auth tokens in memory and answers app-server refresh requests", async () => {
+    const refreshed: boolean[] = []
+    let failRefresh = false
+    const process = new FakeCodexProcess((message, child) => {
+      if (message.method === "initialize") child.writeServerMessage({ id: message.id, result: {} })
+      else if (message.method === "account/login/start") child.writeServerMessage({ id: message.id, result: {} })
+      else if (message.method === "thread/start") child.writeServerMessage({ id: message.id, result: { thread: { id: "native-thread" } } })
+    })
+    const manager = new CodexAppServerManager({ spawnProcess: () => process as never })
+    await manager.startSession({
+      chatId: "native", cwd: "/tmp/project", model: "gpt-5.4", sessionToken: null,
+      managedProvider: {
+        connectionId: "a".repeat(32), name: "Admin Codex", kind: "native", provider: "codex",
+        accessToken: "short-lived-access-token", expiresAt: Date.now() + 60_000, chatgptAccountId: "acct-1",
+        getToken: async (forceRefresh = false) => {
+          refreshed.push(forceRefresh)
+          if (forceRefresh && failRefresh) throw new Error("broker offline")
+          return { accessToken: forceRefresh ? "refreshed-access-token" : "short-lived-access-token", expiresAt: Date.now() + 60_000, chatgptAccountId: "acct-1" }
+        },
+      },
+    })
+    const login = process.messages.find((message: any) => message.method === "account/login/start") as any
+    expect(login.params).toEqual({ type: "chatgptAuthTokens", accessToken: "short-lived-access-token", chatgptAccountId: "acct-1" })
+    process.writeServerMessage({ id: "refresh-1", method: "account/chatgptAuthTokens/refresh", params: {} })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(refreshed).toEqual([false, true])
+    expect(process.messages.find((message: any) => message.id === "refresh-1")).toEqual({
+      id: "refresh-1",
+      result: { accessToken: "refreshed-access-token", chatgptAccountId: "acct-1" },
+    })
+    failRefresh = true
+    process.writeServerMessage({ id: "refresh-2", method: "account/chatgptAuthTokens/refresh", params: {} })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(process.messages.find((message: any) => message.id === "refresh-2")).toMatchObject({
+      id: "refresh-2",
+      error: { code: -32000, message: "Managed Codex authorization refresh failed" },
+    })
+    manager.stopManagedProviderSessions("a".repeat(32))
+    expect(process.killed).toBe(true)
+  })
+
   test("initializes app-server and starts a fresh thread", async () => {
     const process = new FakeCodexProcess((message, child) => {
       if (message.method === "initialize") {

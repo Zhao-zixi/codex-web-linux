@@ -1,4 +1,5 @@
 import { homedir } from "node:os"
+import { timingSafeEqual } from "node:crypto"
 import { PerformanceLog } from "./performance-log"
 import path from "node:path"
 import { stat } from "node:fs/promises"
@@ -296,7 +297,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
         accountToken,
       })
       return connection && accountToken
-        ? { connectionId: connection.id, name: connection.name, baseUrl: connection.baseUrl, accountToken }
+        ? { ...connection, connectionId: connection.id, accountToken }
         : null
     },
     onStateChange: (chatId?: string, options?: { immediate?: boolean }) => {
@@ -619,6 +620,20 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
               return withOriginAgentCluster(new Response("Unauthorized", { status: 401 }))
             }
             return withOriginAgentCluster(new Response("Not found", { status: 404 }))
+          }
+
+          if (url.pathname === "/internal/managed-providers/revoke") {
+            const expected = process.env.KANNA_GATEWAY_ACCOUNT_TOKEN ?? ""
+            const supplied = /^Bearer (.+)$/.exec(req.headers.get("authorization") ?? "")?.[1] ?? ""
+            const matches = Boolean(expected && supplied && Buffer.byteLength(expected) === Buffer.byteLength(supplied) && timingSafeEqual(Buffer.from(expected), Buffer.from(supplied)))
+            if (!matches) return withOriginAgentCluster(Response.json({ error: "Unauthorized" }, { status: 401 }))
+            if (req.method !== "POST") return withOriginAgentCluster(new Response(null, { status: 405, headers: { Allow: "POST" } }))
+            let body: { connectionId?: unknown }
+            try { body = await req.json() as { connectionId?: unknown } } catch { return withOriginAgentCluster(Response.json({ error: "Invalid request" }, { status: 400 })) }
+            const connectionId = typeof body.connectionId === "string" && /^[a-f0-9]{32}$/i.test(body.connectionId) ? body.connectionId : undefined
+            agent.stopManagedProviderWorkers(connectionId)
+            void refreshManagedAuthAvailability()
+            return withOriginAgentCluster(Response.json({ ok: true }))
           }
 
           if (url.pathname === "/auth/status") {

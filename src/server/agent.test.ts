@@ -3004,6 +3004,86 @@ describe("shared display tool lifecycle", () => {
   }
 })
 
+describe("managed native provider workers", () => {
+  test("a Claude session returned after its connection is revoked is closed before it can be published", async () => {
+    const store = createFakeStore()
+    const connectionId = "c".repeat(32)
+    let enteredStart!: () => void
+    const startEntered = new Promise<void>((resolve) => { enteredStart = resolve })
+    let finishStart!: (session: any) => void
+    const pendingStart = new Promise<any>((resolve) => { finishStart = resolve })
+    let closed = false
+    const coordinator = new AgentCoordinator({
+      store: store as never,
+      onStateChange: () => {},
+      resolveManagedProvider: async () => ({
+        connectionId, name: "Official Claude", provider: "claude", kind: "native",
+        accessToken: "oauth", expiresAt: 123,
+      }),
+      startClaudeSession: async () => { enteredStart(); return pendingStart },
+    })
+    const starting = (coordinator as any).startClaudeTurn({
+      chatId: "managed-race", localPath: "/managed", model: "sonnet", planMode: false,
+      autoPlan: false, sessionToken: "resume-token", forkSession: false,
+      onToolRequest: async () => ({}),
+    })
+    await startEntered
+    coordinator.stopManagedProviderWorkers(connectionId)
+    finishStart({
+      provider: "claude", stream: new AsyncEventQueue<any>(), interrupt: async () => {},
+      close: () => { closed = true }, sendPrompt: async () => {}, setModel: async () => {},
+      setPermissionMode: async () => {},
+    })
+    await expect(starting).rejects.toThrow("Managed provider access was revoked")
+    expect(closed).toBe(true)
+    expect(coordinator.claudeSessions.has("managed-race")).toBe(false)
+    coordinator.dispose()
+  })
+
+  test("Claude receives only the OAuth token and refreshes its session when the token expires", async () => {
+    const store = createFakeStore()
+    const starts: Array<{ env?: Record<string, string>; sessionToken: string | null; close: () => void; closed: boolean }> = []
+    let tokenVersion = 0
+    const coordinator = new AgentCoordinator({
+      store: store as never,
+      onStateChange: () => {},
+      resolveManagedProvider: async (_provider, projectDir) => projectDir === "/managed"
+        ? { connectionId: "a".repeat(32), name: "Official Claude", provider: "claude", kind: "native", accessToken: `oauth-${++tokenVersion}`, expiresAt: tokenVersion, accountToken: undefined }
+        : null,
+      startClaudeSession: async (args) => {
+        const events = new AsyncEventQueue<any>()
+        const session = {
+          env: args.managedEnvironment,
+          sessionToken: args.sessionToken,
+          closed: false,
+          close() { this.closed = true; events.close() },
+        }
+        starts.push(session)
+        return {
+          provider: "claude", stream: events, interrupt: async () => {}, close: () => session.close(),
+          sendPrompt: async () => {}, setModel: async () => {}, setPermissionMode: async () => {},
+        } as never
+      },
+    })
+    const run = (chatId: string, localPath: string) => (coordinator as any).startClaudeTurn({
+      chatId, localPath, model: "sonnet", planMode: false, autoPlan: false,
+      sessionToken: "resume-token", forkSession: false, onToolRequest: async () => ({}),
+    })
+    await run("managed-chat", "/managed")
+    expect(starts[0]?.env).toEqual({ CLAUDE_CODE_OAUTH_TOKEN: "oauth-1" })
+    await run("self-chat", "/self")
+    expect(starts[1]?.env).toBeUndefined()
+    await run("managed-chat", "/managed")
+    expect(starts).toHaveLength(3)
+    expect(starts[0]?.closed).toBe(true)
+    expect(starts[2]).toMatchObject({ env: { CLAUDE_CODE_OAUTH_TOKEN: "oauth-2" }, sessionToken: "resume-token" })
+    coordinator.stopManagedProviderWorkers("a".repeat(32))
+    expect(starts[2]?.closed).toBe(true)
+    expect(starts[1]?.closed).toBe(false)
+    coordinator.dispose()
+  })
+})
+
 describe("subagent activity", () => {
   function coordinator() {
     const store = createFakeStore()

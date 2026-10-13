@@ -309,8 +309,9 @@ export function AuthCard({
     action = <ActionButton text={textActions} onClick={install}>Update to {displayVersion(service.latestVersion)}</ActionButton>
   } else if (service.authStatus === "signed_in") {
     action = (
-      <span className="flex shrink-0 items-center pr-2" title={service.account ?? "Connected"}>
+      <span className="flex shrink-0 items-center gap-2 pr-2" title={service.account ?? "Connected"}>
         <Check className="h-3.5 w-3.5 shrink-0 text-emerald-500 animate-in fade-in zoom-in-90 duration-200 ease-out" />
+        {service.managedAvailable ? <ActionButton text={textActions} onClick={startLogin}>Log In</ActionButton> : null}
       </span>
     )
   } else if (service.authStatus === "outdated") {
@@ -344,7 +345,7 @@ export function AuthCard({
       {service.installState === "error" && service.installError ? (
         <div className="mt-2 text-xs text-destructive">{service.installError}</div>
       ) : null}
-      {(service.authStatus === "error" || service.authStatus === "outdated") && service.statusDetail ? (
+      {service.statusDetail ? (
         <div className="mt-2 text-xs text-muted-foreground">{service.statusDetail}</div>
       ) : null}
       <LoginFlowPanel service={service} socket={socket} textActions={textActions} />

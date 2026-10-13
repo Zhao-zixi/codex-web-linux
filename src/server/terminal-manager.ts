@@ -215,8 +215,9 @@ export function applyUtf8Locale(env: Record<string, string | undefined>) {
 }
 
 function createTerminalEnv() {
+  const { KANNA_GATEWAY_ACCOUNT_TOKEN: _gatewayToken, ...inheritedEnv } = process.env
   return applyUtf8Locale({
-    ...process.env,
+    ...inheritedEnv,
     TERM: "xterm-256color",
     COLORTERM: "truecolor",
     // Lets a shell rc tell "running inside Kanna" from a normal terminal, the

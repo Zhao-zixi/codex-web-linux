@@ -32,6 +32,8 @@ import { useSidebarStore } from "../stores/sidebarStore"
 import type { AppSettingsSnapshot } from "../../shared/types"
 import { ensureBearerServiceWorker, getClientAuthMode, kannaFetch, setClientAuthMode, storeBearerSession } from "./auth-client"
 import { shouldUseBearerServiceWorker } from "./protected-assets"
+import { AdminPage } from "./AdminPage"
+import { bindGatewayUserStorage } from "./gateway-user-state"
 
 const AUTH_STATUS_RETRY_DELAY_MS = 500
 
@@ -39,16 +41,18 @@ interface AuthStatusResponse {
   enabled: boolean
   authenticated: boolean
   authMode?: "cookie" | "bearer"
+  usernameRequired?: boolean
+  user?: { id: string; username: string; role: "admin" | "user" } | null
 }
 
 type AppAuthState =
   | { status: "checking" }
-  | { status: "ready" }
+  | { status: "ready"; user?: AuthStatusResponse["user"] }
   | { status: "locked"; error: string | null }
 
 export function getAppAuthStateFromStatus(payload: Partial<AuthStatusResponse>): AppAuthState {
   if (!payload.enabled || payload.authenticated) {
-    return { status: "ready" }
+    return payload.user ? { status: "ready", user: payload.user } : { status: "ready" }
   }
 
   return { status: "locked", error: null }
@@ -60,20 +64,23 @@ export function shouldRetryAuthStatusRequest(responseOk: boolean | null) {
 
 function PasswordScreen({
   error,
+  usernameRequired,
   onSubmit,
 }: {
   error: string | null
-  onSubmit: (password: string) => Promise<void>
+  usernameRequired: boolean
+  onSubmit: (password: string, username?: string) => Promise<void>
 }) {
   const [password, setPassword] = useState("")
+  const [username, setUsername] = useState("")
   const [submitting, setSubmitting] = useState(false)
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!password || submitting) return
+    if (!password || (usernameRequired && !username.trim()) || submitting) return
     setSubmitting(true)
     try {
-      await onSubmit(password)
+      await onSubmit(password, username)
       setPassword("")
     } finally {
       setSubmitting(false)
@@ -91,7 +98,7 @@ function PasswordScreen({
             </div>
           </div>
           <CardDescription className="leading-6">
-            Enter your password to continue.
+            {usernameRequired ? "使用管理员提供的用户名和密码登录。" : "输入密码以继续。"}
           </CardDescription>
         </CardHeader>
         <CardContent className="px-6 pb-6">
@@ -101,22 +108,23 @@ function PasswordScreen({
                 {error}
               </div>
             ) : null}
+            {usernameRequired ? <Input id="kanna-username" autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="用户名" disabled={submitting} className="h-11 rounded-2xl bg-background"/> : null}
             <Input
               id="kanna-password"
               type="password"
               autoComplete="current-password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              placeholder="Password"
+              placeholder="密码"
               disabled={submitting}
               className="h-11 rounded-2xl bg-background"
             />
             <Button
               type="submit"
-              disabled={submitting || password.length === 0}
+              disabled={submitting || password.length === 0 || (usernameRequired && username.trim().length === 0)}
               className="h-11 w-full"
             >
-              {submitting ? "Unlocking..." : "Unlock"}
+              {submitting ? "正在登录…" : "登录"}
             </Button>
           </form>
         </CardContent>
@@ -127,6 +135,7 @@ function PasswordScreen({
 
 function useAppAuthState() {
   const [state, setState] = useState<AppAuthState>({ status: "checking" })
+  const [usernameRequired, setUsernameRequired] = useState(false)
   const retryTimeoutRef = useRef<number | null>(null)
 
   const refresh = useCallback(async () => {
@@ -162,8 +171,9 @@ function useAppAuthState() {
     }
 
     const payload = await response.json() as Partial<AuthStatusResponse>
+    setUsernameRequired(payload.usernameRequired === true)
     if (payload.authMode) setClientAuthMode(payload.authMode)
-    if (payload.authMode === "bearer") {
+    if (payload.authMode === "bearer" && payload.usernameRequired === true) {
       if (shouldUseBearerServiceWorker()) {
         try {
           await ensureBearerServiceWorker()
@@ -183,6 +193,14 @@ function useAppAuthState() {
         if (legacyStatus.ok) Object.assign(payload, await legacyStatus.json())
       } catch {}
     }
+    if (payload.authMode === "bearer") {
+      try {
+        await bindGatewayUserStorage(payload.authenticated && payload.user?.id ? payload.user.id : null)
+      } catch {
+        setState({ status: "locked", error: "无法安全加载此账号的本地工作区状态，请重新加载页面。" })
+        return
+      }
+    }
     setState(getAppAuthStateFromStatus(payload))
   }, [])
 
@@ -195,7 +213,7 @@ function useAppAuthState() {
     }
   }, [refresh])
 
-  const submitPassword = useCallback(async (password: string) => {
+  const submitPassword = useCallback(async (password: string, username?: string) => {
     const response = await fetch("/auth/login", {
       method: "POST",
       credentials: getClientAuthMode() === "bearer" ? "omit" : "same-origin",
@@ -203,11 +221,13 @@ function useAppAuthState() {
         "Content-Type": "application/json",
         Accept: "application/json",
       },
-      body: JSON.stringify({ password, next: window.location.pathname + window.location.search }),
+      body: JSON.stringify(usernameRequired
+        ? { username, password }
+        : { password, next: window.location.pathname + window.location.search }),
     })
 
     if (!response.ok) {
-      setState({ status: "locked", error: "Incorrect password. Try again." })
+      setState({ status: "locked", error: "用户名或密码不正确。请重试。" })
       return
     }
 
@@ -225,10 +245,11 @@ function useAppAuthState() {
     }
 
     await refresh()
-  }, [refresh])
+  }, [refresh, usernameRequired])
 
   return {
     state,
+    usernameRequired,
     submitPassword,
   }
 }
@@ -530,8 +551,10 @@ export function App() {
   }
 
   if (auth.state.status === "locked") {
-    return <PasswordScreen error={auth.state.error} onSubmit={auth.submitPassword} />
+    return <PasswordScreen error={auth.state.error} usernameRequired={auth.usernameRequired} onSubmit={auth.submitPassword} />
   }
+
+  if (auth.state.user?.role === "admin") return <TooltipProvider><AdminPage /></TooltipProvider>
 
   return (
     <>

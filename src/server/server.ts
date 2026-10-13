@@ -43,6 +43,7 @@ import { handleChatWindow } from "./chat-window-route"
 import { handleVisualizationHeights } from "./visualization-heights"
 import { applyPiFaveModels } from "./provider-catalog"
 import { createProcessAuthDeps, ProviderAuthManager } from "./provider-auth"
+import { getManagedProviderAccess, hasOwnProviderCredentials, resolveManagedProvider } from "./managed-provider"
 import { fetchLatestPackageVersion } from "./cli-runtime"
 import { getMachineDisplayName } from "./machine-name"
 import { PortTunnelManager } from "./port-tunnels"
@@ -287,6 +288,17 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     store,
     analytics,
     codexManager,
+    resolveManagedProvider: async (provider, projectDir) => {
+      const accountToken = process.env.KANNA_GATEWAY_ACCOUNT_TOKEN ?? ""
+      const connection = await resolveManagedProvider(provider, {
+        homeDir: homedir(),
+        projectDir,
+        accountToken,
+      })
+      return connection && accountToken
+        ? { connectionId: connection.id, name: connection.name, baseUrl: connection.baseUrl, accountToken }
+        : null
+    },
     onStateChange: (chatId?: string, options?: { immediate?: boolean }) => {
       if (chatId) {
         if (options?.immediate) {
@@ -351,6 +363,24 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
       }
     },
   })
+  const refreshManagedAuthAvailability = async () => {
+    try {
+      const access = await getManagedProviderAccess()
+      for (const provider of ["codex", "claude"] as const) {
+        const projects = store.listProjects()
+        const hasOwn = await hasOwnProviderCredentials(provider, { homeDir: homedir() }) || (await Promise.all(
+          projects.map((project) => hasOwnProviderCredentials(provider, { homeDir: homedir(), projectDir: project.localPath }))
+        )).some(Boolean)
+        providerAuth.setManagedAvailability(provider, !hasOwn && access.assigned.some((connection) => connection.provider === provider))
+      }
+    } catch {
+      providerAuth.setManagedAvailability("codex", false)
+      providerAuth.setManagedAvailability("claude", false)
+    }
+  }
+  void refreshManagedAuthAvailability()
+  const managedAuthRefreshTimer = setInterval(() => void refreshManagedAuthAvailability(), 30_000)
+  managedAuthRefreshTimer.unref?.()
 
   router = createWsRouter({
     diagnostics,
@@ -876,6 +906,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     try { await agent.interruptForShutdown() } finally { agent.dispose() }
     router.dispose()
     providerAuth.dispose()
+    clearInterval(managedAuthRefreshTimer)
     usageLimits.dispose()
     appSettings.dispose()
     keybindings.dispose()

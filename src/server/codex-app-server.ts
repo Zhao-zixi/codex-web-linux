@@ -86,7 +86,7 @@ interface CodexAppServerProcess {
   once(event: "error", listener: (error: Error) => void): this
 }
 
-type SpawnCodexAppServer = (cwd: string) => CodexAppServerProcess
+type SpawnCodexAppServer = (cwd: string, options?: { args?: string[]; env?: Record<string, string> }) => CodexAppServerProcess
 
 interface PendingRequest<TResult> {
   method: string
@@ -171,6 +171,7 @@ interface SessionContext {
   unclaimedTurns: Map<string, string>
   stderrLines: string[]
   closed: boolean
+  managedProviderKey: string | null
 }
 
 export interface StartCodexSessionArgs {
@@ -181,6 +182,7 @@ export interface StartCodexSessionArgs {
   serviceTier?: ServiceTier
   sessionToken: string | null
   pendingForkSessionToken?: string | null
+  managedProvider?: { connectionId: string; name: string; baseUrl: string; accountToken: string } | null
 }
 
 export interface StartCodexTurnArgs {
@@ -813,11 +815,11 @@ export class CodexAppServerManager {
   private onTaskActivity: ((chatId: string, update: SubagentActivityUpdate) => void) | null = null
 
   constructor(args: { spawnProcess?: SpawnCodexAppServer } = {}) {
-    this.spawnProcess = args.spawnProcess ?? ((cwd) =>
-      spawn("codex", ["app-server"], {
+    this.spawnProcess = args.spawnProcess ?? ((cwd, options) =>
+      spawn("codex", [...(options?.args ?? []), "app-server"], {
         cwd,
         stdio: ["pipe", "pipe", "pipe"],
-        env: process.env,
+        env: (() => { const { KANNA_GATEWAY_ACCOUNT_TOKEN: _gatewayToken, ...env } = process.env; return { ...env, ...options?.env } })(),
       }) as unknown as CodexAppServerProcess)
   }
 
@@ -913,6 +915,7 @@ export class CodexAppServerManager {
       unclaimedTurns: new Map(),
       stderrLines: [],
       closed: false,
+      managedProviderKey: null,
     }
     this.attachListeners(context)
     try {
@@ -934,7 +937,8 @@ export class CodexAppServerManager {
 
   async startSession(args: StartCodexSessionArgs) {
     const existing = this.sessions.get(args.chatId)
-    if (existing && !existing.closed && existing.cwd === args.cwd && !args.pendingForkSessionToken) {
+    const managedProviderKey = args.managedProvider?.connectionId ?? null
+    if (existing && !existing.closed && existing.cwd === args.cwd && existing.managedProviderKey === managedProviderKey && !args.pendingForkSessionToken) {
       return
     }
 
@@ -942,7 +946,11 @@ export class CodexAppServerManager {
       this.stopSession(args.chatId)
     }
 
-    const child = this.spawnProcess(args.cwd)
+    const managedProvider = args.managedProvider
+    const child = this.spawnProcess(args.cwd, managedProvider ? {
+      args: ["-c", "model_provider='kanna_managed'", "-c", `model_providers.kanna_managed.name=${JSON.stringify(managedProvider.name)}`, "-c", `model_providers.kanna_managed.base_url=${JSON.stringify(managedProvider.baseUrl.replace(/\/$/, ""))}`, "-c", "model_providers.kanna_managed.env_key='KANNA_GATEWAY_ACCOUNT_TOKEN'", "-c", "model_providers.kanna_managed.wire_api='responses'", "-c", "model_providers.kanna_managed.requires_openai_auth=false", "-c", "model_providers.kanna_managed.supports_websockets=false"],
+      env: { KANNA_GATEWAY_ACCOUNT_TOKEN: managedProvider.accountToken },
+    } : undefined)
     const customTools = args.customTools ? createKannaMcpServer(args.customTools) : undefined
     const context: SessionContext = {
       customTools,
@@ -956,6 +964,7 @@ export class CodexAppServerManager {
       unclaimedTurns: new Map(),
       stderrLines: [],
       closed: false,
+      managedProviderKey,
     }
     this.sessions.set(args.chatId, context)
     this.attachListeners(context)

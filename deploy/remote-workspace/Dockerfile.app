@@ -41,11 +41,12 @@ COPY --from=build --chown=${REMOTE_UID}:${REMOTE_GID} /opt/kanna-build-source/bi
 COPY --from=build --chown=${REMOTE_UID}:${REMOTE_GID} /opt/kanna-build-source/dist ./dist
 COPY --from=build --chown=${REMOTE_UID}:${REMOTE_GID} /opt/kanna-build-source/package.json ./package.json
 COPY --from=production-dependencies --chown=${REMOTE_UID}:${REMOTE_GID} /app/node_modules ./node_modules
-RUN bun add --global @openai/codex@0.161.0 \
+RUN bun add --global @openai/codex@0.161.0 @anthropic-ai/claude-code@2.1.277 \
     && chown -R "${REMOTE_UID}:${REMOTE_GID}" /opt/bun \
     && command -v kanna \
     && test "$(command -v kanna)" = /app/bin/kanna \
     && command -v codex \
+    && command -v claude \
     && test "$(command -v node)" = /usr/bin/node \
     && node --version \
     && codex --version

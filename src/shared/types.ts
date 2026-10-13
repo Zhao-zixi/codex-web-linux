@@ -1606,6 +1606,8 @@ export interface AuthServiceSnapshot {
   latestVersion: string | null
   updateAvailable: boolean
   authStatus: AuthServiceStatus
+  /** A managed API connection is available when no user credential takes precedence. */
+  managedAvailable?: boolean
   /** Account identifier when cheap to read (gh login, cursor email, plan). */
   account: string | null
   /** Human-readable probe detail (e.g. why status is "error"). */

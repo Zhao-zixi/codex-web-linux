@@ -1,5 +1,6 @@
 import { create } from "zustand"
-import { persist } from "zustand/middleware"
+import { createJSONStorage, persist } from "zustand/middleware"
+import { workspaceLocalStorage } from "../lib/workspace-storage"
 
 export interface TerminalPaneLayout {
   id: string
@@ -211,6 +212,7 @@ export const useTerminalLayoutStore = create<TerminalLayoutState>()(
     }),
     {
       name: "terminal-layouts",
+      storage: createJSONStorage(() => workspaceLocalStorage),
       version: 1,
     }
   )

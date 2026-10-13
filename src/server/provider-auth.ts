@@ -292,6 +292,7 @@ export class ProviderAuthManager {
   private readonly managedAvailable = new Set<AuthServiceId>()
   private readonly listeners = new Set<(snapshot: ProviderAuthSnapshot) => void>()
   private readonly flows = new Map<AuthServiceId, LoginFlowRuntime>()
+  private readonly retiringChildren = new Map<AuthServiceId, Set<StreamingChild>>()
   private readonly commandPaths = new Map<string, string | null>()
   /** Latest probe started per service; an older probe's result is dropped. */
   private readonly probeSeq = new Map<AuthServiceId, number>()
@@ -816,12 +817,24 @@ export class ProviderAuthManager {
   }
 
   async cancelLoginAndWait(service: AuthServiceId): Promise<void> {
+    const children = this.retiringChildren.get(service) ?? new Set<StreamingChild>()
     const child = this.flows.get(service)?.child
+    if (child) children.add(child)
     this.cancelLogin(service)
-    if (!child) return
+    if (children.size === 0) return
+    this.retiringChildren.set(service, children)
+    for (const retiring of children) {
+      void retiring.exited.then(() => {
+        children.delete(retiring)
+        if (children.size === 0 && this.retiringChildren.get(service) === children) this.retiringChildren.delete(service)
+      }, () => {
+        children.delete(retiring)
+        if (children.size === 0 && this.retiringChildren.get(service) === children) this.retiringChildren.delete(service)
+      })
+    }
     let timer: ReturnType<typeof setTimeout> | undefined
     const exited = await Promise.race([
-      child.exited.then(() => true, () => true),
+      Promise.all([...children].map((retiring) => retiring.exited.then(() => undefined, () => undefined))).then(() => true),
       new Promise<boolean>((resolve) => {
         timer = setTimeout(() => resolve(false), this.deps.cancelLoginWaitMs ?? 5_000)
       }),

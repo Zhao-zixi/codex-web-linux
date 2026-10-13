@@ -865,11 +865,18 @@ describe("flow lifecycle", () => {
   test("cancelLoginAndWait fails closed if a killed provider child remains alive", async () => {
     class UnstoppableChild extends FakeChild { kill() { this.killed = true } }
     const child = new UnstoppableChild()
-    const harness = createHarness({ exec: signedOutExec, spawnStreaming: () => child, cancelLoginWaitMs: 5 })
+    const harness = createHarness({ exec: signedOutExec, spawnStreaming: () => child, cancelLoginWaitMs: 50 })
     await harness.manager.refresh({ force: true })
     harness.manager.startLogin("codex")
     await expect(harness.manager.cancelLoginAndWait("codex")).rejects.toThrow("did not stop")
     expect(child.killed).toBe(true)
+    let retrySettled = false
+    const retry = harness.manager.cancelLoginAndWait("codex").then(() => { retrySettled = true })
+    await tick()
+    expect(retrySettled).toBe(false)
+    child.exit(143)
+    await retry
+    expect(retrySettled).toBe(true)
   })
 
   test("startLogin throws when the CLI is missing", async () => {

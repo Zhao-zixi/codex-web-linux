@@ -378,6 +378,7 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
     const epoch = (providerSourceEpoch.get(provider) ?? 0) + 1
     providerSourceEpoch.set(provider, epoch)
     providerSourceBlocked.add(provider)
+    providerSourceAwaitingLogin.delete(provider)
     return epoch
   }
 
@@ -862,7 +863,7 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
         }
         return Response.json((await providerControl.install(provider)) ?? { ok: true }, { headers: { "Cache-Control": "no-store" } })
       } catch {
-        if (transitionEpoch !== null) await finishProviderAuthTransition(provider, transitionEpoch)
+        if (transitionEpoch !== null && providerSourceEpoch.get(provider) === transitionEpoch) providerSourceAwaitingLogin.delete(provider)
         return jsonError("Provider operation failed", 400)
       }
     }

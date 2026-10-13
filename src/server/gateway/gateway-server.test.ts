@@ -204,17 +204,30 @@ test("native connections probe the live provider profile and fail visibly when r
     holdNativeToken = true
     nativeTokenStarted = new Promise<void>((resolve) => { signalNativeTokenStarted = resolve })
     nativeTokenWait = new Promise<void>((resolve) => { releaseNativeToken = resolve })
-    const tokenDuringLogout = fetch(`${origin}/internal/providers/${connection.id}/native-token`, {
+    const tokenDuringTransition = fetch(`${origin}/internal/providers/${connection.id}/native-token`, {
       method: "POST", headers: { Authorization: "Bearer test-account-capability-value-123456", "Content-Type": "application/json" }, body: "{}",
     })
     await nativeTokenStarted
+    revokeStarted = new Promise<void>((resolve) => { signalRevokeStarted = resolve })
+    const start = fetch(`${origin}/api/admin/provider-auth/codex/start`, {
+      method: "POST", headers: { Authorization: `Bearer ${adminSession.token}`, Origin: origin },
+    })
+    await revokeStarted
+    releaseNativeToken()
+    expect((await tokenDuringTransition).status).toBe(401)
+    expect((await start).status).toBe(200)
+    providerStatus.authStatus = "signed_in"
     revokeStarted = new Promise<void>((resolve) => { signalRevokeStarted = resolve })
     const logout = fetch(`${origin}/api/admin/provider-auth/codex/logout`, {
       method: "POST", headers: { Authorization: `Bearer ${adminSession.token}`, Origin: origin },
     })
     await revokeStarted
-    releaseNativeToken()
-    expect((await tokenDuringLogout).status).toBe(401)
+    expect((await fetch(`${origin}/api/admin/state`, {
+      headers: { Authorization: `Bearer ${adminSession.token}`, Origin: origin },
+    })).status).toBe(200)
+    expect((await fetch(`${origin}/internal/providers/${connection.id}/native-token`, {
+      method: "POST", headers: { Authorization: "Bearer test-account-capability-value-123456", "Content-Type": "application/json" }, body: "{}",
+    })).status).toBe(401)
     expect((await logout).status).toBe(200)
     expect((await fetch(`${origin}/internal/providers/${connection.id}/native-token`, {
       method: "POST", headers: { Authorization: "Bearer test-account-capability-value-123456", "Content-Type": "application/json" }, body: "{}",

@@ -3,13 +3,15 @@ import { KeyRound, LogOut, Plus, RefreshCw, Shield, Users } from "lucide-react"
 import { Button } from "../components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card"
 import { Input } from "../components/ui/input"
+import { useAppDialog } from "../components/ui/app-dialog"
 import { kannaFetch } from "./auth-client"
 import { clearGatewayUserLocalState } from "./gateway-user-state"
+import type { AdminGatewayStateResponse, AdminProviderAuthStatus, GatewayUserSummary, ManagedConnectionSummary } from "../../shared/gateway-api"
 
-type UserRow = { id: string; username: string; role: "admin" | "user"; enabled: boolean; connectionIds: string[] }
-type Connection = { id: string; name: string; provider: "codex" | "claude"; enabled: boolean; shareable: true }
-type ProviderAuth = { id: "codex" | "claude"; installed: boolean; authStatus: string; shareable: false; flow?: { phase: string; verificationUrl?: string; userCode?: string | null; message?: string } }
-type State = { users: UserRow[]; connections: Connection[]; providerAuth: ProviderAuth[] }
+type UserRow = GatewayUserSummary
+type Connection = ManagedConnectionSummary
+type ProviderAuth = AdminProviderAuthStatus
+type State = AdminGatewayStateResponse
 
 export function AdminPage() {
   const [state, setState] = useState<State | null>(null)
@@ -17,6 +19,7 @@ export function AdminPage() {
   const [name, setName] = useState("")
   const [provider, setProvider] = useState<"codex" | "claude">("codex")
   const [apiKey, setApiKey] = useState("")
+  const [adminPassword, setAdminPassword] = useState("")
   const [busy, setBusy] = useState(false)
 
   const refresh = useCallback(async () => {
@@ -53,6 +56,30 @@ export function AdminPage() {
     window.location.assign("/")
   }
 
+  async function changeAdminPassword(event: React.FormEvent) {
+    event.preventDefault()
+    const admin = state?.users.find((user) => user.role === "admin")
+    if (!admin || adminPassword.length < 12 || busy) return
+    setBusy(true)
+    setError("")
+    try {
+      const response = await kannaFetch(`/api/admin/users/${admin.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: adminPassword }),
+      })
+      if (!response.ok) {
+        throw new Error((await response.json().catch(() => null))?.error ?? "密码修改失败，请重试。")
+      }
+      setAdminPassword("")
+      await clearGatewayUserLocalState({ clearAuth: true })
+      window.location.assign("/")
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      setBusy(false)
+    }
+  }
+
   return <main className="min-h-[100dvh] bg-background px-5 py-8 md:px-10">
     <div className="mx-auto max-w-6xl space-y-7">
       <header className="flex flex-wrap items-center justify-between gap-4">
@@ -76,6 +103,25 @@ export function AdminPage() {
         </CardContent></Card>
       </section>
       <Card className="rounded-3xl border border-border shadow-sm"><CardHeader><CardTitle className="flex items-center gap-2 text-xl"><Shield className="h-5 w-5"/>管理员本人登录</CardTitle><CardDescription>这里是本机 Codex / Claude CLI 官方授权，仅供管理员本人使用，不能分配给其他用户。</CardDescription></CardHeader><CardContent className="grid gap-3 md:grid-cols-2">{state?.providerAuth.map((auth) => <ProviderControl key={auth.id} auth={auth} busy={busy} onAction={(action, body) => void request(`/api/admin/provider-auth/${auth.id}/${action}`, "POST", body)}/>)}</CardContent></Card>
+      <Card className="rounded-3xl border border-border shadow-sm">
+        <CardHeader>
+          <CardTitle className="text-xl">管理员密码</CardTitle>
+          <CardDescription>修改后当前登录会立即失效，需要使用新密码重新登录。</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form className="flex flex-col gap-3 sm:flex-row" onSubmit={(event) => void changeAdminPassword(event)}>
+            <Input
+              aria-label="新的管理员密码"
+              type="password"
+              autoComplete="new-password"
+              placeholder="新密码至少 12 位"
+              value={adminPassword}
+              onChange={(event) => setAdminPassword(event.target.value)}
+            />
+            <Button type="submit" disabled={busy || adminPassword.length < 12}>修改密码并退出</Button>
+          </form>
+        </CardContent>
+      </Card>
       <div className="flex justify-end"><Button variant="ghost" onClick={() => void refresh()}><RefreshCw className="mr-2 h-4 w-4"/>刷新状态</Button></div>
     </div>
   </main>
@@ -97,9 +143,59 @@ function UserControl({ user, connections, busy, onChange }: { user: UserRow; con
 }
 
 function ConnectionControl({ connection, busy, onChange }: { connection: Connection; busy: boolean; onChange: (url: string, method?: string, body?: unknown) => void }) {
+  const dialog = useAppDialog()
   const [rotating, setRotating] = useState(false)
   const [apiKey, setApiKey] = useState("")
-  return <div className="rounded-2xl border border-border p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="font-medium">{connection.name}</p><p className="text-xs text-muted-foreground">{connection.provider === "codex" ? "OpenAI API" : "Anthropic API"} · {connection.enabled ? "可用" : "已停用"}</p></div><div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => { setRotating((value) => !value); setApiKey("") }}>{rotating ? "取消轮换" : "轮换密钥"}</Button><Button variant="outline" size="sm" disabled={busy} onClick={() => onChange(`/api/admin/connections/${connection.id}`, "PATCH", { enabled: !connection.enabled })}>{connection.enabled ? "停用" : "启用"}</Button><Button variant="ghost" size="sm" disabled={busy} onClick={() => { if (window.confirm(`删除“${connection.name}”并撤销所有分配？`)) onChange(`/api/admin/connections/${connection.id}`, "DELETE") }}>删除</Button></div></div>{rotating && <form className="mt-3 flex gap-2" onSubmit={(event) => { event.preventDefault(); if (apiKey.length > 0) { onChange(`/api/admin/connections/${connection.id}`, "PATCH", { apiKey }); setApiKey(""); setRotating(false) } }}><Input aria-label={`${connection.name} 新 API key`} type="password" autoComplete="new-password" placeholder="输入新的 API key" value={apiKey} onChange={(event) => setApiKey(event.target.value)}/><Button size="sm" disabled={busy || !apiKey}>保存新密钥</Button></form>}</div>
+  return (
+    <div className="rounded-2xl border border-border p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="font-medium">{connection.name}</p>
+          <p className="text-xs text-muted-foreground">
+            {connection.provider === "codex" ? "OpenAI API" : "Anthropic API"} · {connection.enabled ? "可用" : "已停用"}
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={() => { setRotating((value) => !value); setApiKey("") }}>
+            {rotating ? "取消轮换" : "轮换密钥"}
+          </Button>
+          <Button variant="outline" size="sm" disabled={busy} onClick={() => onChange(`/api/admin/connections/${connection.id}`, "PATCH", { enabled: !connection.enabled })}>
+            {connection.enabled ? "停用" : "启用"}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={busy}
+            onClick={async () => {
+              const confirmed = await dialog.confirm({
+                title: "删除 API 连接？",
+                description: `删除“${connection.name}”后会撤销所有用户的分配。`,
+                confirmLabel: "删除连接",
+                confirmVariant: "destructive",
+              })
+              if (confirmed) onChange(`/api/admin/connections/${connection.id}`, "DELETE")
+            }}
+          >删除</Button>
+        </div>
+      </div>
+      {rotating && (
+        <form
+          className="mt-3 flex gap-2"
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (apiKey.length > 0) {
+              onChange(`/api/admin/connections/${connection.id}`, "PATCH", { apiKey })
+              setApiKey("")
+              setRotating(false)
+            }
+          }}
+        >
+          <Input aria-label={`${connection.name} 新 API key`} type="password" autoComplete="new-password" placeholder="输入新的 API key" value={apiKey} onChange={(event) => setApiKey(event.target.value)} />
+          <Button size="sm" disabled={busy || !apiKey}>保存新密钥</Button>
+        </form>
+      )}
+    </div>
+  )
 }
 
 function ProviderControl({ auth, busy, onAction }: { auth: ProviderAuth; busy: boolean; onAction: (action: string, body?: unknown) => void }) {
@@ -107,8 +203,8 @@ function ProviderControl({ auth, busy, onAction }: { auth: ProviderAuth; busy: b
   const phase = auth.flow?.phase
   return <div className="rounded-2xl border border-border p-4"><div className="flex items-start justify-between gap-3"><div><p className="font-medium">{auth.id === "codex" ? "Codex" : "Claude Code"}</p><p className="mt-1 text-xs text-muted-foreground">{auth.installed ? `CLI 已安装 · ${auth.authStatus}` : "CLI 尚未安装"} · 管理员本人</p></div><span className="rounded-full bg-muted px-2.5 py-1 text-xs">不可分配</span></div>
     {phase === "waiting_for_approval" && <div className="mt-3 rounded-xl bg-muted/60 p-3 text-sm">{auth.flow?.verificationUrl && <a className="text-primary underline" href={auth.flow.verificationUrl} target="_blank" rel="noreferrer">打开官方授权页面</a>}{auth.flow?.userCode && <p className="mt-1 font-mono text-base">{auth.flow.userCode}</p>}</div>}
-    {phase === "waiting_for_code_entry" && <form className="mt-3 flex gap-2" onSubmit={(e) => { e.preventDefault(); onAction("submit", { code }); setCode("") }}><Input aria-label="授权回调码" placeholder="粘贴授权码" value={code} onChange={(e) => setCode(e.target.value)}/><Button size="sm" disabled={busy || !code}>提交</Button></form>}
-    {auth.flow?.message && <p className="mt-2 text-sm text-destructive">{auth.flow.message}</p>}
+    {phase === "waiting_for_code_entry" && <div className="mt-3 space-y-2 rounded-xl bg-muted/60 p-3">{auth.flow.verificationUrl && <a className="text-sm text-primary underline" href={auth.flow.verificationUrl} target="_blank" rel="noreferrer">打开官方授权页面</a>}<form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); onAction("submit", { code }); setCode("") }}><Input aria-label="授权回调码" placeholder="粘贴授权码" value={code} onChange={(e) => setCode(e.target.value)}/><Button size="sm" disabled={busy || !code}>提交</Button></form></div>}
+    {auth.flow?.phase === "error" && <p className="mt-2 text-sm text-destructive">{auth.flow.message}</p>}
     <div className="mt-3 flex flex-wrap gap-2">{!auth.installed ? <Button size="sm" variant="outline" disabled={busy} onClick={() => onAction("install")}>安装 CLI</Button> : <><Button size="sm" disabled={busy || phase === "starting" || phase === "finishing"} onClick={() => onAction("start")}>{phase && phase !== "idle" && phase !== "error" ? "授权进行中" : "开始官方授权"}</Button><Button size="sm" variant="outline" disabled={busy || !phase || phase === "idle"} onClick={() => onAction("cancel")}>取消</Button><Button size="sm" variant="outline" disabled={busy || auth.authStatus !== "signed_in"} onClick={() => onAction("logout")}>退出授权</Button></>}</div>
   </div>
 }

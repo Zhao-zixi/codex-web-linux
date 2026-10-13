@@ -364,13 +364,15 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     },
   })
   const refreshManagedAuthAvailability = async () => {
+    if (!process.env.KANNA_GATEWAY_URL || !process.env.KANNA_GATEWAY_ACCOUNT_TOKEN) {
+      providerAuth.setManagedAvailability("codex", false)
+      providerAuth.setManagedAvailability("claude", false)
+      return
+    }
     try {
       const access = await getManagedProviderAccess()
       for (const provider of ["codex", "claude"] as const) {
-        const projects = store.listProjects()
-        const hasOwn = await hasOwnProviderCredentials(provider, { homeDir: homedir() }) || (await Promise.all(
-          projects.map((project) => hasOwnProviderCredentials(provider, { homeDir: homedir(), projectDir: project.localPath }))
-        )).some(Boolean)
+        const hasOwn = await hasOwnProviderCredentials(provider, { homeDir: homedir() })
         providerAuth.setManagedAvailability(provider, !hasOwn && access.assigned.some((connection) => connection.provider === provider))
       }
     } catch {

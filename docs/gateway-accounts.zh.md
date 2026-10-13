@@ -8,17 +8,17 @@
 
 未发送的聊天草稿、聊天标签、差异选择和左右侧栏/终端布局保存在浏览器本机，并按网关用户隔离；同一用户刷新页面后会恢复自己的草稿和布局，不会读到另一个用户的数据。退出登录会清理当前用户在本机保存的这一组状态，不会删除其他用户的浏览器状态或服务器工作区。
 
-首次启用网关时会创建 `admin` 管理员账号，并生成随机初始密码，写入权限为 `0600` 的部署状态文件。部署前应确认实际文件路径，再通过独立安全渠道交给管理员；首次登录后应在管理页为 `admin` 设置新密码。不要把密码内容复制到仓库、部署日志、聊天记录或工单。elim、zzx 的登录密码沿用启用网关前已有的 app 密码；迁移不得重新初始化或重建 manifest。
+首次启用网关时会创建 `admin` 管理员账号，并生成随机初始密码，保存在 `.remote-workspace/secrets/gateway-admin-password`（文件权限 `0600`）。管理员通过独立安全渠道获取该密码后登录。不要把密码内容复制到仓库、部署日志、聊天记录或工单。elim、zzx 的登录密码沿用启用网关前已有的 app 密码；迁移不得重新初始化或重建 manifest。
 
 管理员页面可以启用、停用用户，重置用户密码，为每位用户单独授予或撤销连接。此版本没有动态创建用户的界面。离开团队的用户应先停用，再处理其连接授权；账号状态不会自动清除个人 HOME 或历史项目。
 
 ## 管理员 CLI 授权与共享 API 连接
 
-管理页面中的 Codex/Claude 授权用于管理员自己的 CLI 工作区。网页登录官方 CLI 授权后，认证资料留在网关专用 HOME，标记为不可分配；它不是共享连接，也不会让普通用户使用管理员个人订阅。管理员可从页面安装、登录、退出相应 CLI。
+管理员可在管理页面安装 Codex/Claude CLI、完成官方授权、查看授权状态或退出授权。CLI 的认证资料保存在网关专用 HOME 中；管理员目前没有可进入的 Kanna 工作区来运行这些 CLI。个人 ChatGPT/Claude 订阅授权标记为不可分配，不会让普通用户使用管理员个人订阅。多人共享请配置可分配的官方 API Key 连接。
 
-共享连接目前接受 OpenAI API Key（Codex）或 Anthropic API Key（Claude）。创建后，密钥不会再次显示在管理页面；轮换时提交新 Key，用户看到连接名称与状态而不是密钥。管理员可为连接改名、停用、重新启用或删除，也可逐用户授予和撤销。停用、删除连接或撤销用户授权会中止该连接上正在进行的代理请求；删除连接同时移除所有用户的对应授权。Key 只用于官方 API 的 Responses 或 Messages 请求，不代表已购买额度、已开通组织权限或模型可用。
+共享连接目前接受 OpenAI API Key（Codex）或 Anthropic API Key（Claude）。创建后，密钥不会再次显示在管理页面；轮换时提交新 Key，用户看到连接名称与状态而不是密钥。管理员可停用、重新启用或删除连接，也可逐用户授予和撤销。停用、删除连接或撤销用户授权会中止该连接上正在进行的代理请求；删除连接同时移除所有用户的对应授权。Key 只用于官方 API 的 Responses 或 Messages 请求，不代表已购买额度、已开通组织权限或模型可用。
 
-用户自己的凭据优先于网关分配的 API 连接。Codex 自配包括用户 HOME 中的 `OPENAI_API_KEY` 或 `.codex/auth.json` 凭据；Claude 自配包括 `ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、用户 HOME 的 Claude OAuth 凭据，以及项目 `.claude/settings.local.json` 中的 `apiKeyHelper` 或凭据环境变量。系统只判断凭据是否存在，不保证其有效性：如果用户配置的凭据过期或无效，系统不会暗中改用管理员的 API 额度。用户需要自行修复或移除自己的凭据，才会使用已分配的共享连接。撤销分配不会删除用户自己的登录态或 API Key。
+用户自己的凭据优先于网关分配的 API 连接。Codex 自配包括用户 HOME 中的 `OPENAI_API_KEY` 或 `.codex/auth.json` 凭据；Claude 自配包括 `ANTHROPIC_API_KEY`、`ANTHROPIC_AUTH_TOKEN`、`CLAUDE_CODE_OAUTH_TOKEN`、用户 HOME 的 Claude OAuth 凭据，以及用户 HOME 下 `.claude/settings.json`、`.claude/settings.local.json` 和项目中的 `.claude/settings.json`、`.claude/settings.local.json` 所配置的 `apiKeyHelper`、凭据环境变量或自定义服务商设置。系统只判断凭据是否存在，不保证其有效性：如果用户配置的凭据过期或无效，系统不会暗中改用管理员的 API 额度。用户需要自行修复或移除自己的凭据，才会使用已分配的共享连接。撤销分配不会删除用户自己的登录态或 API Key。
 
 ## 纯 HTTP 的限制
 

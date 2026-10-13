@@ -79,10 +79,9 @@ export class GatewayStore {
         await chown(this.statePath, this.owner.uid, this.owner.gid)
       }
       const parsed = JSON.parse(await readFile(this.statePath, "utf8")) as GatewayState
-      if (parsed.version !== 1 || !Array.isArray(parsed.users) || !Array.isArray(parsed.sessions)) {
+      if (parsed.version !== 1 || !Array.isArray(parsed.users) || !Array.isArray(parsed.sessions) || !Array.isArray(parsed.connections)) {
         throw new Error("Unsupported or invalid gateway state")
       }
-      if (!Array.isArray(parsed.connections)) parsed.connections = []
       this.validateState(parsed)
       this.state = parsed
     } catch (error) {

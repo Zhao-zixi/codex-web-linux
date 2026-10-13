@@ -108,7 +108,7 @@ function PasswordScreen({
                 {error}
               </div>
             ) : null}
-            {usernameRequired ? <Input id="kanna-username" autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="用户名" disabled={submitting} className="h-11 rounded-2xl bg-background"/> : null}
+            {usernameRequired ? <Input id="kanna-username" aria-label="用户名" autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} placeholder="用户名" disabled={submitting} className="h-11 rounded-2xl bg-background"/> : null}
             <Input
               id="kanna-password"
               type="password"
@@ -173,7 +173,7 @@ function useAppAuthState() {
     const payload = await response.json() as Partial<AuthStatusResponse>
     setUsernameRequired(payload.usernameRequired === true)
     if (payload.authMode) setClientAuthMode(payload.authMode)
-    if (payload.authMode === "bearer" && payload.usernameRequired === true) {
+    if (payload.authMode === "bearer") {
       if (shouldUseBearerServiceWorker()) {
         try {
           await ensureBearerServiceWorker()
@@ -193,7 +193,7 @@ function useAppAuthState() {
         if (legacyStatus.ok) Object.assign(payload, await legacyStatus.json())
       } catch {}
     }
-    if (payload.authMode === "bearer") {
+    if (payload.authMode === "bearer" && payload.usernameRequired === true) {
       try {
         await bindGatewayUserStorage(payload.authenticated && payload.user?.id ? payload.user.id : null)
       } catch {
@@ -554,7 +554,7 @@ export function App() {
     return <PasswordScreen error={auth.state.error} usernameRequired={auth.usernameRequired} onSubmit={auth.submitPassword} />
   }
 
-  if (auth.state.user?.role === "admin") return <TooltipProvider><AdminPage /></TooltipProvider>
+  if (auth.state.user?.role === "admin") return <TooltipProvider><AppDialogProvider><AdminPage /></AppDialogProvider></TooltipProvider>
 
   return (
     <>

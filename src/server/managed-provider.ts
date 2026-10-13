@@ -144,7 +144,10 @@ export async function hasOwnProviderCredentials(provider: ManagedProviderId, opt
   const claudeSettings = [
     `${claudeDir}/settings.json`,
     `${claudeDir}/settings.local.json`,
-    ...(options.projectDir ? [`${options.projectDir}/.claude/settings.local.json`] : []),
+    ...(options.projectDir ? [
+      `${options.projectDir}/.claude/settings.json`,
+      `${options.projectDir}/.claude/settings.local.json`,
+    ] : []),
   ]
   for (const file of claudeSettings) {
     const settings = await readJson(file)

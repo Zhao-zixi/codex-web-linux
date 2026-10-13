@@ -25,12 +25,15 @@ interface GatewayAccountConfig {
 
 interface GatewayConfig {
   publicOrigin: string
+  internalOrigin?: string
   accounts: GatewayAccountConfig[]
   stateDirectory: string
   adminHomeDirectory: string
   clientDirectory: string
   host?: string
   port?: number
+  providerControl?: GatewayProviderControl
+  providerFetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 }
 
 interface CachedUpstreamSession {
@@ -44,6 +47,7 @@ interface GatewayTicket {
   accountId: string | null
   origin: string
   expiresAt: number
+  sessionExpiresAt: number
 }
 
 interface GatewaySocketData {
@@ -56,6 +60,8 @@ interface GatewaySocketData {
   failed: boolean
   upstreamTicket?: string
   appUrl?: string
+  expiresAt: number
+  expiryTimer?: ReturnType<typeof setTimeout>
 }
 
 interface GatewaySocket extends ServerWebSocket<GatewaySocketData> {}
@@ -63,7 +69,7 @@ interface GatewaySocket extends ServerWebSocket<GatewaySocketData> {}
 interface GatewayProviderControl {
   getStatuses(): Promise<AdminProviderAuthStatus[]>
   start(provider: ManagedProvider): Promise<unknown>
-  submit(provider: ManagedProvider, code: string): Promise<unknown>
+  submit(provider: ManagedProvider, code: string): Promise<void>
   cancel(provider: ManagedProvider): Promise<unknown>
   logout(provider: ManagedProvider): Promise<unknown>
   install(provider: ManagedProvider): Promise<unknown>
@@ -135,6 +141,12 @@ function validateConfig(config: GatewayConfig) {
   if (origin.protocol !== "http:" || origin.origin !== config.publicOrigin || origin.pathname !== "/") {
     throw new Error("Gateway public origin must be a plain HTTP origin")
   }
+  if (config.internalOrigin) {
+    const internal = new URL(config.internalOrigin)
+    if (internal.protocol !== "http:" || internal.origin !== config.internalOrigin || internal.pathname !== "/") {
+      throw new Error("Gateway internal origin must be a plain HTTP origin")
+    }
+  }
   const accounts = new Set<string>()
   for (const account of config.accounts) {
     if (!safeAccountId(account.id) || accounts.has(account.id)) throw new Error("Gateway account IDs must be unique valid names")
@@ -176,10 +188,40 @@ function connectionProxyPath(provider: ManagedProvider, pathname: string) {
   return INTERNAL_PROVIDER_PATHS[provider].some((pattern) => pattern.test(pathname))
 }
 
+export function fixedUpstreamUrl(baseUrl: string, pathname: string, search = "") {
+  const target = new URL(baseUrl)
+  const expectedOrigin = target.origin
+  target.pathname = pathname
+  target.search = search
+  if (target.origin !== expectedOrigin) throw new Error("Upstream URL origin changed")
+  return target
+}
+
 function bytesOf(data: string | Buffer | ArrayBuffer | ArrayBufferView) {
   if (typeof data === "string") return Buffer.byteLength(data)
   if (data instanceof ArrayBuffer) return data.byteLength
   return data.byteLength
+}
+
+async function readBoundedText(response: Response, maxBytes: number): Promise<string | null> {
+  if (!response.body) return ""
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let size = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) return new TextDecoder().decode(Buffer.concat(chunks, size))
+      size += value.byteLength
+      if (size > maxBytes) {
+        await reader.cancel()
+        return null
+      }
+      chunks.push(value)
+    }
+  } finally {
+    reader.releaseLock()
+  }
 }
 
 function upstreamWsUrl(appUrl: string) {
@@ -203,6 +245,7 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
   await store.listUsers()
   const accounts = mapAccounts(config)
   const publicOrigin = new URL(config.publicOrigin).origin
+  const internalOrigin = new URL(config.internalOrigin ?? process.env.KANNA_GATEWAY_URL ?? "http://gateway:3210").origin
   const upstreamSessions = new Map<string, CachedUpstreamSession>()
   const upstreamSessionInflight = new Map<string, Promise<CachedUpstreamSession>>()
   const wsTickets = new Map<string, GatewayTicket>()
@@ -213,8 +256,10 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
   const pendingWsBySession = new Map<string, Set<AbortController>>()
   const pendingWsOwners = new WeakMap<AbortController, string>()
   let passwordChecksInFlight = 0
-  const { createAdminProviderControl } = await import("../gateway-provider-control")
-  const providerControl = createAdminProviderControl({ homeDir: config.adminHomeDirectory }) as GatewayProviderControl
+  const providerControl = config.providerControl ?? await (async () => {
+    const { createAdminProviderControl } = await import("../gateway-provider-control")
+    return createAdminProviderControl({ homeDir: config.adminHomeDirectory }) as GatewayProviderControl
+  })()
 
   async function getUpstreamSession(accountId: string, force = false): Promise<CachedUpstreamSession> {
     const account = accounts.get(accountId)
@@ -323,10 +368,17 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
     const currentSession = await store.resolveSessionHash(sessionHash)
     if (!currentSession || currentSession.user.id !== user.id) return jsonError("Unauthorized", 401)
     const incoming = new URL(request.url)
-    const target = new URL(`${incoming.pathname}${incoming.search}`, account.appUrl)
+    let target: URL
+    try {
+      target = fixedUpstreamUrl(account.appUrl, incoming.pathname, incoming.search)
+    } catch {
+      return jsonError("Workspace unavailable", 503)
+    }
     const headers = new Headers(request.headers)
-    for (const name of ["cookie", "host", "authorization", "proxy-authorization", "connection", "transfer-encoding", "sec-websocket-key", "sec-websocket-protocol", "sec-websocket-version"]) {
-      headers.delete(name)
+    for (const name of [...headers.keys()]) {
+      const lower = name.toLowerCase()
+      if (["cookie", "host", "authorization", "proxy-authorization", "connection", "transfer-encoding", "sec-websocket-key", "sec-websocket-protocol", "sec-websocket-version"].includes(lower) ||
+        lower.startsWith("proxy-") || lower.startsWith("x-kanna-") || lower.startsWith("x-forwarded-") || lower === "x-real-ip") headers.delete(name)
     }
     headers.set("Authorization", `Bearer ${upstreamSession.token}`)
     headers.set("Host", new URL(publicOrigin).host)
@@ -366,6 +418,8 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
     const accessMatch = url.pathname === "/internal/provider-access"
     const providerMatch = url.pathname.match(/^\/internal\/providers\/([a-f0-9]{32})(\/.*)$/)
     if (!accessMatch && !providerMatch) return null
+    const origin = request.headers.get("origin")
+    if (url.origin !== internalOrigin || (origin !== null && origin !== internalOrigin)) return jsonError("Misdirected request", 421)
     const configuredAccount = await authenticateAccountToken(request)
     if (!configuredAccount) return jsonError("Unauthorized", 401)
     if (accessMatch) {
@@ -420,7 +474,12 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
     controllers.add(controller)
     activeProviderRequests.set(connectionId, controllers)
     const targetBase = provider === "codex" ? "https://api.openai.com" : "https://api.anthropic.com"
-    const target = new URL(suffix, targetBase)
+    let target: URL
+    try {
+      target = fixedUpstreamUrl(targetBase, suffix)
+    } catch {
+      return jsonError("Provider unavailable", 502)
+    }
     const headers = new Headers()
     for (const name of ["content-type", "accept", "anthropic-version", "anthropic-beta", "openai-beta"]) {
       const value = request.headers.get(name)
@@ -439,9 +498,10 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
       const currentUser = await store.getUserByAccount(accountId)
       const currentConnection = (await store.getAssignedConnectionsForAccount(accountId)).find((item) => item.id === connectionId)
       if (!currentUser || currentUser.id !== userId || !currentConnection || currentConnection.apiKey !== apiKey || currentConnection.provider !== provider) {
+        release()
         return jsonError("Provider access unavailable", 403)
       }
-      const response = await fetch(target, {
+      const response = await (config.providerFetch ?? fetch)(target, {
         method: request.method,
         headers,
         body: ["GET", "HEAD"].includes(request.method.toUpperCase()) ? undefined : request.body,
@@ -459,8 +519,22 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
         release()
         return jsonError("Provider redirect blocked", 502)
       }
-      const outputHeaders = new Headers(response.headers)
-      for (const name of ["set-cookie", "www-authenticate", "proxy-authenticate", "location"]) outputHeaders.delete(name)
+      if (!response.ok) {
+        const text = await readBoundedText(response, 64 * 1024)
+        release()
+        if (text === null) return jsonError("Provider request failed", response.status)
+        const outputHeaders = new Headers()
+        const contentType = response.headers.get("content-type")
+        if (contentType?.startsWith("application/json")) outputHeaders.set("Content-Type", contentType)
+        outputHeaders.set("Cache-Control", "no-store")
+        const safeText = text.includes(apiKey) ? text.split(apiKey).join("[redacted]") : text
+        return new Response(safeText, { status: response.status, headers: outputHeaders })
+      }
+      const outputHeaders = new Headers()
+      for (const name of ["content-type", "retry-after"]) {
+        const value = response.headers.get(name)
+        if (value) outputHeaders.set(name, value)
+      }
       outputHeaders.set("Cache-Control", "no-store")
       if (!response.body) {
         release()
@@ -587,7 +661,8 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
         if (operation === "submit") {
           const body = await readJson<{ code?: unknown }>(request)
           if (!body || typeof body.code !== "string") return jsonError("Invalid request", 400)
-          return Response.json(await providerControl.submit(provider, body.code), { headers: { "Cache-Control": "no-store" } })
+          await providerControl.submit(provider, body.code)
+          return Response.json({ ok: true }, { headers: { "Cache-Control": "no-store" } })
         }
         if (operation === "cancel") return Response.json((await providerControl.cancel(provider)) ?? { ok: true }, { headers: { "Cache-Control": "no-store" } })
         if (operation === "logout") return Response.json((await providerControl.logout(provider)) ?? { ok: true }, { headers: { "Cache-Control": "no-store" } })
@@ -601,6 +676,9 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
 
   async function handleRequest(request: Request, server: Server<GatewaySocketData>) {
     const url = new URL(request.url)
+    if (url.pathname === "/internal/provider-access" || url.pathname.startsWith("/internal/providers/")) {
+      return (await handleInternal(request, url)) ?? jsonError("Not found", 404)
+    }
     if (url.origin !== publicOrigin) return jsonError("Misdirected request", 421)
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: { Allow: "GET, HEAD, POST, PATCH, PUT, DELETE, OPTIONS" } })
     if (url.pathname === "/auth/status") {
@@ -682,12 +760,11 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
         accountId: auth.user.accountId ?? null,
         origin: publicOrigin,
         expiresAt: Date.now() + WS_TICKET_TTL_MS,
+        sessionExpiresAt: auth.session.expiresAt,
       })
       return Response.json({ ticket } satisfies { ticket: string }, { headers: { "Cache-Control": "no-store" } })
     }
-    if (url.pathname === "/internal/provider-access" || url.pathname.startsWith("/internal/providers/")) {
-      return (await handleInternal(request, url)) ?? jsonError("Not found", 404)
-    }
+    if (url.pathname.startsWith("/auth/")) return jsonError("Not found", 404)
     if (url.pathname.startsWith("/api/admin/")) {
       if (request.method !== "GET" && !requestHasExpectedOrigin(request, publicOrigin)) return jsonError("Forbidden", 403)
       const auth = await authorize(request)
@@ -709,7 +786,7 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
       const ticket = ticketProtocol.slice("kanna.ticket.".length)
       const data = wsTickets.get(ticket)
       wsTickets.delete(ticket)
-      if (!data || data.expiresAt <= Date.now() || data.origin !== publicOrigin) return jsonError("Unauthorized", 401)
+      if (!data || data.expiresAt <= Date.now() || data.sessionExpiresAt <= Date.now() || data.origin !== publicOrigin) return jsonError("Unauthorized", 401)
       const resolved = await store.resolveSessionHash(data.tokenHash)
       if (!resolved || resolved.user.id !== data.userId || !resolved.user.accountId || !data.accountId) return jsonError("Unauthorized", 401)
       const app = accounts.get(resolved.user.accountId)
@@ -730,7 +807,8 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
         if (pending.size === 0) pendingWsBySession.delete(data.tokenHash)
         return jsonError("Workspace unavailable", 503)
       }
-      if (pendingBridge.signal.aborted || !(await store.resolveSessionHash(data.tokenHash))) {
+      const sessionAfterLogin = await store.resolveSessionHash(data.tokenHash)
+      if (pendingBridge.signal.aborted || data.sessionExpiresAt <= Date.now() || !sessionAfterLogin || sessionAfterLogin.user.id !== data.userId) {
         pending.delete(pendingBridge)
         if (pending.size === 0) pendingWsBySession.delete(data.tokenHash)
         return jsonError("Unauthorized", 401)
@@ -754,7 +832,7 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
       pending.delete(pendingBridge)
       if (pending.size === 0) pendingWsBySession.delete(data.tokenHash)
       const latestSession = await store.resolveSessionHash(data.tokenHash)
-      if (pendingBridge.signal.aborted || !latestSession || latestSession.user.id !== data.userId || typeof upstreamPayload.ticket !== "string") return jsonError("Unauthorized", 401)
+      if (pendingBridge.signal.aborted || data.sessionExpiresAt <= Date.now() || !latestSession || latestSession.user.id !== data.userId || typeof upstreamPayload.ticket !== "string") return jsonError("Unauthorized", 401)
       const socketData: GatewaySocketData = {
         sessionTokenHash: data.tokenHash,
         userId: resolved.user.id,
@@ -765,6 +843,7 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
         failed: false,
         upstreamTicket: upstreamPayload.ticket,
         appUrl: app.appUrl,
+        expiresAt: data.sessionExpiresAt,
       }
       const upgraded = server.upgrade(request, {
         headers: { "Sec-WebSocket-Protocol": "kanna.ws.v1" },
@@ -796,9 +875,17 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
         return jsonError("Gateway request failed", 500)
       }
     },
-    websocket: {
+      websocket: {
+      backpressureLimit: MAX_WS_QUEUE_BYTES,
+      closeOnBackpressureLimit: true,
       async open(socket) {
         const data = socket.data
+        const remaining = data.expiresAt - Date.now()
+        if (remaining <= 0) {
+          socket.close(1008, "Ticket expired")
+          return
+        }
+        data.expiryTimer = setTimeout(() => socket.close(1008, "Session expired"), remaining)
         const sockets = socketsBySession.get(data.sessionTokenHash) ?? new Set<GatewaySocket>()
         sockets.add(socket)
         socketsBySession.set(data.sessionTokenHash, sockets)
@@ -808,7 +895,7 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
           return
         }
         const current = await store.resolveSessionHash(data.sessionTokenHash)
-        if (!current || current.user.id !== data.userId || socket.readyState !== WebSocket.OPEN) {
+        if (!current || current.user.id !== data.userId || data.expiresAt <= Date.now() || socket.readyState !== WebSocket.OPEN) {
           socket.close(1008, "Session ended")
           return
         }
@@ -820,12 +907,32 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
         data.upstream = upstream
         upstream.binaryType = "arraybuffer"
         upstream.onopen = () => {
-          for (const message of data.queued) upstream.send(message)
+          for (const message of data.queued) {
+            if (upstream.bufferedAmount > MAX_WS_QUEUE_BYTES) {
+              data.failed = true
+              socket.close(1013, "Gateway backpressure limit")
+              upstream.close()
+              return
+            }
+            upstream.send(message)
+          }
           data.queued = []
           data.queuedBytes = 0
         }
         upstream.onmessage = (event) => {
-          if (socket.readyState === WebSocket.OPEN) socket.send(event.data as string | ArrayBuffer)
+          if (data.expiresAt <= Date.now()) {
+            socket.close(1008, "Session expired")
+            upstream.close()
+            return
+          }
+          if (socket.readyState === WebSocket.OPEN) {
+            if (socket.getBufferedAmount() > MAX_WS_QUEUE_BYTES) {
+              socket.close(1013, "Gateway backpressure limit")
+              upstream.close()
+              return
+            }
+            socket.send(event.data as string | ArrayBuffer)
+          }
         }
         upstream.onerror = () => {
           data.failed = true
@@ -837,8 +944,18 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
       },
       message(socket, message) {
         const data = socket.data
+        if (data.expiresAt <= Date.now()) {
+          socket.close(1008, "Session expired")
+          data.upstream?.close()
+          return
+        }
         const upstream = data.upstream
         if (upstream?.readyState === WebSocket.OPEN) {
+          if (upstream.bufferedAmount > MAX_WS_QUEUE_BYTES) {
+            socket.close(1013, "Gateway backpressure limit")
+            upstream.close()
+            return
+          }
           upstream.send(message)
           return
         }
@@ -854,6 +971,7 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
       },
       close(socket) {
         const data = socket.data
+        if (data.expiryTimer) clearTimeout(data.expiryTimer)
         data.upstream?.close()
         const sockets = socketsBySession.get(data.sessionTokenHash)
         sockets?.delete(socket)

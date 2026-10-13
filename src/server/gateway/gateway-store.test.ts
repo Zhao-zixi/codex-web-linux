@@ -63,4 +63,14 @@ describe("GatewayStore", () => {
     expect(await store.getAssignedConnections(admin.id)).toEqual([])
     expect(await store.setUserConnections(admin.id, [connection.id])).toBeNull()
   })
+
+  test("fails closed when persisted connection state has an invalid type", async () => {
+    const { directory, store } = await createStore()
+    await store.listUsers()
+    const statePath = path.join(directory, "gateway-state.json")
+    const state = JSON.parse(await readFile(statePath, "utf8")) as Record<string, unknown>
+    state.connections = { unexpected: true }
+    await Bun.write(statePath, JSON.stringify(state))
+    await expect(new GatewayStore(directory).listUsers()).rejects.toThrow("Unsupported or invalid gateway state")
+  })
 })

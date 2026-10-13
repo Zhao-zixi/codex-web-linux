@@ -261,6 +261,20 @@ export class GatewayStore {
     return user ? { id: user.id, authVersion: user.authVersion } : null
   }
 
+  async getNativeAuthorizationSnapshot(accountId: string, connectionId: string) {
+    const state = await this.loadState()
+    const user = state.users.find((item) => item.role === "user" && item.accountId === accountId && item.enabled)
+    if (!user || !user.connectionIds.includes(connectionId)) return null
+    const connection = state.connections.find((item) => item.id === connectionId && item.kind === "native" && item.enabled)
+    if (!connection) return null
+    return {
+      userId: user.id,
+      authVersion: user.authVersion,
+      connectionId: connection.id,
+      provider: connection.provider,
+    }
+  }
+
   async createConnection(args: { name: string; provider: ManagedProvider; apiKey: string }) {
     if (!args.name.trim() || args.name.length > 80) throw new Error("Connection name must be 1 to 80 characters")
     if (args.provider !== "codex" && args.provider !== "claude") throw new Error("Unsupported managed provider")

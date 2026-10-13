@@ -988,18 +988,21 @@ export class CodexAppServerManager {
           experimentalApi: true,
         },
       } satisfies InitializeParams)
+      this.assertSessionContextCurrent(context)
       this.writeMessage(context, {
         method: "initialized",
       })
 
       if (managedProvider?.kind === "native") {
         const token = await this.getManagedCodexToken(managedProvider, false)
+        this.assertSessionContextCurrent(context)
         await this.sendRequest(context, "account/login/start", {
           type: "chatgptAuthTokens",
           accessToken: token.accessToken,
           chatgptAccountId: token.chatgptAccountId,
           ...(token.chatgptPlanType ? { chatgptPlanType: token.chatgptPlanType } : {}),
         })
+        this.assertSessionContextCurrent(context)
       }
 
       // Resume and fork accept MCP config, but this CLI only accepts dynamic tools on thread/start.
@@ -1068,6 +1071,7 @@ export class CodexAppServerManager {
         response = await this.sendRequest<ThreadStartResponse>(context, "thread/start", threadParams)
       }
 
+      this.assertSessionContextCurrent(context)
       context.sessionToken = response.thread.id
       return { sessionToken: context.sessionToken, resumeFellBack }
     } catch (error) {
@@ -1361,16 +1365,17 @@ export class CodexAppServerManager {
     if (requestMethod === "account/chatgptAuthTokens/refresh" && context.managedProvider?.kind === "native") {
       try {
         const token = await this.getManagedCodexToken(context.managedProvider, true)
+        this.assertSessionContextCurrent(context)
         this.writeMessage(context, {
           id: request.id,
-          result: { authToken: {
+          result: {
             accessToken: token.accessToken,
             chatgptAccountId: token.chatgptAccountId,
             ...(token.chatgptPlanType ? { chatgptPlanType: token.chatgptPlanType } : {}),
-          } },
+          },
         })
       } catch {
-        this.writeMessage(context, { id: request.id, error: { message: "Managed Codex authorization refresh failed" } })
+        this.writeMessage(context, { id: request.id, error: { code: -32000, message: "Managed Codex authorization refresh failed" } })
       }
       return
     }
@@ -1527,6 +1532,10 @@ export class CodexAppServerManager {
       chatgptPlanType: provider.chatgptPlanType,
     }
     throw new Error("Managed Codex token is missing")
+  }
+
+  private assertSessionContextCurrent(context: SessionContext) {
+    if (context.closed || this.sessions.get(context.chatId) !== context) throw new Error("Codex session closed")
   }
 
   private async handleNotification(context: SessionContext, notification: ServerNotification) {

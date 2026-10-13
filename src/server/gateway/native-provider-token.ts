@@ -24,6 +24,7 @@ interface ClaudeOAuthProfile {
 
 export interface NativeProviderTokenControllerDeps {
   now?: () => number
+  cliTimeoutMs?: number
   codexToken?: (options: { homeDir: string; forceRefresh: boolean; previousAccountId?: string }) => Promise<Omit<Extract<NativeProviderTokenData, { provider: "codex" }>, "provider">>
   claudeRefresh?: (options: { homeDir: string; env: Record<string, string> }) => Promise<void>
 }
@@ -35,6 +36,7 @@ export function createNativeProviderTokenController(args: {
   deps?: NativeProviderTokenControllerDeps
 }) {
   const now = args.deps?.now ?? Date.now
+  const cliTimeoutMs = args.deps?.cliTimeoutMs ?? CLI_TIMEOUT_MS
   const inflight = new Map<ManagedProvider, { key: string; promise: Promise<NativeProviderTokenData> }>()
 
   async function claudeProfile(): Promise<{ path: string; oauth: ClaudeOAuthProfile } | null> {
@@ -80,7 +82,7 @@ export function createNativeProviderTokenController(args: {
   async function getCodexToken(forceRefresh: boolean, previousAccountId?: string): Promise<NativeProviderTokenData> {
     const result = args.deps?.codexToken
       ? await args.deps.codexToken({ homeDir: args.homeDir, forceRefresh, previousAccountId })
-      : await refreshCodexProfile({ homeDir: args.homeDir, env: args.env, forceRefresh, previousAccountId })
+      : await refreshCodexProfile({ homeDir: args.homeDir, env: args.env, forceRefresh, previousAccountId, timeoutMs: cliTimeoutMs, now: now() })
     if (!result.accessToken || result.expiresAt <= now() || !result.chatgptAccountId) {
       throw new Error("Native Codex sign-in required")
     }
@@ -146,6 +148,8 @@ async function refreshCodexProfile(options: {
   env: Record<string, string>
   forceRefresh: boolean
   previousAccountId?: string
+  timeoutMs: number
+  now: number
 }): Promise<{ accessToken: string; expiresAt: number; chatgptAccountId: string; chatgptPlanType?: string }> {
   const binary = resolveCommandPath("codex", options.homeDir)
   if (!binary) throw new Error("Native Codex sign-in required")
@@ -158,7 +162,13 @@ async function refreshCodexProfile(options: {
   const output = child.stdout
   if (!input || !output) throw new Error("Native Codex sign-in required")
   let nextId = 0
+  let closed = false
   const pending = new Map<number, { resolve(value: Record<string, unknown>): void; reject(error: Error): void }>()
+  const failPending = () => {
+    closed = true
+    for (const request of pending.values()) request.reject(new Error("Native Codex sign-in required"))
+    pending.clear()
+  }
   const lines = createInterface({ input: output })
   lines.on("line", (line) => {
     try {
@@ -171,29 +181,45 @@ async function refreshCodexProfile(options: {
       else request.resolve((message.result && typeof message.result === "object" ? message.result : {}) as Record<string, unknown>)
     } catch {}
   })
+  child.once("error", failPending)
+  child.once("close", failPending)
+  input.once("error", failPending)
   const timeout = setTimeout(() => {
-    for (const request of pending.values()) request.reject(new Error("Native Codex sign-in required"))
-    pending.clear()
+    failPending()
     try { child.kill("SIGKILL") } catch {}
-  }, CLI_TIMEOUT_MS)
+  }, options.timeoutMs)
   const request = (method: string, params?: Record<string, unknown>) => new Promise<Record<string, unknown>>((resolve, reject) => {
+    if (closed || child.exitCode !== null) {
+      reject(new Error("Native Codex sign-in required"))
+      return
+    }
     const id = ++nextId
     pending.set(id, { resolve, reject })
-    input.write(`${JSON.stringify({ id, method, ...(params ? { params } : {}) })}\n`)
+    input.write(`${JSON.stringify({ id, method, ...(params ? { params } : {}) })}\n`, (error) => {
+      if (!error) return
+      pending.delete(id)
+      reject(new Error("Native Codex sign-in required"))
+      failPending()
+    })
   })
   try {
     await request("initialize", { clientInfo: { name: "kanna_gateway", title: "Kanna Gateway", version: "1" }, capabilities: { experimentalApi: true } })
-    input.write(`${JSON.stringify({ method: "initialized" })}\n`)
-    const auth = await request("getAuthStatus", { includeToken: true, refreshToken: true })
-    const authToken = typeof auth.authToken === "string" ? auth.authToken : ""
+    await new Promise<void>((resolve, reject) => input.write(`${JSON.stringify({ method: "initialized" })}\n`, (error) => error ? reject(new Error("Native Codex sign-in required")) : resolve()))
+    let auth = await request("getAuthStatus", { includeToken: true, refreshToken: options.forceRefresh })
+    let authToken = typeof auth.authToken === "string" ? auth.authToken : ""
+    if (auth.authMethod !== "chatgpt" && auth.authMethod !== "chatgptAuthTokens") throw new Error("Native Codex sign-in required")
+    if (!options.forceRefresh && (!authToken || jwtExpiry(authToken) <= options.now + TOKEN_REFRESH_WINDOW_MS)) {
+      auth = await request("getAuthStatus", { includeToken: true, refreshToken: true })
+      authToken = typeof auth.authToken === "string" ? auth.authToken : ""
+    }
     if (!authToken || (auth.authMethod !== "chatgpt" && auth.authMethod !== "chatgptAuthTokens")) throw new Error("Native Codex sign-in required")
-    const account = await request("account/read", { refreshToken: true })
+    const account = await request("account/read", { refreshToken: false })
     const accountValue = account.account && typeof account.account === "object" ? account.account as Record<string, unknown> : null
     const routing = account.workspaceRouting && typeof account.workspaceRouting === "object" ? account.workspaceRouting as Record<string, unknown> : null
     const chatgptAccountId = typeof routing?.chatgptAccountId === "string" ? routing.chatgptAccountId : ""
     const chatgptPlanType = typeof accountValue?.planType === "string" ? accountValue.planType : undefined
     const expiresAt = jwtExpiry(authToken)
-    if (!chatgptAccountId || !expiresAt) throw new Error("Native Codex sign-in required")
+    if (!chatgptAccountId || !expiresAt || expiresAt <= options.now + TOKEN_REFRESH_WINDOW_MS) throw new Error("Native Codex sign-in required")
     if (options.previousAccountId && options.previousAccountId !== chatgptAccountId) {
       throw new NativeProviderAccountChangedError()
     }

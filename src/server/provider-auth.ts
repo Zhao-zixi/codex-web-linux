@@ -250,6 +250,8 @@ export interface ProviderAuthManagerDeps {
   sleep?: (ms: number) => Promise<void>
   platform?: NodeJS.Platform
   now?: () => number
+  /** Maximum wait for a cancelled provider CLI child to exit. */
+  cancelLoginWaitMs?: number
 }
 
 // ---------------------------------------------------------------------------
@@ -811,6 +813,21 @@ export class ProviderAuthManager {
     }
     this.teardownFlow(service)
     this.setLogin(service, { phase: "idle" })
+  }
+
+  async cancelLoginAndWait(service: AuthServiceId): Promise<void> {
+    const child = this.flows.get(service)?.child
+    this.cancelLogin(service)
+    if (!child) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const exited = await Promise.race([
+      child.exited.then(() => true, () => true),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(false), this.deps.cancelLoginWaitMs ?? 5_000)
+      }),
+    ])
+    if (timer) clearTimeout(timer)
+    if (!exited) throw new Error(`${AUTH_SERVICE_LABELS[service]} sign-in process did not stop.`)
   }
 
   private teardownFlow(service: AuthServiceId) {

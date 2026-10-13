@@ -19,6 +19,23 @@ export interface AdminProviderAuthStatus {
   flow: AuthLoginFlowState
 }
 
+export function createNativeProviderTokenSingleflight<T>() {
+  const inflight = new Map<AdminProviderId, Map<string, Promise<T>>>()
+  return (provider: AdminProviderId, options: NativeProviderTokenRequest, action: () => Promise<T>): Promise<T> => {
+    const key = `${options.forceRefresh === true}:${options.previousAccountId ?? ""}`
+    const requests = inflight.get(provider) ?? new Map<string, Promise<T>>()
+    inflight.set(provider, requests)
+    const existing = requests.get(key)
+    if (existing) return existing
+    const pending = action().finally(() => {
+      if (requests.get(key) === pending) requests.delete(key)
+      if (requests.size === 0 && inflight.get(provider) === requests) inflight.delete(provider)
+    })
+    requests.set(key, pending)
+    return pending
+  }
+}
+
 /** Keeps administrator CLI OAuth state under a gateway-owned, isolated HOME. */
 export function createAdminProviderControl({ homeDir }: { homeDir: string }) {
   const env = {
@@ -40,7 +57,10 @@ export function createAdminProviderControl({ homeDir }: { homeDir: string }) {
   }
   const nativeTokens = createNativeProviderTokenController({ homeDir, env })
   const providerLocks = new Map<AdminProviderId, Promise<void>>()
+  const singleflightNativeToken = createNativeProviderTokenSingleflight<NativeProviderTokenData>()
+  const nativeTokenEpoch = new Map<AdminProviderId, number>([["codex", 0], ["claude", 0]])
   let manager: ProviderAuthManager | null = null
+  let managerPromise: Promise<ProviderAuthManager> | null = null
   let statusesCheckedAt = 0
   let statusRefresh: Promise<void> | null = null
 
@@ -59,11 +79,13 @@ export function createAdminProviderControl({ homeDir }: { homeDir: string }) {
 
   async function getManager() {
     if (manager) return manager
+    if (managerPromise) return managerPromise
+    managerPromise = (async () => {
     await mkdir(homeDir, { recursive: true, mode: 0o700 })
     const deps = createProcessAuthDeps()
     const baseExec = deps.exec
     const baseSpawn = deps.spawnStreaming
-    manager = new ProviderAuthManager({
+    const created = new ProviderAuthManager({
       ...deps,
       resolveCommandPath: (command) => resolveCommandPath(command, homeDir),
       exec: (argv, opts) => baseExec(argv, { ...opts, env: { ...env, ...opts?.env } }),
@@ -94,8 +116,11 @@ export function createAdminProviderControl({ homeDir }: { homeDir: string }) {
       writeLlmProvider: async () => { throw new Error("Admin OAuth does not configure a shared model connection.") },
       fetchLatestNpmVersion: fetchLatestPackageVersion,
     })
-    await Promise.all([manager.probeService("codex"), manager.probeService("claude")])
-    return manager
+    await Promise.all([created.probeService("codex"), created.probeService("claude")])
+    manager = created
+    return created
+    })().finally(() => { managerPromise = null })
+    return managerPromise
   }
 
   function service(provider: AdminProviderId): AuthServiceId { return provider }
@@ -116,9 +141,22 @@ export function createAdminProviderControl({ homeDir }: { homeDir: string }) {
         return { id, installed: value.installed, authStatus: value.authStatus, shareable: false, flow: value.login }
       })
     },
-    async start(provider: AdminProviderId) { await withProviderLock(provider, async () => (await getManager()).startLogin(service(provider))) },
-    async submit(provider: AdminProviderId, code: string) { await withProviderLock(provider, async () => (await getManager()).submitLoginCode(service(provider), code)) },
-    async cancel(provider: AdminProviderId) { await withProviderLock(provider, async () => (await getManager()).cancelLogin(service(provider))) },
+    start(provider: AdminProviderId) {
+      bumpNativeTokenEpoch(provider)
+      return withProviderLock(provider, async () => {
+        const current = await getManager()
+        await current.cancelLoginAndWait(service(provider))
+        current.startLogin(service(provider))
+      })
+    },
+    submit(provider: AdminProviderId, code: string) {
+      bumpNativeTokenEpoch(provider)
+      return withProviderLock(provider, async () => (await getManager()).submitLoginCode(service(provider), code))
+    },
+    cancel(provider: AdminProviderId) {
+      bumpNativeTokenEpoch(provider)
+      return withProviderLock(provider, async () => (await getManager()).cancelLoginAndWait(service(provider)))
+    },
     async install(provider: AdminProviderId) {
       const current = await getManager()
       if (provider === "codex") return current.install("codex")
@@ -128,8 +166,10 @@ export function createAdminProviderControl({ homeDir }: { homeDir: string }) {
       await current.probeService("claude")
     },
     async logout(provider: AdminProviderId) {
+      bumpNativeTokenEpoch(provider)
       const current = await getManager()
       await withProviderLock(provider, async () => {
+        await current.cancelLoginAndWait(service(provider))
         const result = await createProcessAuthDeps().exec(
           provider === "codex" ? ["codex", "logout"] : ["claude", "auth", "logout"],
           { env },
@@ -138,8 +178,9 @@ export function createAdminProviderControl({ homeDir }: { homeDir: string }) {
         await current.probeService(service(provider))
       })
     },
-    async getNativeToken(provider: AdminProviderId, options: NativeProviderTokenRequest): Promise<NativeProviderTokenData> {
-      return withProviderLock(provider, async () => {
+    getNativeToken(provider: AdminProviderId, options: NativeProviderTokenRequest): Promise<NativeProviderTokenData> {
+      const epoch = nativeTokenEpoch.get(provider) ?? 0
+      return singleflightNativeToken(provider, options, () => withProviderLock(provider, async () => {
         const current = await getManager()
         const serviceId = service(provider)
         if (current.getSnapshot().services.find((item) => item.service === serviceId)?.login.phase !== "idle") {
@@ -155,12 +196,17 @@ export function createAdminProviderControl({ homeDir }: { homeDir: string }) {
           if (current.getSnapshot().services.find((item) => item.service === serviceId)?.authStatus !== "signed_in") {
             throw new Error("Native provider sign-in required")
           }
+          if (nativeTokenEpoch.get(provider) !== epoch) throw new Error("Native provider sign-in required")
           return token
         } catch (error) {
           if (error instanceof NativeProviderAccountChangedError) throw error
           throw new Error("Native provider sign-in required")
         }
-      })
+      }))
     },
+  }
+
+  function bumpNativeTokenEpoch(provider: AdminProviderId) {
+    nativeTokenEpoch.set(provider, (nativeTokenEpoch.get(provider) ?? 0) + 1)
   }
 }

@@ -3005,6 +3005,41 @@ describe("shared display tool lifecycle", () => {
 })
 
 describe("managed native provider workers", () => {
+  test("a Claude session returned after its connection is revoked is closed before it can be published", async () => {
+    const store = createFakeStore()
+    const connectionId = "c".repeat(32)
+    let enteredStart!: () => void
+    const startEntered = new Promise<void>((resolve) => { enteredStart = resolve })
+    let finishStart!: (session: any) => void
+    const pendingStart = new Promise<any>((resolve) => { finishStart = resolve })
+    let closed = false
+    const coordinator = new AgentCoordinator({
+      store: store as never,
+      onStateChange: () => {},
+      resolveManagedProvider: async () => ({
+        connectionId, name: "Official Claude", provider: "claude", kind: "native",
+        accessToken: "oauth", expiresAt: 123,
+      }),
+      startClaudeSession: async () => { enteredStart(); return pendingStart },
+    })
+    const starting = (coordinator as any).startClaudeTurn({
+      chatId: "managed-race", localPath: "/managed", model: "sonnet", planMode: false,
+      autoPlan: false, sessionToken: "resume-token", forkSession: false,
+      onToolRequest: async () => ({}),
+    })
+    await startEntered
+    coordinator.stopManagedProviderWorkers(connectionId)
+    finishStart({
+      provider: "claude", stream: new AsyncEventQueue<any>(), interrupt: async () => {},
+      close: () => { closed = true }, sendPrompt: async () => {}, setModel: async () => {},
+      setPermissionMode: async () => {},
+    })
+    await expect(starting).rejects.toThrow("Managed provider access was revoked")
+    expect(closed).toBe(true)
+    expect(coordinator.claudeSessions.has("managed-race")).toBe(false)
+    coordinator.dispose()
+  })
+
   test("Claude receives only the OAuth token and refreshes its session when the token expires", async () => {
     const store = createFakeStore()
     const starts: Array<{ env?: Record<string, string>; sessionToken: string | null; close: () => void; closed: boolean }> = []

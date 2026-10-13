@@ -1125,6 +1125,9 @@ export class AgentCoordinator {
    */
   private readonly foregroundTasks = new Map<string, Map<string, { task: TaskStart; startedAt: number }>>()
   readonly claudeSessions = new Map<string, ClaudeSessionState>()
+  private managedProviderRevokeSequence = 0
+  private managedProviderRevokeAllSequence = 0
+  private readonly managedProviderRevokeByConnection = new Map<string, number>()
   /**
    * Chats with a turn on its way: a start in progress, a queue drain, a steer
    * between its cancel and its new turn. `activeTurns` has a gap at each of
@@ -1251,6 +1254,9 @@ export class AgentCoordinator {
 
   /** Stop only workers started with the revoked managed connection. */
   stopManagedProviderWorkers(connectionId?: string) {
+    const sequence = ++this.managedProviderRevokeSequence
+    if (connectionId) this.managedProviderRevokeByConnection.set(connectionId, sequence)
+    else this.managedProviderRevokeAllSequence = sequence
     for (const [chatId, session] of this.claudeSessions) {
       if (session.managedProviderKey?.startsWith("managed:") && (!connectionId || session.managedProviderKey.startsWith(`managed:${connectionId}:`))) {
         session.session.close()
@@ -1258,6 +1264,12 @@ export class AgentCoordinator {
       }
     }
     this.codexManager.stopManagedProviderSessions(connectionId)
+  }
+
+  private assertManagedProviderNotRevokedSince(connectionId: string, sequence: number) {
+    if (this.managedProviderRevokeAllSequence > sequence || (this.managedProviderRevokeByConnection.get(connectionId) ?? 0) > sequence) {
+      throw new Error("Managed provider access was revoked while starting the session")
+    }
   }
 
   getActiveStatuses() {
@@ -2185,9 +2197,11 @@ export class AgentCoordinator {
         connection,
       })
     } else {
+      const managedProviderStartSequence = this.managedProviderRevokeSequence
       const managedProvider = this.resolveManagedProvider
         ? await this.resolveManagedProvider("codex", project.localPath)
         : null
+      if (managedProvider) this.assertManagedProviderNotRevokedSince(managedProvider.connectionId, managedProviderStartSequence)
       const started = await this.codexManager.startSession({
         chatId: args.chatId,
         cwd: project.localPath,
@@ -2198,6 +2212,7 @@ export class AgentCoordinator {
         pendingForkSessionToken: chat.pendingForkSessionToken,
         managedProvider,
       })
+      if (managedProvider) this.assertManagedProviderNotRevokedSince(managedProvider.connectionId, managedProviderStartSequence)
       if (chat.pendingForkSessionToken && started?.sessionToken) {
         await this.store.setPendingForkSessionToken(args.chatId, null)
       }
@@ -2305,9 +2320,11 @@ export class AgentCoordinator {
     onToolRequest: (request: HarnessToolRequest) => Promise<unknown>
   }): Promise<HarnessTurn> {
     let session = this.claudeSessions.get(args.chatId)
+    const managedProviderStartSequence = this.managedProviderRevokeSequence
     const managedProvider = this.resolveManagedProvider
       ? await this.resolveManagedProvider("claude", args.localPath)
       : null
+    if (managedProvider) this.assertManagedProviderNotRevokedSince(managedProvider.connectionId, managedProviderStartSequence)
     const managedTokenVersion = managedProvider?.accessToken ? createHash("sha256").update(managedProvider.accessToken).digest("hex") : ""
     const managedProviderKey = managedProvider ? `managed:${managedProvider.connectionId}:${managedProvider.kind ?? "api_key"}:${managedProvider.chatgptAccountId ?? ""}:${managedProvider.expiresAt ?? ""}:${managedTokenVersion}` : null
 
@@ -2348,6 +2365,14 @@ export class AgentCoordinator {
             ANTHROPIC_AUTH_TOKEN: managedProvider.accountToken,
           } : undefined,
       })
+      if (managedProvider) {
+        try {
+          this.assertManagedProviderNotRevokedSince(managedProvider.connectionId, managedProviderStartSequence)
+        } catch (error) {
+          started.close()
+          throw error
+        }
+      }
       this.refreshClaudeModelCatalog(started)
 
       session = {

@@ -48,9 +48,14 @@ function ManagedConnectionsSection() {
   const [connections, setConnections] = useState<Array<{ id: string; name: string; provider: "codex" | "claude"; enabled: boolean }>>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState(false)
+  const [unavailable, setUnavailable] = useState(false)
   useEffect(() => {
     let active = true
     void kannaFetch("/api/provider-access", { cache: "no-store" }).then(async (response) => {
+      if (response.status === 404) {
+        if (active) setUnavailable(true)
+        return
+      }
       if (!response.ok) throw new Error("Unable to load managed provider access")
       const payload = await response.json() as { assigned?: typeof connections }
       if (active) setConnections(Array.isArray(payload.assigned) ? payload.assigned : [])
@@ -64,6 +69,7 @@ function ManagedConnectionsSection() {
     await clearGatewayUserLocalState({ clearAuth: true })
     window.location.assign("/")
   }
+  if (unavailable) return null
   return <SettingsGroup title="管理员分配的连接">
     {loading ? <div className="px-4 py-3 text-sm text-muted-foreground">正在读取可用连接…</div> : loadError ? <div role="status" className="px-4 py-3 text-sm text-muted-foreground">暂时无法读取管理员分配的连接，请稍后重试。</div> : connections.length ? <>
       {connections.map((connection) => <SettingsRow key={connection.id} title={connection.name} description={connection.provider === "codex" ? "OpenAI API · 管理员提供" : "Anthropic API · 管理员提供"}>

@@ -4,7 +4,13 @@ export interface ManagedProviderConnection {
   id: string
   name: string
   provider: ManagedProviderId
-  baseUrl: string
+  kind: "api_key" | "native"
+  baseUrl?: string
+  accessToken?: string
+  expiresAt?: number
+  chatgptAccountId?: string
+  chatgptPlanType?: string
+  getToken?: (forceRefresh?: boolean) => Promise<{ accessToken: string; expiresAt: number; chatgptAccountId?: string; chatgptPlanType?: string }>
 }
 
 export interface ProviderAccessSnapshot {
@@ -22,7 +28,33 @@ export async function resolveManagedProvider(provider: ManagedProviderId, option
 }): Promise<ManagedProviderConnection | null> {
   if (await hasOwnProviderCredentials(provider, options)) return null
   const access = await getManagedProviderAccess(options)
-  return access.assigned.find((connection) => connection.provider === provider) ?? null
+  const candidates = access.assigned.filter((connection) => connection.provider === provider)
+  // Preserve self-first, then prefer an assigned official CLI profile over API credentials.
+  const connection = candidates.find((item) => item.kind === "native") ?? candidates.find((item) => item.kind === "api_key")
+  if (!connection || connection.kind === "api_key") return connection ?? null
+  const gatewayUrl = (options.gatewayUrl ?? process.env.KANNA_GATEWAY_URL ?? "").replace(/\/$/, "")
+  const accountToken = options.accountToken ?? process.env.KANNA_GATEWAY_ACCOUNT_TOKEN ?? ""
+  if (!gatewayUrl || !accountToken) return null
+  let currentAccountId: string | undefined
+  const getToken = async (forceRefresh = false) => {
+    const response = await (options.fetchFn ?? fetch)(`${gatewayUrl}/internal/providers/${connection.id}/native-token`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accountToken}`, "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ forceRefresh, ...(connection.provider === "codex" && currentAccountId ? { previousAccountId: currentAccountId } : {}) }),
+      signal: AbortSignal.timeout(8_000),
+    })
+    if (!response.ok) throw new Error(`Managed provider token is unavailable (${response.status}).`)
+    const value = await response.json() as { connectionId?: string; provider?: string; accessToken?: string; expiresAt?: number; chatgptAccountId?: string; chatgptPlanType?: string }
+    if (value.connectionId !== connection.id || value.provider !== provider || typeof value.accessToken !== "string" || !value.accessToken || typeof value.expiresAt !== "number") {
+      throw new Error("Managed provider returned an invalid native token.")
+    }
+    if (connection.provider === "codex" && typeof value.chatgptAccountId !== "string") throw new Error("Managed Codex account identity is missing.")
+    if (connection.provider === "codex" && currentAccountId && currentAccountId !== value.chatgptAccountId) throw new Error("Managed Codex account identity changed.")
+    currentAccountId = value.chatgptAccountId
+    return { accessToken: value.accessToken, expiresAt: value.expiresAt, chatgptAccountId: value.chatgptAccountId, chatgptPlanType: value.chatgptPlanType }
+  }
+  const token = await getToken()
+  return { ...connection, ...token, getToken }
 }
 
 /** Read the account-scoped grant list from the gateway using its revocable proxy token. */
@@ -42,8 +74,9 @@ export async function getManagedProviderAccess(options: {
   const value = await response.json() as Partial<ProviderAccessSnapshot>
   const assigned = Array.isArray(value.assigned) ? value.assigned.filter((item): item is ManagedProviderConnection =>
     Boolean(item && typeof item.id === "string" && typeof item.name === "string" &&
-      (item.provider === "codex" || item.provider === "claude") && typeof item.baseUrl === "string" &&
-      isGatewayProviderProxyUrl(item.baseUrl, item.provider))
+      (item.provider === "codex" || item.provider === "claude") &&
+      (item.kind === "native" || item.kind === "api_key") &&
+      (item.kind === "native" || typeof item.baseUrl === "string" && isGatewayProviderProxyUrl(item.baseUrl, item.provider)))
   ) : []
   return { assigned, selfFirst: true }
 }
@@ -65,6 +98,7 @@ export function managedProviderEnvironment(
   inherited: Record<string, string | undefined> = process.env,
 ): Record<string, string> {
   if (!accountToken) throw new Error("Managed provider token is missing.")
+  if (!connection.baseUrl) throw new Error("Managed API base URL is missing.")
   const env = Object.fromEntries(Object.entries(inherited).filter((entry): entry is [string, string] => typeof entry[1] === "string"))
   if (connection.provider === "claude") {
     env.ANTHROPIC_BASE_URL = connection.baseUrl.replace(/\/$/, "")
@@ -75,6 +109,7 @@ export function managedProviderEnvironment(
 }
 
 export function managedCodexArguments(connection: ManagedProviderConnection): string[] {
+  if (!connection.baseUrl) throw new Error("Managed API base URL is missing.")
   const quoteToml = (value: string) => JSON.stringify(value)
   return [
     "-c", "model_provider='kanna_managed'",

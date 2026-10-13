@@ -126,7 +126,7 @@ kanna --cloudflared <token>        # 使用命名 Cloudflare tunnel
 
 ### 自建远程工作区
 
-Kanna 首版远程工作区通过每账号独立容器、SSH 和用户本机 Mutagen 同步项目，并由网关统一提供账号登录入口。请先阅读[自建远程工作区指南](docs/remote-workspace.md)，了解复用 `fnos.zixizhao.top:8444` 的纯 HTTP 部署与既有数据迁移。HTTP 会明文传输网页和凭据；同 hostname 的 Cookie 作用域不按端口隔离。公网 NAT 和真实模型调用状态仍待部署环境确认。
+Kanna 首版远程工作区通过每账号独立容器、SSH 和用户本机 Mutagen 同步项目，并由网关统一提供账号登录入口。请先阅读[自建远程工作区指南](docs/remote-workspace.md)，了解复用 `fnos.zixizhao.top:8444` 的纯 HTTP 部署与既有数据迁移。网关管理员可分配其管理页已连接的官方 CLI 登录；API key 连接为可选兼容方式。HTTP 会明文传输网页和凭据；同 hostname 的 Cookie 作用域不按端口隔离。公网 NAT 和真实模型调用状态仍待部署环境确认。
 
 网关账号登录、用户连接分配、管理员本人 CLI 授权与可共享 API 凭据的区别，见[网关账号与模型连接说明](docs/gateway-accounts.zh.md)。
 

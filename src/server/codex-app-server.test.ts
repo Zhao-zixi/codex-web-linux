@@ -55,6 +55,38 @@ async function collectStream(stream: AsyncIterable<any>) {
 }
 
 describe("CodexAppServerManager", () => {
+  test("uses native ChatGPT auth tokens in memory and answers app-server refresh requests", async () => {
+    const refreshed: boolean[] = []
+    const process = new FakeCodexProcess((message, child) => {
+      if (message.method === "initialize") child.writeServerMessage({ id: message.id, result: {} })
+      else if (message.method === "account/login/start") child.writeServerMessage({ id: message.id, result: {} })
+      else if (message.method === "thread/start") child.writeServerMessage({ id: message.id, result: { thread: { id: "native-thread" } } })
+    })
+    const manager = new CodexAppServerManager({ spawnProcess: () => process as never })
+    await manager.startSession({
+      chatId: "native", cwd: "/tmp/project", model: "gpt-5.4", sessionToken: null,
+      managedProvider: {
+        connectionId: "a".repeat(32), name: "Admin Codex", kind: "native", provider: "codex",
+        accessToken: "short-lived-access-token", expiresAt: Date.now() + 60_000, chatgptAccountId: "acct-1",
+        getToken: async (forceRefresh = false) => {
+          refreshed.push(forceRefresh)
+          return { accessToken: forceRefresh ? "refreshed-access-token" : "short-lived-access-token", expiresAt: Date.now() + 60_000, chatgptAccountId: "acct-1" }
+        },
+      },
+    })
+    const login = process.messages.find((message: any) => message.method === "account/login/start") as any
+    expect(login.params).toEqual({ type: "chatgptAuthTokens", accessToken: "short-lived-access-token", chatgptAccountId: "acct-1" })
+    process.writeServerMessage({ id: "refresh-1", method: "account/chatgptAuthTokens/refresh", params: {} })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(refreshed).toEqual([false, true])
+    expect(process.messages.find((message: any) => message.id === "refresh-1")).toEqual({
+      id: "refresh-1",
+      result: { authToken: { accessToken: "refreshed-access-token", chatgptAccountId: "acct-1" } },
+    })
+    manager.stopManagedProviderSessions("a".repeat(32))
+    expect(process.killed).toBe(true)
+  })
+
   test("initializes app-server and starts a fresh thread", async () => {
     const process = new FakeCodexProcess((message, child) => {
       if (message.method === "initialize") {

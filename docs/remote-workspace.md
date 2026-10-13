@@ -45,7 +45,7 @@ bun run remote-workspace -- generate
 bun run remote-workspace -- up
 ```
 
-网关初始管理员密码保存于 `.remote-workspace/secrets/gateway-admin-password`（权限 `0600`），只通过受控渠道交付；用户 elim、zzx 继续使用各自的 app 密码。网关身份和连接状态保存在 `.remote-workspace/state/gateway`，管理员 CLI 授权保存在独立的 `.remote-workspace/state/gateway-admin-home`。备份与恢复时须保留这些目录。
+网关初始管理员密码保存于 `.remote-workspace/secrets/gateway-admin-password`（权限 `0600`），只通过受控渠道交付；用户 elim、zzx 继续使用各自的 app 密码。网关身份和连接状态保存在 `.remote-workspace/state/gateway`，管理员 CLI 授权保存在独立的 `.remote-workspace/state/gateway-admin-home`。备份与恢复时须保留这些目录。管理员在管理页连接已有的官方 CLI 登录或完成官方授权后，可将该连接分配给用户；API key 连接是可选方式。真实授权和模型调用须在部署后台完成验证。
 
 `up` 返回后，可先检查本机 Compose 项目中的服务状态：
 
@@ -53,7 +53,7 @@ bun run remote-workspace -- up
 docker compose -f .remote-workspace/compose.yaml ps
 ```
 
-服务处于运行状态只说明容器已启动；还应从用户所在网络打开 `http://fnos.zixizhao.top:8444` 并分别确认账号登录和工作区隔离。实际模型请求是另一项检查：只有用户自配凭据有效，或管理员已配置并分配有效 API Key 时，模型调用才可能成功。入口连通不代表 API 已授权，CLI 登录状态也不代表 API Key 有可用额度。
+服务处于运行状态只说明容器已启动；还应从用户所在网络打开 `http://fnos.zixizhao.top:8444` 并分别确认账号登录和工作区隔离。实际模型请求是另一项检查：用户自配凭据有效，或管理员已连接并分配有效的官方 CLI 登录，或已配置并分配可用 API key 连接时，模型调用才可能成功。入口连通不代表模型授权有效；真实 OAuth 和模型请求仍须在部署环境检查。
 
 如需在启动前检查 Docker、Compose、Mutagen 和状态目录权限，可单独运行 `bun run remote-workspace -- doctor`；该诊断是可选步骤。
 
@@ -219,15 +219,15 @@ bun run remote-workspace -- up
 
 ## 登录 Kanna 与 Codex
 
-启用网关后，在统一入口 `http://fnos.zixizhao.top:8444` 登录。elim、zzx 分别使用其原有 app 密码；管理员使用单独的 `admin` 用户，首次密码见 `.remote-workspace/secrets/gateway-admin-password`。管理页面可停用或恢复这两个现有用户、重置用户密码并管理逐用户连接授权；此版本不会创建额外工作区。不要重跑 `init` 或删除网关状态目录。详细凭据分工见[网关账号与模型连接说明](gateway-accounts.zh.md)。
+启用网关后，在统一入口 `http://fnos.zixizhao.top:8444` 登录。elim、zzx 分别使用其原有 app 密码；管理员使用单独的 `admin` 用户，首次密码见 `.remote-workspace/secrets/gateway-admin-password`。管理页面可停用或恢复这两个现有用户、重置用户密码并管理逐用户连接授权；此版本不会创建额外工作区。不要重跑 `init` 或删除网关状态目录。详细连接和凭据说明见[网关账号与模型连接说明](gateway-accounts.zh.md)。
 
-用户的 Codex 凭据按账号单独设置。用户登录自己的 Kanna 后，可在网页 Terminal（终端进程运行于该账号 app 容器）执行 `codex login --device-auth`，再用自己的浏览器完成设备授权。SSH sidecar 没有 app 的 HOME 或 `.codex`，不要在那里执行登录。管理员 CLI OAuth 应从网关管理页面完成，保存在网关专用 HOME；管理员目前没有可访问的 Kanna workspace，该个人授权也不能分配给普通用户。若管理员按用户请求协助登录，只能在该用户对应的 app 容器操作：
+用户的 Codex 凭据按账号单独设置。用户登录自己的 Kanna 后，可在 Settings → Providers → Accounts 的 Codex 或 Claude Code 行点 `Install`（尚未安装时），然后点 `Log In` 并按页面提示完成官方授权。用户也可在网页 Terminal（终端进程运行于该账号 app 容器）执行 `codex login --device-auth`，再用自己的浏览器完成设备授权。SSH sidecar 没有 app 的 HOME 或 `.codex`，不要在那里执行登录。管理员官方 CLI OAuth 应从网关管理页面完成，保存在网关专用 HOME；管理员可将该登录连接分配给 elim 或 zzx，而无需复制管理员 HOME 或 refresh token 到用户工作区。管理员也可通过管理页为用户配置可选 API key 连接。用户自己的凭据始终优先；如果其凭据失效，Kanna 不会暗中切换到管理员连接。若管理员按用户请求协助用户本人登录，只能在该用户对应的 app 容器操作：
 
 ```sh
 docker compose -f .remote-workspace/compose.yaml exec kanna_elim codex login --device-auth
 ```
 
-该命令只用于 elim 自己的登录流程；zzx 应使用其对应的 `kanna_zzx` 容器。宿主机或 root 的 `~/.codex` 凭据不会复制到容器。不要把 token 粘贴进 Compose、环境变量、工作区或日志。账号的 `.codex` 目录分别持久保存在 `state/<账号>/codex`。网关管理页中的管理员 CLI 授权和可共享 API Key 的区别见[网关账号说明](gateway-accounts.zh.md)。如果用户自配 API Key，应通过隐藏输入或 stdin 提供，不要把 key 写入命令历史或聊天内容。
+该命令只用于 elim 自己的登录流程；zzx 应使用其对应的 `kanna_zzx` 容器。宿主机或 root 的 `~/.codex` 凭据不会复制到容器。不要把 token 粘贴进 Compose、环境变量、工作区或日志。账号的 `.codex` 目录分别持久保存在 `state/<账号>/codex`。管理员官方 CLI 连接和可选 API key 的创建与分配步骤见[网关账号说明](gateway-accounts.zh.md)。如果用户自配 API key，应通过隐藏输入或 stdin 提供，不要把 key 写入命令历史或聊天内容。
 
 托管模式下，新建项目默认使用 `/workspace`，但会尊重用户已经保存的 `New Projects Directory` 设置。已有账号若保存了其他目录，请在设置中将新项目目录改为 `/workspace`，然后从 Projects 页面新建项目；也可直接打开或创建 `/workspace/<项目名>`。Mutagen 同步只准备远端目录，不会自动替 Kanna 选择项目；要让会话在同步目录工作，请从 Kanna 打开对应项目目录。
 

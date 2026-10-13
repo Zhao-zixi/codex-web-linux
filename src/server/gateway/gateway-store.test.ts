@@ -64,6 +64,38 @@ describe("GatewayStore", () => {
     expect(await store.setUserConnections(admin.id, [connection.id])).toBeNull()
   })
 
+  test("creates one native connection per provider without storing credentials and never revives disabled entries", async () => {
+    const { store, directory } = await createStore()
+    const user = await store.createUser({ username: "elim", password: "old-workspace-secret-123", role: "user", accountId: "elim" })
+    const first = await store.createNativeConnection({ name: "Admin Codex", provider: "codex" })
+    const duplicate = await store.createNativeConnection({ name: "Renamed", provider: "codex" })
+    expect(duplicate).toEqual(first)
+    expect(first).toMatchObject({ kind: "native", provider: "codex", shareable: false, enabled: true })
+    const state = JSON.parse(await readFile(path.join(directory, "gateway-state.json"), "utf8")) as { connections: Array<Record<string, unknown>> }
+    expect(state.connections[0]).toMatchObject({ profileId: "admin", kind: "native" })
+    expect(state.connections[0]).not.toHaveProperty("apiKey")
+
+    await store.setUserConnections(user.id, [first.id])
+    expect((await store.getAssignedConnectionsForAccount("elim"))[0]).not.toHaveProperty("apiKey")
+    await store.updateConnection(first.id, { enabled: false })
+    expect(await store.getAssignedConnectionsForAccount("elim")).toEqual([])
+    expect((await store.createNativeConnection({ name: "Admin Codex", provider: "codex" })).enabled).toBe(false)
+  })
+
+  test("normalizes legacy API connections without a kind", async () => {
+    const { store, directory } = await createStore()
+    const user = await store.createUser({ username: "elim", password: "old-workspace-secret-123", role: "user", accountId: "elim" })
+    const api = await store.createConnection({ name: "API", provider: "codex", apiKey: "provider-secret-value" })
+    await store.setUserConnections(user.id, [api.id])
+    const statePath = path.join(directory, "gateway-state.json")
+    const state = JSON.parse(await readFile(statePath, "utf8")) as { connections: Array<Record<string, unknown>> }
+    delete state.connections[0]!.kind
+    await Bun.write(statePath, JSON.stringify(state))
+    const legacyStore = new GatewayStore(directory)
+    expect((await legacyStore.listConnections())[0]).toMatchObject({ kind: "api_key", shareable: true })
+    expect((await legacyStore.getAssignedConnectionsForAccount("elim"))[0]).toMatchObject({ kind: "api_key", apiKey: "provider-secret-value" })
+  })
+
   test("fails closed when persisted connection state has an invalid type", async () => {
     const { directory, store } = await createStore()
     await store.listUsers()

@@ -324,7 +324,7 @@ export class ProviderAuthManager {
         const snapshot = this.services.get(service)!
         const managedAvailable = this.managedAvailable.has(service)
         if (managedAvailable && snapshot.installed && snapshot.authStatus === "signed_out") {
-          return { ...snapshot, managedAvailable, authStatus: "signed_in" as const, statusDetail: "管理员已分配 API 连接；此连接与管理员个人订阅登录相互独立。" }
+          return { ...snapshot, managedAvailable, authStatus: "signed_in" as const, statusDetail: "管理员已分配可用连接；也可以登录自己的账号。" }
         }
         return managedAvailable ? { ...snapshot, managedAvailable } : snapshot
       }),

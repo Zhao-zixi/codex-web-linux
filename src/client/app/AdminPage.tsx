@@ -50,6 +50,14 @@ export function AdminPage() {
     if (await request("/api/admin/connections", "POST", { name, provider, apiKey })) { setName(""); setApiKey("") }
   }
 
+  async function connectNative(auth: ProviderAuth) {
+    if (await request("/api/admin/connections", "POST", {
+      name: auth.id === "codex" ? "Codex 官方账号" : "Claude 官方账号",
+      provider: auth.id,
+      kind: "native",
+    })) await refresh().catch(() => undefined)
+  }
+
   async function signOut() {
     await kannaFetch("/auth/logout", { method: "POST" }).catch(() => undefined)
     await clearGatewayUserLocalState({ clearAuth: true })
@@ -83,7 +91,7 @@ export function AdminPage() {
   return <main className="min-h-[100dvh] bg-background px-5 py-8 md:px-10">
     <div className="mx-auto max-w-6xl space-y-7">
       <header className="flex flex-wrap items-center justify-between gap-4">
-        <div><p className="text-sm font-medium text-primary">Kanna · 管理后台</p><h1 className="mt-1 text-3xl font-semibold tracking-tight">连接与用户</h1><p className="mt-2 text-sm text-muted-foreground">管理用户访问权限和可分配的官方 API 连接。</p></div>
+        <div><p className="text-sm font-medium text-primary">Kanna · 管理后台</p><h1 className="mt-1 text-3xl font-semibold tracking-tight">连接与用户</h1><p className="mt-2 text-sm text-muted-foreground">授权官方账号连接，或添加可选 API 连接，再分配给用户。</p></div>
         <Button variant="outline" onClick={() => void signOut()}><LogOut className="mr-2 h-4 w-4"/>退出登录</Button>
       </header>
       {error && <div role="alert" className="rounded-2xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm">{error}</div>}
@@ -92,17 +100,19 @@ export function AdminPage() {
           {state?.users.map((user) => <UserControl key={user.id} user={user} connections={state.connections} busy={busy} onChange={(url, method, body) => void request(url, method, body)}/>)}
           {!state && <p className="text-sm text-muted-foreground">正在读取…</p>}
         </CardContent></Card>
-        <Card className="rounded-3xl border border-border shadow-sm"><CardHeader><CardTitle className="flex items-center gap-2 text-xl"><KeyRound className="h-5 w-5"/>可分配 API 连接</CardTitle><CardDescription>API key 仅在保存时提交，之后不会再次显示。官方个人订阅登录不属于共享连接。</CardDescription></CardHeader><CardContent className="space-y-4">
+        <Card className="rounded-3xl border border-border shadow-sm"><CardHeader><CardTitle className="flex items-center gap-2 text-xl"><KeyRound className="h-5 w-5"/>可分配连接</CardTitle><CardDescription>官方登录连接使用管理员现有 CLI 授权；API key 连接是可选方式。</CardDescription></CardHeader><CardContent className="space-y-4">
+          <div className="space-y-2">{state?.connections.map((connection) => <ConnectionControl key={connection.id} connection={connection} busy={busy} onChange={(url, method, body) => void request(url, method, body)}/>)}</div>
+          <details className="rounded-xl border border-border p-3"><summary className="cursor-pointer text-sm font-medium">添加 API key 连接（可选）</summary>
           <form onSubmit={(e) => void addConnection(e)} className="grid gap-3 sm:grid-cols-2">
             <Input aria-label="连接名称" placeholder="连接名称" value={name} onChange={(e) => setName(e.target.value)} required />
             <select aria-label="服务商" className="h-10 rounded-xl border border-input bg-background px-3 text-sm" value={provider} onChange={(e) => setProvider(e.target.value as typeof provider)}><option value="codex">OpenAI API</option><option value="claude">Anthropic API</option></select>
             <Input aria-label="API key" type="password" autoComplete="new-password" placeholder="API key / 组织凭据" value={apiKey} onChange={(e) => setApiKey(e.target.value)} required className="sm:col-span-2" />
-            <Button disabled={busy || !name || !apiKey} className="sm:col-span-2"><Plus className="mr-2 h-4 w-4"/>添加连接</Button>
+            <Button disabled={busy || !name || !apiKey} className="sm:col-span-2"><Plus className="mr-2 h-4 w-4"/>添加 API 连接</Button>
           </form>
-          <div className="space-y-2">{state?.connections.map((connection) => <ConnectionControl key={connection.id} connection={connection} busy={busy} onChange={(url, method, body) => void request(url, method, body)}/>)}</div>
+          </details>
         </CardContent></Card>
       </section>
-      <Card className="rounded-3xl border border-border shadow-sm"><CardHeader><CardTitle className="flex items-center gap-2 text-xl"><Shield className="h-5 w-5"/>管理员本人登录</CardTitle><CardDescription>这里是本机 Codex / Claude CLI 官方授权，仅供管理员本人使用，不能分配给其他用户。</CardDescription></CardHeader><CardContent className="grid gap-3 md:grid-cols-2">{state?.providerAuth.map((auth) => <ProviderControl key={auth.id} auth={auth} busy={busy} onAction={(action, body) => void request(`/api/admin/provider-auth/${auth.id}/${action}`, "POST", body)}/>)}</CardContent></Card>
+      <Card className="rounded-3xl border border-border shadow-sm"><CardHeader><CardTitle className="flex items-center gap-2 text-xl"><Shield className="h-5 w-5"/>官方账号连接</CardTitle><CardDescription>使用管理员已有 Codex / Claude CLI 登录；连接后可在用户列表中分配。运行时只向用户应用发放短期访问令牌。</CardDescription></CardHeader><CardContent className="grid gap-3 md:grid-cols-2">{state?.providerAuth.map((auth) => <ProviderControl key={auth.id} auth={auth} busy={busy} onConnect={() => void connectNative(auth)} onAction={(action, body) => void request(`/api/admin/provider-auth/${auth.id}/${action}`, "POST", body)}/>)}</CardContent></Card>
       <Card className="rounded-3xl border border-border shadow-sm">
         <CardHeader>
           <CardTitle className="text-xl">管理员密码</CardTitle>
@@ -152,13 +162,13 @@ function ConnectionControl({ connection, busy, onChange }: { connection: Connect
         <div>
           <p className="font-medium">{connection.name}</p>
           <p className="text-xs text-muted-foreground">
-            {connection.provider === "codex" ? "OpenAI API" : "Anthropic API"} · {connection.enabled ? "可用" : "已停用"}
+            {connection.kind === "native" ? `${connection.provider === "codex" ? "Codex" : "Claude Code"} 官方账号` : connection.provider === "codex" ? "OpenAI API" : "Anthropic API"} · {connection.enabled ? "可用" : "已停用"}
           </p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => { setRotating((value) => !value); setApiKey("") }}>
+          {connection.kind === "api_key" && <Button variant="outline" size="sm" onClick={() => { setRotating((value) => !value); setApiKey("") }}>
             {rotating ? "取消轮换" : "轮换密钥"}
-          </Button>
+          </Button>}
           <Button variant="outline" size="sm" disabled={busy} onClick={() => onChange(`/api/admin/connections/${connection.id}`, "PATCH", { enabled: !connection.enabled })}>
             {connection.enabled ? "停用" : "启用"}
           </Button>
@@ -168,7 +178,7 @@ function ConnectionControl({ connection, busy, onChange }: { connection: Connect
             disabled={busy}
             onClick={async () => {
               const confirmed = await dialog.confirm({
-                title: "删除 API 连接？",
+                title: "删除连接？",
                 description: `删除“${connection.name}”后会撤销所有用户的分配。`,
                 confirmLabel: "删除连接",
                 confirmVariant: "destructive",
@@ -198,13 +208,13 @@ function ConnectionControl({ connection, busy, onChange }: { connection: Connect
   )
 }
 
-function ProviderControl({ auth, busy, onAction }: { auth: ProviderAuth; busy: boolean; onAction: (action: string, body?: unknown) => void }) {
+function ProviderControl({ auth, busy, onAction, onConnect }: { auth: ProviderAuth; busy: boolean; onAction: (action: string, body?: unknown) => void; onConnect: () => void }) {
   const [code, setCode] = useState("")
   const phase = auth.flow?.phase
-  return <div className="rounded-2xl border border-border p-4"><div className="flex items-start justify-between gap-3"><div><p className="font-medium">{auth.id === "codex" ? "Codex" : "Claude Code"}</p><p className="mt-1 text-xs text-muted-foreground">{auth.installed ? `CLI 已安装 · ${auth.authStatus}` : "CLI 尚未安装"} · 管理员本人</p></div><span className="rounded-full bg-muted px-2.5 py-1 text-xs">不可分配</span></div>
+  return <div className="rounded-2xl border border-border p-4"><div className="flex items-start justify-between gap-3"><div><p className="font-medium">{auth.id === "codex" ? "Codex" : "Claude Code"}</p><p className="mt-1 text-xs text-muted-foreground">{auth.installed ? `CLI 已安装 · ${auth.authStatus}` : "CLI 尚未安装"} · 管理员本人</p></div><span className="rounded-full bg-muted px-2.5 py-1 text-xs">{auth.shareable ? "已连接，可分配" : auth.authStatus === "signed_in" ? "已登录" : "未连接"}</span></div>
     {phase === "waiting_for_approval" && <div className="mt-3 rounded-xl bg-muted/60 p-3 text-sm">{auth.flow?.verificationUrl && <a className="text-primary underline" href={auth.flow.verificationUrl} target="_blank" rel="noreferrer">打开官方授权页面</a>}{auth.flow?.userCode && <p className="mt-1 font-mono text-base">{auth.flow.userCode}</p>}</div>}
     {phase === "waiting_for_code_entry" && <div className="mt-3 space-y-2 rounded-xl bg-muted/60 p-3">{auth.flow.verificationUrl && <a className="text-sm text-primary underline" href={auth.flow.verificationUrl} target="_blank" rel="noreferrer">打开官方授权页面</a>}<form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); onAction("submit", { code }); setCode("") }}><Input aria-label="授权回调码" placeholder="粘贴授权码" value={code} onChange={(e) => setCode(e.target.value)}/><Button size="sm" disabled={busy || !code}>提交</Button></form></div>}
     {auth.flow?.phase === "error" && <p className="mt-2 text-sm text-destructive">{auth.flow.message}</p>}
-    <div className="mt-3 flex flex-wrap gap-2">{!auth.installed ? <Button size="sm" variant="outline" disabled={busy} onClick={() => onAction("install")}>安装 CLI</Button> : <><Button size="sm" disabled={busy || phase === "starting" || phase === "finishing"} onClick={() => onAction("start")}>{phase && phase !== "idle" && phase !== "error" ? "授权进行中" : "开始官方授权"}</Button><Button size="sm" variant="outline" disabled={busy || !phase || phase === "idle"} onClick={() => onAction("cancel")}>取消</Button><Button size="sm" variant="outline" disabled={busy || auth.authStatus !== "signed_in"} onClick={() => onAction("logout")}>退出授权</Button></>}</div>
+    <div className="mt-3 flex flex-wrap gap-2">{!auth.installed ? <Button size="sm" variant="outline" disabled={busy} onClick={() => onAction("install")}>安装 CLI</Button> : <><Button size="sm" disabled={busy || phase === "starting" || phase === "finishing"} onClick={() => onAction("start")}>{phase && phase !== "idle" && phase !== "error" ? "授权进行中" : "开始官方授权"}</Button><Button size="sm" variant="outline" disabled={busy || !phase || phase === "idle"} onClick={() => onAction("cancel")}>取消</Button><Button size="sm" variant="outline" disabled={busy || auth.authStatus !== "signed_in" || Boolean(auth.connectionId)} onClick={onConnect}>{auth.connectionId ? "已连接" : "连接已有登录"}</Button><Button size="sm" variant="outline" disabled={busy || auth.authStatus !== "signed_in"} onClick={() => onAction("logout")}>退出授权</Button></>}</div>
   </div>
 }

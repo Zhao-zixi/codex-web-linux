@@ -21,14 +21,27 @@ export interface GatewaySession {
   expiresAt: number
 }
 
-interface StoredManagedConnection {
+interface StoredApiKeyConnection {
   id: string
   name: string
   provider: ManagedProvider
+  kind: "api_key"
   enabled: boolean
   apiKey: string
   createdAt: number
 }
+
+interface StoredNativeConnection {
+  id: string
+  name: string
+  provider: ManagedProvider
+  kind: "native"
+  profileId: "admin"
+  enabled: boolean
+  createdAt: number
+}
+
+type StoredManagedConnection = StoredApiKeyConnection | StoredNativeConnection
 
 export interface GatewayState {
   version: 1
@@ -242,6 +255,12 @@ export class GatewayStore {
     return user ? this.publicUser(user) : null
   }
 
+  async getUserAuthorizationVersionByAccount(accountId: string) {
+    const state = await this.loadState()
+    const user = state.users.find((item) => item.role === "user" && item.accountId === accountId && item.enabled)
+    return user ? { id: user.id, authVersion: user.authVersion } : null
+  }
+
   async createConnection(args: { name: string; provider: ManagedProvider; apiKey: string }) {
     if (!args.name.trim() || args.name.length > 80) throw new Error("Connection name must be 1 to 80 characters")
     if (args.provider !== "codex" && args.provider !== "claude") throw new Error("Unsupported managed provider")
@@ -252,6 +271,7 @@ export class GatewayStore {
         id: randomBytes(16).toString("hex"),
         name: args.name.trim(),
         provider: args.provider,
+        kind: "api_key",
         enabled: true,
         apiKey: args.apiKey,
         createdAt: Date.now(),
@@ -260,6 +280,35 @@ export class GatewayStore {
       await this.persist(state)
       return this.publicConnection(connection)
     })
+  }
+
+  /** One native entry per admin provider; it points at the gateway-owned CLI profile. */
+  async createNativeConnection(args: { name: string; provider: ManagedProvider }) {
+    if (!args.name.trim() || args.name.length > 80) throw new Error("Connection name must be 1 to 80 characters")
+    if (args.provider !== "codex" && args.provider !== "claude") throw new Error("Unsupported managed provider")
+    return this.withMutation(async () => {
+      const state = await this.loadState()
+      const existing = state.connections.find((item) => item.kind === "native" && item.provider === args.provider)
+      if (existing) return this.publicConnection(existing)
+      const connection: StoredNativeConnection = {
+        id: randomBytes(16).toString("hex"),
+        name: args.name.trim(),
+        provider: args.provider,
+        kind: "native",
+        profileId: "admin",
+        enabled: true,
+        createdAt: Date.now(),
+      }
+      state.connections.push(connection)
+      await this.persist(state)
+      return this.publicConnection(connection)
+    })
+  }
+
+  async getNativeConnection(provider: ManagedProvider) {
+    const state = await this.loadState()
+    const connection = state.connections.find((item) => item.kind === "native" && item.provider === provider)
+    return connection ? this.publicConnection(connection) : null
   }
 
   async updateConnection(id: string, patch: { name?: string; enabled?: boolean; apiKey?: string }) {
@@ -273,6 +322,7 @@ export class GatewayStore {
       }
       if (patch.enabled !== undefined) connection.enabled = patch.enabled
       if (patch.apiKey !== undefined) {
+        if (connection.kind !== "api_key") throw new Error("Native connections do not accept API keys")
         if (!patch.apiKey.trim() || patch.apiKey.length > 8192) throw new Error("API key is missing or too long")
         connection.apiKey = patch.apiKey
       }
@@ -311,11 +361,11 @@ export class GatewayStore {
     const connections = new Map(state.connections.filter((connection) => connection.enabled).map((connection) => [connection.id, connection]))
     return user.connectionIds.flatMap((id) => {
       const connection = connections.get(id)
-      return connection ? [{
+      if (!connection) return []
+      return [{
         ...this.publicConnection(connection),
-        apiKey: connection.apiKey,
-        provider: connection.provider,
-      }] : []
+        ...(connection.kind === "api_key" ? { apiKey: connection.apiKey } : {}),
+      }]
     })
   }
 
@@ -353,11 +403,22 @@ export class GatewayStore {
     for (const connection of state.connections) {
       if (!/^[a-f0-9]{32}$/.test(connection.id) || connectionIds.has(connection.id) ||
         (connection.provider !== "codex" && connection.provider !== "claude") ||
-        typeof connection.enabled !== "boolean" || !connection.name || typeof connection.apiKey !== "string" || !connection.apiKey) {
+        typeof connection.enabled !== "boolean" || !connection.name ||
+        ((connection as StoredManagedConnection & { kind?: string }).kind !== undefined &&
+          (connection as StoredManagedConnection & { kind?: string }).kind !== "api_key" &&
+          (connection as StoredManagedConnection & { kind?: string }).kind !== "native") ||
+        ((connection as StoredManagedConnection & { kind?: string }).kind === "native"
+          ? (connection as StoredNativeConnection).profileId !== "admin"
+          : typeof (connection as StoredApiKeyConnection).apiKey !== "string" || !(connection as StoredApiKeyConnection).apiKey)) {
         throw new Error("Invalid managed connection record")
+      }
+      if ((connection as StoredManagedConnection & { kind?: string }).kind === undefined) {
+        (connection as StoredApiKeyConnection).kind = "api_key"
       }
       connectionIds.add(connection.id)
     }
+    const nativeProviders = state.connections.filter((item) => item.kind === "native").map((item) => item.provider)
+    if (new Set(nativeProviders).size !== nativeProviders.length) throw new Error("Duplicate native provider connection")
     if (state.users.some((user) => user.connectionIds.some((id) => !connectionIds.has(id)))) {
       throw new Error("Gateway user references a missing managed connection")
     }
@@ -374,8 +435,9 @@ export class GatewayStore {
       id: connection.id,
       name: connection.name,
       provider: connection.provider,
+      kind: connection.kind ?? "api_key",
       enabled: connection.enabled,
-      shareable: true,
+      shareable: connection.kind !== "native",
     }
   }
 

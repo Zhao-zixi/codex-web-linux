@@ -16,16 +16,19 @@ export interface ManagedConnectionSummary {
   id: string
   name: string
   provider: ManagedProvider
+  kind: "api_key" | "native"
   enabled: boolean
-  shareable: true
+  shareable: boolean
+  connected?: boolean
 }
 
 export interface AdminProviderAuthStatus {
   id: ManagedProvider
   installed: boolean
   authStatus: string
-  /** Native admin CLI OAuth is never made available to regular workspace users. */
-  shareable: false
+  /** Connection created for this provider's signed-in admin CLI profile, if any. */
+  connectionId?: string
+  shareable: boolean
   flow: AuthLoginFlowState
 }
 
@@ -67,7 +70,14 @@ export interface PatchGatewayUserRequest {
 export interface CreateManagedConnectionRequest {
   name: string
   provider: ManagedProvider
-  apiKey: string
+  kind?: "api_key"
+  apiKey?: string
+}
+
+export interface CreateNativeManagedConnectionRequest {
+  name: string
+  provider: ManagedProvider
+  kind: "native"
 }
 
 export interface PatchManagedConnectionRequest {
@@ -86,6 +96,17 @@ export interface GatewayProviderAccessResponse {
 }
 
 export interface InternalGatewayProviderAccessResponse {
-  assigned: Array<ManagedConnectionSummary & { baseUrl: string }>
+  assigned: Array<ManagedConnectionSummary & { baseUrl?: string }>
   selfFirst: true
 }
+
+export interface NativeProviderTokenRequest {
+  forceRefresh?: boolean
+  previousAccountId?: string
+}
+
+export type NativeProviderTokenData =
+  | { provider: "codex"; expiresAt: number; accessToken: string; chatgptAccountId: string; chatgptPlanType?: string }
+  | { provider: "claude"; expiresAt: number; accessToken: string }
+
+export type NativeProviderTokenResponse = NativeProviderTokenData & { connectionId: string }

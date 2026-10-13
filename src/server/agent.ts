@@ -11,6 +11,7 @@ import {
   type SlashCommand,
 } from "@anthropic-ai/claude-agent-sdk"
 import { homedir } from "node:os"
+import { createHash } from "node:crypto"
 import type {
   AgentProvider,
   AskUserQuestionItem,
@@ -268,7 +269,7 @@ interface AgentCoordinatorArgs {
   grokManager?: GrokCliManager
   piManager?: PiAgentManager
   resolvePiConnection?: () => Promise<import("./pi-agent").PiConnection | null>
-  resolveManagedProvider?: (provider: "codex" | "claude", projectDir: string) => Promise<{ connectionId: string; name: string; baseUrl: string; accountToken: string } | null>
+  resolveManagedProvider?: (provider: "codex" | "claude", projectDir: string) => Promise<{ connectionId: string; name: string; kind?: "api_key" | "native"; provider?: "codex" | "claude"; baseUrl?: string; accountToken?: string; accessToken?: string; expiresAt?: number; chatgptAccountId?: string; chatgptPlanType?: string; getToken?: (forceRefresh?: boolean) => Promise<{ accessToken: string; expiresAt: number; chatgptAccountId?: string; chatgptPlanType?: string }> } | null>
   generateTitle?: (messageContent: string, cwd: string) => Promise<GenerateChatTitleResult>
   startClaudeSession?: (args: {
     localPath: string
@@ -1246,6 +1247,17 @@ export class AgentCoordinator {
     this.drainingStreams.clear()
     this.codexManager.stopAll()
     this.piManager.dispose()
+  }
+
+  /** Stop only workers started with the revoked managed connection. */
+  stopManagedProviderWorkers(connectionId?: string) {
+    for (const [chatId, session] of this.claudeSessions) {
+      if (session.managedProviderKey?.startsWith("managed:") && (!connectionId || session.managedProviderKey.startsWith(`managed:${connectionId}:`))) {
+        session.session.close()
+        this.claudeSessions.delete(chatId)
+      }
+    }
+    this.codexManager.stopManagedProviderSessions(connectionId)
   }
 
   getActiveStatuses() {
@@ -2296,7 +2308,8 @@ export class AgentCoordinator {
     const managedProvider = this.resolveManagedProvider
       ? await this.resolveManagedProvider("claude", args.localPath)
       : null
-    const managedProviderKey = managedProvider?.connectionId ?? null
+    const managedTokenVersion = managedProvider?.accessToken ? createHash("sha256").update(managedProvider.accessToken).digest("hex") : ""
+    const managedProviderKey = managedProvider ? `managed:${managedProvider.connectionId}:${managedProvider.kind ?? "api_key"}:${managedProvider.chatgptAccountId ?? ""}:${managedProvider.expiresAt ?? ""}:${managedTokenVersion}` : null
 
     // autoPlan changes the SDK's `tools` allowlist, which is fixed at query()
     // time — unlike planMode (setPermissionMode) it can only be applied by
@@ -2328,10 +2341,12 @@ export class AgentCoordinator {
         customTools: args.customTools,
         onRateLimitEvent: (info) => this.onClaudeRateLimit?.(info),
         onSubagentActivity: (update) => this.applySubagentActivity(args.chatId, update),
-        managedEnvironment: managedProvider ? {
-          ANTHROPIC_BASE_URL: managedProvider.baseUrl.replace(/\/$/, ""),
-          ANTHROPIC_AUTH_TOKEN: managedProvider.accountToken,
-        } : undefined,
+        managedEnvironment: managedProvider?.kind === "native"
+          ? managedProvider.accessToken ? { CLAUDE_CODE_OAUTH_TOKEN: managedProvider.accessToken } : undefined
+          : managedProvider && managedProvider.baseUrl && managedProvider.accountToken ? {
+            ANTHROPIC_BASE_URL: managedProvider.baseUrl.replace(/\/$/, ""),
+            ANTHROPIC_AUTH_TOKEN: managedProvider.accountToken,
+          } : undefined,
       })
       this.refreshClaudeModelCatalog(started)
 

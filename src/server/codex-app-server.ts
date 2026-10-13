@@ -172,6 +172,7 @@ interface SessionContext {
   stderrLines: string[]
   closed: boolean
   managedProviderKey: string | null
+  managedProvider?: StartCodexSessionArgs["managedProvider"]
 }
 
 export interface StartCodexSessionArgs {
@@ -182,7 +183,7 @@ export interface StartCodexSessionArgs {
   serviceTier?: ServiceTier
   sessionToken: string | null
   pendingForkSessionToken?: string | null
-  managedProvider?: { connectionId: string; name: string; baseUrl: string; accountToken: string } | null
+  managedProvider?: { connectionId: string; name: string; kind?: "api_key" | "native"; provider?: "codex" | "claude"; baseUrl?: string; accountToken?: string; accessToken?: string; expiresAt?: number; chatgptAccountId?: string; chatgptPlanType?: string; getToken?: (forceRefresh?: boolean) => Promise<{ accessToken: string; expiresAt: number; chatgptAccountId?: string; chatgptPlanType?: string }> } | null
 }
 
 export interface StartCodexTurnArgs {
@@ -300,6 +301,11 @@ function parseJsonLine(line: string): unknown | null {
   } catch {
     return null
   }
+}
+
+function isManagedCodexRefreshRequest(value: unknown): value is { id: CodexRequestId; method: "account/chatgptAuthTokens/refresh"; params: unknown } {
+  return Boolean(value && typeof value === "object" && "id" in value &&
+    (value as { method?: unknown }).method === "account/chatgptAuthTokens/refresh")
 }
 
 function isRecoverableResumeError(error: unknown): boolean {
@@ -916,6 +922,7 @@ export class CodexAppServerManager {
       stderrLines: [],
       closed: false,
       managedProviderKey: null,
+      managedProvider: null,
     }
     this.attachListeners(context)
     try {
@@ -937,7 +944,8 @@ export class CodexAppServerManager {
 
   async startSession(args: StartCodexSessionArgs) {
     const existing = this.sessions.get(args.chatId)
-    const managedProviderKey = args.managedProvider?.connectionId ?? null
+    const managedProvider = args.managedProvider ?? null
+    const managedProviderKey = managedProvider ? `managed:${managedProvider.connectionId}:${managedProvider.kind ?? "api_key"}:${managedProvider.chatgptAccountId ?? ""}:${managedProvider.expiresAt ?? ""}` : null
     if (existing && !existing.closed && existing.cwd === args.cwd && existing.managedProviderKey === managedProviderKey && !args.pendingForkSessionToken) {
       return
     }
@@ -946,10 +954,9 @@ export class CodexAppServerManager {
       this.stopSession(args.chatId)
     }
 
-    const managedProvider = args.managedProvider
-    const child = this.spawnProcess(args.cwd, managedProvider ? {
+    const child = this.spawnProcess(args.cwd, managedProvider && managedProvider.kind !== "native" && managedProvider.baseUrl ? {
       args: ["-c", "model_provider='kanna_managed'", "-c", `model_providers.kanna_managed.name=${JSON.stringify(managedProvider.name)}`, "-c", `model_providers.kanna_managed.base_url=${JSON.stringify(managedProvider.baseUrl.replace(/\/$/, ""))}`, "-c", "model_providers.kanna_managed.env_key='KANNA_GATEWAY_ACCOUNT_TOKEN'", "-c", "model_providers.kanna_managed.wire_api='responses'", "-c", "model_providers.kanna_managed.requires_openai_auth=false", "-c", "model_providers.kanna_managed.supports_websockets=false"],
-      env: { KANNA_GATEWAY_ACCOUNT_TOKEN: managedProvider.accountToken },
+      env: managedProvider.accountToken ? { KANNA_GATEWAY_ACCOUNT_TOKEN: managedProvider.accountToken } : {},
     } : undefined)
     const customTools = args.customTools ? createKannaMcpServer(args.customTools) : undefined
     const context: SessionContext = {
@@ -965,6 +972,7 @@ export class CodexAppServerManager {
       stderrLines: [],
       closed: false,
       managedProviderKey,
+      managedProvider,
     }
     this.sessions.set(args.chatId, context)
     this.attachListeners(context)
@@ -983,6 +991,16 @@ export class CodexAppServerManager {
       this.writeMessage(context, {
         method: "initialized",
       })
+
+      if (managedProvider?.kind === "native") {
+        const token = await this.getManagedCodexToken(managedProvider, false)
+        await this.sendRequest(context, "account/login/start", {
+          type: "chatgptAuthTokens",
+          accessToken: token.accessToken,
+          chatgptAccountId: token.chatgptAccountId,
+          ...(token.chatgptPlanType ? { chatgptPlanType: token.chatgptPlanType } : {}),
+        })
+      }
 
       // Resume and fork accept MCP config, but this CLI only accepts dynamic tools on thread/start.
       const toolConfig = customTools ? {
@@ -1265,6 +1283,14 @@ export class CodexAppServerManager {
     }
   }
 
+  stopManagedProviderSessions(connectionId?: string) {
+    for (const [chatId, context] of this.sessions) {
+      if (context.managedProviderKey?.startsWith("managed:") && (!connectionId || context.managedProviderKey.startsWith(`managed:${connectionId}:`))) {
+        this.stopSession(chatId)
+      }
+    }
+  }
+
   private requireSession(chatId: string) {
     const context = this.sessions.get(chatId)
     if (!context || context.closed) {
@@ -1285,8 +1311,8 @@ export class CodexAppServerManager {
           continue
         }
 
-        if (isServerRequest(parsed)) {
-          void this.handleServerRequest(context, parsed)
+        if (isServerRequest(parsed) || isManagedCodexRefreshRequest(parsed)) {
+          void this.handleServerRequest(context, parsed as ServerRequest)
           continue
         }
 
@@ -1331,6 +1357,23 @@ export class CodexAppServerManager {
   }
 
   private async handleServerRequest(context: SessionContext, request: ServerRequest) {
+    const requestMethod: string = request.method
+    if (requestMethod === "account/chatgptAuthTokens/refresh" && context.managedProvider?.kind === "native") {
+      try {
+        const token = await this.getManagedCodexToken(context.managedProvider, true)
+        this.writeMessage(context, {
+          id: request.id,
+          result: { authToken: {
+            accessToken: token.accessToken,
+            chatgptAccountId: token.chatgptAccountId,
+            ...(token.chatgptPlanType ? { chatgptPlanType: token.chatgptPlanType } : {}),
+          } },
+        })
+      } catch {
+        this.writeMessage(context, { id: request.id, error: { message: "Managed Codex authorization refresh failed" } })
+      }
+      return
+    }
     const pendingTurn = context.pendingTurn
     if (!pendingTurn) {
       this.writeMessage(context, {
@@ -1473,6 +1516,17 @@ export class CodexAppServerManager {
         decision,
       } satisfies FileChangeRequestApprovalResponse,
     })
+  }
+
+  private async getManagedCodexToken(provider: NonNullable<StartCodexSessionArgs["managedProvider"]>, forceRefresh: boolean) {
+    if (provider.getToken) return provider.getToken(forceRefresh)
+    if (provider.accessToken) return {
+      accessToken: provider.accessToken,
+      expiresAt: provider.expiresAt ?? 0,
+      chatgptAccountId: provider.chatgptAccountId,
+      chatgptPlanType: provider.chatgptPlanType,
+    }
+    throw new Error("Managed Codex token is missing")
   }
 
   private async handleNotification(context: SessionContext, notification: ServerNotification) {

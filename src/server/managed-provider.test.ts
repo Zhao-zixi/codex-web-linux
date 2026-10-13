@@ -49,7 +49,7 @@ describe("resolveManagedProvider", () => {
       const body = init?.body ? JSON.parse(String(init.body)) : undefined
       requests.push({ url, body })
       if (url.endsWith("/internal/provider-access")) return Response.json({ selfFirst: true, assigned: [
-        { id: "b".repeat(32), name: "API", provider: "codex", kind: "api_key", baseUrl: "http://gateway:3210/internal/providers/api/v1" },
+        { id: "b".repeat(32), name: "API", provider: "codex", kind: "api_key", baseUrl: `http://gateway:3210/internal/providers/${"b".repeat(32)}/v1` },
         { id: "a".repeat(32), name: "Official", provider: "codex", kind: "native" },
       ] })
       return Response.json({ connectionId: "a".repeat(32), provider: "codex", expiresAt: 2000, accessToken: body?.forceRefresh ? "fresh" : "initial", chatgptAccountId: "acct-1" })
@@ -70,7 +70,7 @@ describe("resolveManagedProvider", () => {
       requested.push(url)
       if (url.endsWith("/internal/provider-access")) return Response.json({ selfFirst: true, assigned: [
         { id: "a".repeat(32), name: "Official", provider: "claude", kind: "native" },
-        { id: "b".repeat(32), name: "API", provider: "claude", kind: "api_key", baseUrl: "http://gateway:3210/internal/providers/api" },
+        { id: "b".repeat(32), name: "API", provider: "claude", kind: "api_key", baseUrl: `http://gateway:3210/internal/providers/${"b".repeat(32)}` },
       ] })
       return new Response("failed", { status: 503 })
     }) as unknown as typeof fetch

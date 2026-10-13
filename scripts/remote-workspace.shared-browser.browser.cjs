@@ -71,7 +71,7 @@ async function login(page, password, label) {
     if (response.url().endsWith("/auth/login") && response.headers()["set-cookie"]) loginSetCookie = true
   })
   await page.locator("#kanna-password").fill(password)
-  await page.getByRole("button", { name: "Unlock" }).click()
+  await page.getByRole("button", { name: "登录" }).click()
   await waitForPageSession(page, label)
   assert(!loginSetCookie, `${label}: login set a cookie`)
 }

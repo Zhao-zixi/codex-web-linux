@@ -1,5 +1,6 @@
 import { create } from "zustand"
-import { persist } from "zustand/middleware"
+import { createJSONStorage, persist } from "zustand/middleware"
+import { workspaceLocalStorage } from "../lib/workspace-storage"
 
 export type DiffCommitSelectionMode = "all" | "none"
 
@@ -166,6 +167,7 @@ export const useDiffCommitStore = create<DiffCommitState>()(
     }),
     {
       name: "diff-commit-selections",
+      storage: createJSONStorage(() => workspaceLocalStorage),
       version: 4,
       migrate: migrateDiffCommitStore,
     }

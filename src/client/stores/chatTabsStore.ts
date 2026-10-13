@@ -10,6 +10,7 @@ import {
   type ChatTab,
 } from "../lib/chat-tabs"
 import { CHAT_TABS_STORAGE_KEY } from "../lib/storageKeys"
+import { isWorkspacePersistencePaused } from "../lib/workspace-storage"
 
 /**
  * The chat tabs, kept in this browser: they are how one
@@ -39,10 +40,16 @@ interface ChatTabsState {
   prune: (keep: (chatId: string) => boolean) => void
 }
 
-function readStoredTabs(): ChatTab[] {
+let chatTabsStorageKey = CHAT_TABS_STORAGE_KEY
+
+export function setChatTabsStorageKey(key: string) {
+  chatTabsStorageKey = key
+}
+
+export function readStoredChatTabs(key = chatTabsStorageKey): ChatTab[] {
   if (typeof window === "undefined") return []
   try {
-    const parsed: unknown = JSON.parse(window.localStorage.getItem(CHAT_TABS_STORAGE_KEY) ?? "[]")
+    const parsed: unknown = JSON.parse(window.localStorage.getItem(key) ?? "[]")
     if (!Array.isArray(parsed)) return []
     return parsed.flatMap((item) => (
       item && typeof item === "object" && typeof (item as ChatTab).chatId === "string"
@@ -54,18 +61,30 @@ function readStoredTabs(): ChatTab[] {
   }
 }
 
+export function removeStoredChatTabs(key: string) {
+  try {
+    window.localStorage.removeItem(key)
+  } catch {}
+}
+
 export const useChatTabsStore = create<ChatTabsState>()((set) => {
   // Every change goes through here: unchanged tabs (the rules hand back the
   // same array) neither re-render anything nor touch storage.
   const update = (change: (tabs: ChatTab[]) => ChatTab[]) => set((state) => {
     const tabs = change(state.tabs)
     if (tabs === state.tabs) return state
-    if (typeof window !== "undefined") window.localStorage.setItem(CHAT_TABS_STORAGE_KEY, JSON.stringify(tabs))
+    if (typeof window !== "undefined" && !isWorkspacePersistencePaused()) {
+      try {
+        window.localStorage.setItem(chatTabsStorageKey, JSON.stringify(tabs))
+      } catch {
+        // Storage can be unavailable in private browsing or after quota is reached.
+      }
+    }
     return { tabs }
   })
 
   return {
-    tabs: readStoredTabs(),
+    tabs: readStoredChatTabs(),
     recentChatIds: [],
     visit: (chatId) => set((state) => (
       state.recentChatIds[0] === chatId

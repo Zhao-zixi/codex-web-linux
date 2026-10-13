@@ -2,6 +2,7 @@ import { useMemo } from "react"
 import { create } from "zustand"
 import { createJSONStorage, persist } from "zustand/middleware"
 import { useShallow } from "zustand/react/shallow"
+import { isWorkspacePersistencePaused } from "../lib/workspace-storage"
 import type { ChatAttachment } from "../../shared/types"
 
 /**
@@ -12,15 +13,23 @@ import type { ChatAttachment } from "../../shared/types"
  */
 const DRAFT_PERSIST_DELAY_MS = 300
 
-function createDebouncedStorage(delayMs: number): Storage {
+interface DebouncedStorage extends Storage {
+  flush: () => void
+  cancel: () => void
+}
+
+function createDebouncedStorage(delayMs: number): DebouncedStorage {
   const pending = new Map<string, string>()
   let timer: number | null = null
 
+  const clearTimer = () => {
+    if (timer === null) return
+    window.clearTimeout(timer)
+    timer = null
+  }
+
   const flush = () => {
-    if (timer !== null) {
-      window.clearTimeout(timer)
-      timer = null
-    }
+    clearTimer()
     for (const [key, value] of pending) {
       try {
         window.localStorage.setItem(key, value)
@@ -31,25 +40,30 @@ function createDebouncedStorage(delayMs: number): Storage {
     pending.clear()
   }
 
+  const cancel = () => {
+    clearTimer()
+    pending.clear()
+  }
+
   if (typeof window !== "undefined") {
     window.addEventListener("pagehide", flush)
   }
 
   return {
+    flush,
+    cancel,
     get length() {
       return window.localStorage.length
     },
     key: (index) => window.localStorage.key(index),
-    clear: () => {
-      pending.clear()
-      window.localStorage.clear()
-    },
+    clear: cancel,
     getItem: (key) => pending.get(key) ?? window.localStorage.getItem(key),
     removeItem: (key) => {
       pending.delete(key)
       window.localStorage.removeItem(key)
     },
     setItem: (key, value) => {
+      if (isWorkspacePersistencePaused()) return
       pending.set(key, value)
       if (timer === null) {
         timer = window.setTimeout(flush, delayMs)
@@ -58,7 +72,7 @@ function createDebouncedStorage(delayMs: number): Storage {
   }
 }
 
-let debouncedLocalStorage: Storage | null = null
+let debouncedLocalStorage: DebouncedStorage | null = null
 
 /** Throws where there is no `localStorage` (tests); `persist` then runs in memory. */
 function getDebouncedLocalStorage(): Storage {
@@ -67,6 +81,14 @@ function getDebouncedLocalStorage(): Storage {
   }
   debouncedLocalStorage ??= createDebouncedStorage(DRAFT_PERSIST_DELAY_MS)
   return debouncedLocalStorage
+}
+
+export function flushChatInputPersistence() {
+  debouncedLocalStorage?.flush()
+}
+
+export function discardPendingChatInputPersistence() {
+  debouncedLocalStorage?.cancel()
 }
 
 interface ChatInputState {

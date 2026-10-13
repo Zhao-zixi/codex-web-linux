@@ -287,6 +287,7 @@ function initialServiceSnapshot(service: AuthServiceId): AuthServiceSnapshot {
 export class ProviderAuthManager {
   private readonly deps: ProviderAuthManagerDeps
   private readonly services = new Map<AuthServiceId, AuthServiceSnapshot>()
+  private readonly managedAvailable = new Set<AuthServiceId>()
   private readonly listeners = new Set<(snapshot: ProviderAuthSnapshot) => void>()
   private readonly flows = new Map<AuthServiceId, LoginFlowRuntime>()
   private readonly commandPaths = new Map<string, string | null>()
@@ -319,8 +320,23 @@ export class ProviderAuthManager {
 
   getSnapshot(): ProviderAuthSnapshot {
     return {
-      services: AUTH_SERVICE_ORDER.map((service) => this.services.get(service)!),
+      services: AUTH_SERVICE_ORDER.map((service) => {
+        const snapshot = this.services.get(service)!
+        const managedAvailable = this.managedAvailable.has(service)
+        if (managedAvailable && snapshot.installed && snapshot.authStatus === "signed_out") {
+          return { ...snapshot, managedAvailable, authStatus: "signed_in" as const, statusDetail: "管理员已分配 API 连接；此连接与管理员个人订阅登录相互独立。" }
+        }
+        return managedAvailable ? { ...snapshot, managedAvailable } : snapshot
+      }),
     }
+  }
+
+  setManagedAvailability(service: AuthServiceId, available: boolean) {
+    const wasAvailable = this.managedAvailable.has(service)
+    if (available === wasAvailable) return
+    if (available) this.managedAvailable.add(service)
+    else this.managedAvailable.delete(service)
+    this.emit()
   }
 
   onChange(listener: (snapshot: ProviderAuthSnapshot) => void) {

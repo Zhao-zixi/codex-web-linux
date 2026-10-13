@@ -219,6 +219,7 @@ interface ClaudeSessionHandle {
 interface ClaudeSessionState {
   id: string
   chatId: string
+  managedProviderKey: string | null
   session: ClaudeSessionHandle
   localPath: string
   model: string
@@ -267,6 +268,7 @@ interface AgentCoordinatorArgs {
   grokManager?: GrokCliManager
   piManager?: PiAgentManager
   resolvePiConnection?: () => Promise<import("./pi-agent").PiConnection | null>
+  resolveManagedProvider?: (provider: "codex" | "claude", projectDir: string) => Promise<{ connectionId: string; name: string; baseUrl: string; accountToken: string } | null>
   generateTitle?: (messageContent: string, cwd: string) => Promise<GenerateChatTitleResult>
   startClaudeSession?: (args: {
     localPath: string
@@ -281,6 +283,7 @@ interface AgentCoordinatorArgs {
     onToolRequest: (request: HarnessToolRequest) => Promise<unknown>
     onRateLimitEvent?: (info: ClaudeRateLimitInfoRaw) => void
     onSubagentActivity?: (update: SubagentActivityUpdate) => void
+    managedEnvironment?: Record<string, string>
   }) => Promise<ClaudeSessionHandle>
   /**
    * Probe whether a provider's native session artifact still exists on disk.
@@ -900,6 +903,7 @@ async function startClaudeSession(args: {
    * (background-tasks.ts) and SDK hooks (`subagentHooks`).
    */
   onSubagentActivity?: (update: SubagentActivityUpdate) => void
+  managedEnvironment?: Record<string, string>
 }): Promise<ClaudeSessionHandle> {
   const canUseTool: CanUseTool = async (toolName, input, options) => {
     if (toolName !== "AskUserQuestion" && toolName !== "ExitPlanMode") {
@@ -996,7 +1000,7 @@ async function startClaudeSession(args: {
       // enabling it while the UI shows "Standard".
       settings: { enableWorkflows: true, fastMode: args.serviceTier === "fast" },
       pathToClaudeCodeExecutable: claudeExecutable.path,
-      env: (() => { const { CLAUDECODE: _, ...env } = process.env; return env })(),
+      env: (() => { const { CLAUDECODE: _, KANNA_GATEWAY_ACCOUNT_TOKEN: _gatewayToken, ...env } = process.env; return { ...env, ...args.managedEnvironment } })(),
     },
   })
 
@@ -1091,6 +1095,7 @@ export class AgentCoordinator {
   private readonly generateTitle: (messageContent: string, cwd: string) => Promise<GenerateChatTitleResult>
   private readonly startClaudeSessionFn: NonNullable<AgentCoordinatorArgs["startClaudeSession"]>
   private readonly checkSessionArtifactFn: NonNullable<AgentCoordinatorArgs["checkSessionArtifact"]>
+  private readonly resolveManagedProvider: NonNullable<AgentCoordinatorArgs["resolveManagedProvider"]> | null
   private reportBackgroundError: ((message: string) => void) | null = null
   private onClaudeRateLimit: ((info: ClaudeRateLimitInfoRaw) => void) | null = null
   private cursorModelCatalogApplied = false
@@ -1154,6 +1159,7 @@ export class AgentCoordinator {
     this.generateTitle = args.generateTitle ?? generateTitleForChatDetailed
     this.startClaudeSessionFn = args.startClaudeSession ?? startClaudeSession
     this.checkSessionArtifactFn = args.checkSessionArtifact ?? checkSessionArtifact
+    this.resolveManagedProvider = args.resolveManagedProvider ?? null
   }
 
   setBackgroundErrorReporter(report: ((message: string) => void) | null) {
@@ -2167,6 +2173,9 @@ export class AgentCoordinator {
         connection,
       })
     } else {
+      const managedProvider = this.resolveManagedProvider
+        ? await this.resolveManagedProvider("codex", project.localPath)
+        : null
       const started = await this.codexManager.startSession({
         chatId: args.chatId,
         cwd: project.localPath,
@@ -2175,6 +2184,7 @@ export class AgentCoordinator {
         serviceTier: args.serviceTier,
         sessionToken: chat.sessionToken,
         pendingForkSessionToken: chat.pendingForkSessionToken,
+        managedProvider,
       })
       if (chat.pendingForkSessionToken && started?.sessionToken) {
         await this.store.setPendingForkSessionToken(args.chatId, null)
@@ -2283,6 +2293,10 @@ export class AgentCoordinator {
     onToolRequest: (request: HarnessToolRequest) => Promise<unknown>
   }): Promise<HarnessTurn> {
     let session = this.claudeSessions.get(args.chatId)
+    const managedProvider = this.resolveManagedProvider
+      ? await this.resolveManagedProvider("claude", args.localPath)
+      : null
+    const managedProviderKey = managedProvider?.connectionId ?? null
 
     // autoPlan changes the SDK's `tools` allowlist, which is fixed at query()
     // time — unlike planMode (setPermissionMode) it can only be applied by
@@ -2293,6 +2307,7 @@ export class AgentCoordinator {
       || session.localPath !== args.localPath
       || session.effort !== args.effort
       || session.autoPlan !== args.autoPlan
+      || session.managedProviderKey !== managedProviderKey
       || args.forkSession
     ) {
       if (session) {
@@ -2313,12 +2328,17 @@ export class AgentCoordinator {
         customTools: args.customTools,
         onRateLimitEvent: (info) => this.onClaudeRateLimit?.(info),
         onSubagentActivity: (update) => this.applySubagentActivity(args.chatId, update),
+        managedEnvironment: managedProvider ? {
+          ANTHROPIC_BASE_URL: managedProvider.baseUrl.replace(/\/$/, ""),
+          ANTHROPIC_AUTH_TOKEN: managedProvider.accountToken,
+        } : undefined,
       })
       this.refreshClaudeModelCatalog(started)
 
       session = {
         id: crypto.randomUUID(),
         chatId: args.chatId,
+        managedProviderKey,
         session: started,
         localPath: args.localPath,
         model: args.model,

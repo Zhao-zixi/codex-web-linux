@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { History, Loader2 } from "lucide-react"
+import { History, Loader2, LogOut } from "lucide-react"
 import {
   chatModeFromFlags,
   chatModeToFlags,
@@ -21,6 +21,8 @@ import { Input } from "../../components/ui/input"
 import { SelectItem } from "../../components/ui/select"
 import { applyModelToComposerState } from "../../lib/composer"
 import { cn } from "../../lib/utils"
+import { kannaFetch } from "../auth-client"
+import { clearGatewayUserLocalState } from "../gateway-user-state"
 import { useChatPreferencesStore, type ComposerState } from "../../stores/chatPreferencesStore"
 import { useProviderAuthStore } from "../../stores/providerAuthStore"
 import type { KannaState } from "../useKannaState"
@@ -40,6 +42,47 @@ import { SETTINGS_ROWS } from "./registry"
 function ProviderLogo({ provider }: { provider: AgentProvider }) {
   const Icon = PROVIDER_ICONS[provider]
   return <Icon className="h-4 w-4 shrink-0" />
+}
+
+function ManagedConnectionsSection() {
+  const [connections, setConnections] = useState<Array<{ id: string; name: string; provider: "codex" | "claude"; enabled: boolean }>>([])
+  const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
+  const [unavailable, setUnavailable] = useState(false)
+  useEffect(() => {
+    let active = true
+    void kannaFetch("/api/provider-access", { cache: "no-store" }).then(async (response) => {
+      if (response.status === 404) {
+        if (active) setUnavailable(true)
+        return
+      }
+      if (!response.ok) throw new Error("Unable to load managed provider access")
+      const payload = await response.json() as { assigned?: typeof connections }
+      if (active) setConnections(Array.isArray(payload.assigned) ? payload.assigned : [])
+    }).catch(() => {
+      if (active) setLoadError(true)
+    }).finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [])
+  async function signOut() {
+    await kannaFetch("/auth/logout", { method: "POST" }).catch(() => undefined)
+    await clearGatewayUserLocalState({ clearAuth: true })
+    window.location.assign("/")
+  }
+  if (unavailable) return null
+  return <SettingsGroup title="管理员分配的连接">
+    {loading ? <div className="px-4 py-3 text-sm text-muted-foreground">正在读取可用连接…</div> : loadError ? <div role="status" className="px-4 py-3 text-sm text-muted-foreground">暂时无法读取管理员分配的连接，请稍后重试。</div> : connections.length ? <>
+      {connections.map((connection) => <SettingsRow key={connection.id} title={connection.name} description={connection.provider === "codex" ? "OpenAI API · 管理员提供" : "Anthropic API · 管理员提供"}>
+        <span className="rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">{connection.enabled ? "可用" : "已停用"}</span>
+      </SettingsRow>)}
+      <SettingsNotice tone="warning" className="mx-4 mb-4">本人配置的凭据始终优先使用。如果本人凭据失效，Kanna 不会自动改用管理员连接；请先修复或移除本人凭据。</SettingsNotice>
+    </> : <div className="px-4 py-3 text-sm text-muted-foreground">目前没有分配给此账号的共享 API 连接。</div>}
+    <div className="flex justify-end border-t border-border px-4 py-3">
+      <Button variant="outline" size="sm" onClick={() => void signOut()}>
+        <LogOut className="mr-2 h-4 w-4" />退出登录
+      </Button>
+    </div>
+  </SettingsGroup>
 }
 
 const QUICK_RESPONSE_PROVIDER_OPTIONS: Array<{ value: LlmProviderKind; label: string }> = [
@@ -235,6 +278,7 @@ export function ProvidersSection({
             </div>
           )}
         </SettingsGroup>
+        <ManagedConnectionsSection />
         <SettingsGroup title="Defaults">
           <SettingsRow def={SETTINGS_ROWS.defaultProvider} description={null}>
             <SettingsSelect

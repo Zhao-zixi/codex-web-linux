@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto"
-import { access, chmod, chown, copyFile, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises"
+import { access, chmod, chown, copyFile, lstat, mkdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises"
 import { constants as fsConstants } from "node:fs"
 import path from "node:path"
 import { spawnSync } from "node:child_process"
@@ -26,6 +26,7 @@ export interface RemoteWorkspaceManifest {
   hostnameMode?: "subdomain" | "shared"
   publicHostname?: string
   tls?: RemoteWorkspaceTls
+  gateway?: { enabled: true; publicPort: number }
 }
 
 export interface InitRemoteWorkspaceOptions {
@@ -122,7 +123,11 @@ function validateManifestHostname(manifest: RemoteWorkspaceManifest) {
     if (!manifest.publicHostname) throw new Error("Shared hostname mode requires a public hostname")
     if (validateDomain(manifest.publicHostname) !== manifest.publicHostname) throw new Error("Public hostname must be normalized")
     if (manifest.domain !== manifest.publicHostname) throw new Error("Shared hostname domain must match public hostname")
-    if (manifest.accounts.some((account) => account.webPort === undefined)) throw new Error("Shared hostname mode requires a distinct web port for every account")
+    if (!manifest.gateway?.enabled && manifest.accounts.some((account) => account.webPort === undefined)) throw new Error("Shared hostname mode requires a distinct web port for every account")
+    if (manifest.gateway && (!manifest.gateway.enabled || !Number.isInteger(manifest.gateway.publicPort) || manifest.gateway.publicPort < 1024 || manifest.gateway.publicPort > 65535)) throw new Error("Invalid gateway configuration")
+    if (manifest.gateway?.enabled && (manifest.tls?.mode !== "none" || manifest.accounts.some((account) => account.sshPort === manifest.gateway!.publicPort))) {
+      throw new Error("The gateway requires plain HTTP and a public port that does not conflict with SSH")
+    }
     if (!manifest.tls) throw new Error("Shared hostname mode requires an explicit TLS mode")
     if (manifest.tls.mode === "internal" || manifest.tls.mode === "none") {
       if ("certFile" in manifest.tls || "keyFile" in manifest.tls) throw new Error("This TLS mode cannot include external certificate paths")
@@ -161,6 +166,16 @@ async function writeSecret(filePath: string, contents: string, uid: number, gid:
   await writeFile(filePath, contents, { flag: "wx", mode: 0o600 })
   await chmod(filePath, 0o600)
   if (typeof process.getuid === "function" && process.getuid() === 0) await chown(filePath, uid, gid)
+}
+
+async function readPrivateFile(filePath: string, uid: number, gid: number) {
+  const info = await lstat(filePath)
+  if (info.isSymbolicLink() || !info.isFile()) throw new Error("Private deployment credential must be a regular file")
+  await chmod(filePath, 0o600)
+  if (typeof process.getuid === "function" && process.getuid() === 0 && (info.uid !== uid || info.gid !== gid)) {
+    await chown(filePath, uid, gid)
+  }
+  return readFile(filePath, "utf8")
 }
 
 async function ensureOwnedPrivateDir(dirPath: string, uid: number, gid: number) {
@@ -286,7 +301,8 @@ export function renderHostedWorkspaceConfig(manifest: RemoteWorkspaceManifest, a
     publicHostKey: "",
   }
   if (!shared) return config
-  const webPort = account.webPort!
+  const gatewayMode = manifest.gateway?.enabled === true
+  const webPort = gatewayMode ? manifest.gateway!.publicPort : account.webPort!
   return {
     ...config,
     authMode: "bearer" as const,
@@ -294,6 +310,78 @@ export function renderHostedWorkspaceConfig(manifest: RemoteWorkspaceManifest, a
     webPort,
     webOrigin: `${manifest.tls?.mode === "none" ? "http" : "https"}://${host}:${webPort}`,
   }
+}
+
+/** Enable the one-port gateway on an existing shared HTTP deployment. */
+export async function enableRemoteWorkspaceGateway(outputDirInput: string, publicPort = 8444) {
+  const outputDir = path.resolve(outputDirInput)
+  const manifestPath = path.join(outputDir, MANIFEST_FILE)
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as RemoteWorkspaceManifest
+  if (manifest.version !== 1 || validateManifestHostname(manifest) !== "shared" || manifest.tls?.mode !== "none" || manifest.local) {
+    throw new Error("Gateway mode requires an existing shared-hostname HTTP deployment")
+  }
+  if (!Number.isInteger(publicPort) || publicPort < 1024 || publicPort > 65535 || manifest.accounts.some((account) => account.sshPort === publicPort)) {
+    throw new Error("Gateway public port is invalid or conflicts with SSH")
+  }
+  if (typeof process.getuid === "function" && process.getuid() !== 0 && process.getuid() !== manifest.runtimeUid) {
+    throw new Error(`Run enable-gateway as UID ${manifest.runtimeUid}, or use root to assign the output owner`)
+  }
+  const { GatewayStore } = await import("../src/server/gateway/gateway-store")
+  const gatewayState = path.join(outputDir, "state", "gateway")
+  const gatewayAdminHome = path.join(outputDir, "state", "gateway-admin-home")
+  const gatewaySecrets = path.join(outputDir, "secrets")
+  await ensureOwnedPrivateDir(gatewayState, manifest.runtimeUid, manifest.runtimeGid)
+  await ensureOwnedPrivateDir(gatewayAdminHome, manifest.runtimeUid, manifest.runtimeGid)
+  const store = new GatewayStore(gatewayState, { uid: manifest.runtimeUid, gid: manifest.runtimeGid })
+  for (const account of manifest.accounts) {
+    if (await store.findUser(account.name)) continue
+    const passwordPath = path.join(gatewaySecrets, account.name, "app-password")
+    const password = (await readPrivateFile(passwordPath, manifest.runtimeUid, manifest.runtimeGid)).trim()
+    if (!password) throw new Error(`Existing workspace password is unavailable for ${account.name}`)
+    await store.createUser({ username: account.name, password, role: "user", accountId: account.name })
+  }
+  if (!await store.findUser("admin")) {
+    const adminPasswordPath = path.join(gatewaySecrets, "gateway-admin-password")
+    let adminPassword: string
+    try {
+      adminPassword = (await readPrivateFile(adminPasswordPath, manifest.runtimeUid, manifest.runtimeGid)).trim()
+      if (!adminPassword) throw new Error("Gateway administrator password file is empty")
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+      adminPassword = randomBytes(32).toString("base64url")
+      await writeSecret(adminPasswordPath, `${adminPassword}\n`, manifest.runtimeUid, manifest.runtimeGid)
+    }
+    await store.createUser({ username: "admin", password: adminPassword, role: "admin" })
+  }
+  for (const account of manifest.accounts) {
+    const tokenPath = path.join(gatewaySecrets, account.name, "gateway-account-token")
+    let token: string
+    try {
+      token = (await readPrivateFile(tokenPath, manifest.runtimeUid, manifest.runtimeGid)).trim()
+      if (!/^[A-Za-z0-9_-]{32,128}$/.test(token)) throw new Error(`Invalid gateway token file for ${account.name}`)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+      token = randomBytes(32).toString("base64url")
+      await writeSecret(tokenPath, `${token}\n`, manifest.runtimeUid, manifest.runtimeGid)
+    }
+    const envPath = path.join(outputDir, "config", `${account.name}.gateway.env`)
+    await mkdir(path.dirname(envPath), { recursive: true, mode: 0o755 })
+    try {
+      const envText = await readPrivateFile(envPath, manifest.runtimeUid, manifest.runtimeGid)
+      const expected = `KANNA_GATEWAY_URL=http://gateway:3210\nKANNA_GATEWAY_ACCOUNT_TOKEN=${token}\n`
+      if (envText !== expected) throw new Error(`Gateway account environment does not match its token for ${account.name}`)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+      await writeSecret(envPath, `KANNA_GATEWAY_URL=http://gateway:3210\nKANNA_GATEWAY_ACCOUNT_TOKEN=${token}\n`, manifest.runtimeUid, manifest.runtimeGid)
+    }
+  }
+  manifest.gateway = { enabled: true, publicPort }
+  const temporaryManifest = `${manifestPath}.${randomBytes(8).toString("hex")}.tmp`
+  await writeFile(temporaryManifest, `${JSON.stringify(manifest, null, 2)}\n`, { flag: "wx", mode: 0o600 })
+  await chmod(temporaryManifest, 0o600)
+  if (typeof process.getuid === "function" && process.getuid() === 0) await chown(temporaryManifest, manifest.runtimeUid, manifest.runtimeGid)
+  await rename(temporaryManifest, manifestPath)
+  return { manifest, adminPasswordPath: path.join(gatewaySecrets, "gateway-admin-password") }
 }
 
 export async function addRemoteWorkspaceAccount(args: {
@@ -305,6 +393,7 @@ export async function addRemoteWorkspaceAccount(args: {
   const manifestPath = path.join(outputDir, MANIFEST_FILE)
   const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as RemoteWorkspaceManifest
   if (manifest.version !== 1) throw new Error("Unsupported deployment manifest version")
+  if (manifest.gateway?.enabled) throw new Error("Adding accounts after gateway mode is enabled is not supported yet")
   if (manifest.local) {
     if (manifest.domain !== "localhost") throw new Error("Local deployment domain must be localhost")
   } else {
@@ -388,6 +477,7 @@ export async function generateRemoteWorkspaceFiles(outputDirInput: string) {
   }
   const hostnameMode = validateManifestHostname(manifest)
   const sharedHostname = hostnameMode === "shared"
+  const gatewayMode = manifest.gateway?.enabled === true
   if (sharedHostname) await validateSharedTls(manifest.tls)
   validateAccounts(manifest.accounts)
   const hostKeyByAccount = new Map<string, string>()
@@ -402,6 +492,14 @@ export async function generateRemoteWorkspaceFiles(outputDirInput: string) {
     const knownHost = config.sshHost
     await writeFile(path.join(configDir, `${account.name}.known_hosts`), `[${knownHost}]:${account.sshPort} ${publicKey}\n`, { mode: 0o644 })
     await chmod(path.join(configDir, `${account.name}.known_hosts`), 0o644)
+    if (gatewayMode) {
+      const envPath = path.join(configDir, `${account.name}.gateway.env`)
+      const values = (await readFile(envPath, "utf8")).split(/\r?\n/).filter(Boolean)
+      if (values.length !== 2 || values[0] !== "KANNA_GATEWAY_URL=http://gateway:3210" || !/^KANNA_GATEWAY_ACCOUNT_TOKEN=[A-Za-z0-9_-]{32,128}$/.test(values[1]!)) {
+        throw new Error(`Invalid private gateway environment file for ${account.name}`)
+      }
+      await chmod(envPath, 0o600)
+    }
   }
 
   const networks = manifest.accounts.map((account) => `account_${account.name}`)
@@ -435,7 +533,10 @@ export async function generateRemoteWorkspaceFiles(outputDirInput: string) {
       HOME: /home/kanna
       CODEX_HOME: /home/kanna/.codex
       KANNA_TRUST_PROXY: "1"
-      KANNA_HOSTED_WORKSPACE_CONFIG: /run/hosted-workspace.json
+      KANNA_HOSTED_WORKSPACE_CONFIG: /run/hosted-workspace.json${gatewayMode ? `
+      KANNA_GATEWAY_URL: http://gateway:3210` : ""}
+    ${gatewayMode ? `env_file:
+      - ./config/${account.name}.gateway.env` : ""}
     volumes:
       - ${state}/home:/home/kanna
       - ${state}/codex:/home/kanna/.codex
@@ -498,7 +599,7 @@ export async function generateRemoteWorkspaceFiles(outputDirInput: string) {
   const caddyTlsVolumes = sharedHostname && manifest.tls?.mode === "external"
     ? `\n      - type: bind\n        source: ${quoteYaml(await realpath(manifest.tls!.certFile))}\n        target: /run/caddy/external-cert.pem\n        read_only: true\n      - type: bind\n        source: ${quoteYaml(await realpath(manifest.tls!.keyFile))}\n        target: /run/caddy/external-key.pem\n        read_only: true`
     : ""
-  const caddyBlock = `  caddy:
+  const caddyBlock = gatewayMode ? "" : `  caddy:
     image: caddy:2.10.2-alpine
     ports:
 ${caddyPorts}
@@ -509,19 +610,70 @@ ${caddyPorts}
     networks:
 ${caddyNetworks}
     restart: unless-stopped`
+  let gatewayBlock = ""
+  if (gatewayMode) {
+    const gatewayConfig = {
+      publicOrigin: `http://${manifest.publicHostname}:${manifest.gateway!.publicPort}`,
+      stateDirectory: "/var/lib/kanna-gateway/state",
+      adminHomeDirectory: "/var/lib/kanna-gateway/admin-home",
+      clientDirectory: "/app/dist/client",
+      accounts: manifest.accounts.map((account) => ({
+        id: account.name,
+        appUrl: `http://kanna_${account.name}:3210`,
+        appPasswordFile: `/run/gateway-secrets/${account.name}/app-password`,
+        accountTokenFile: `/run/gateway-secrets/${account.name}/gateway-account-token`,
+      })),
+    }
+    await writeFile(path.join(outputDir, "config", "gateway.json"), `${JSON.stringify(gatewayConfig, null, 2)}\n`, { mode: 0o644 })
+    gatewayBlock = `  gateway:
+    build:
+      context: ${quoteYaml(repositoryContext)}
+      dockerfile: deploy/remote-workspace/Dockerfile.app
+      args:
+        REMOTE_UID: "\${REMOTE_UID}"
+        REMOTE_GID: "\${REMOTE_GID}"
+    image: kanna-remote-app:0.82.0
+    init: true
+    user: "\${REMOTE_UID}:\${REMOTE_GID}"
+    command: ["--no-open"]
+    environment:
+      KANNA_GATEWAY_MODE: "1"
+      KANNA_GATEWAY_CONFIG: /run/gateway-config.json
+      HOME: /var/lib/kanna-gateway/admin-home
+      BUN_INSTALL: /var/lib/kanna-gateway/admin-home/.bun
+      PATH: /var/lib/kanna-gateway/admin-home/.bun/bin:/opt/bun/bin:/usr/local/sbin:/usr/sbin:/sbin:/usr/local/bin:/usr/bin:/bin:/usr/local/bun-node-fallback-bin
+    ports:
+      - ${quoteYaml(`${manifest.gateway!.publicPort}:3210`)}
+    volumes:
+      - ./config/gateway.json:/run/gateway-config.json:ro
+      - ./state/gateway:/var/lib/kanna-gateway/state
+      - ./state/gateway-admin-home:/var/lib/kanna-gateway/admin-home
+${manifest.accounts.map((account) => `      - ./secrets/${account.name}/app-password:/run/gateway-secrets/${account.name}/app-password:ro\n      - ./secrets/${account.name}/gateway-account-token:/run/gateway-secrets/${account.name}/gateway-account-token:ro`).join("\n")}
+    networks:
+${caddyNetworks}
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    cpus: 1.0
+    mem_limit: 1g
+    restart: unless-stopped`
+  }
   const compose = `name: kanna-remote-workspace
 services:
-${caddyBlock}
+${caddyBlock}${gatewayBlock ? `\n${gatewayBlock}` : ""}
 ${services.join("\n\n")}
 
-volumes:
-  caddy_data:
-  caddy_config:
+${gatewayMode ? "" : `volumes:\n  caddy_data:\n  caddy_config:\n`}
 
 networks:
 ${accountNetworks}
 `
-  const caddyfile = manifest.accounts.map((account) => {
+  const caddyfile = gatewayMode ? "" : manifest.accounts.map((account) => {
     if (sharedHostname) {
       const address = manifest.tls?.mode === "none" ? `http://${manifest.publicHostname}:${account.webPort}` : `${manifest.publicHostname}:${account.webPort}`
       const tlsDirective = manifest.tls?.mode === "internal"
@@ -536,10 +688,10 @@ ${accountNetworks}
   }).join("\n\n") + "\n"
 
   await writeFile(path.join(outputDir, "compose.yaml"), compose, { mode: 0o600 })
-  await writeFile(path.join(outputDir, "Caddyfile"), caddyfile, { mode: 0o600 })
+  if (caddyfile) await writeFile(path.join(outputDir, "Caddyfile"), caddyfile, { mode: 0o600 })
   await copyFile(new URL("../deploy/remote-workspace/sync.sh", import.meta.url), path.join(outputDir, "sync.sh"))
   await chmod(path.join(outputDir, "compose.yaml"), 0o644)
-  await chmod(path.join(outputDir, "Caddyfile"), 0o644)
+  if (caddyfile) await chmod(path.join(outputDir, "Caddyfile"), 0o644)
   await chmod(path.join(outputDir, "sync.sh"), 0o755)
   return { manifest, compose, caddyfile, hostKeyByAccount }
 }

@@ -1,8 +1,9 @@
 import { create } from "zustand"
-import { persist } from "zustand/middleware"
+import { createJSONStorage, persist } from "zustand/middleware"
 import type { AgentProvider } from "../../shared/types"
 import type { ViewerItem } from "./viewerStore"
 import { SIDEBAR_MAX_WIDTH_PX } from "../lib/sidebarWidth"
+import { workspaceLocalStorage } from "../lib/workspace-storage"
 
 /**
  * The chat page's panes beside the chat, and the one record of how they're
@@ -282,6 +283,7 @@ export const useRightSidebarStore = create<RightSidebarState>()(
     }),
     {
       name: "right-sidebar-layouts",
+      storage: createJSONStorage(() => workspaceLocalStorage),
       version: 9,
       migrate: migrateRightSidebarStore,
       partialize: (state) => ({

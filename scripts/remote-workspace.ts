@@ -5,6 +5,7 @@ import path from "node:path"
 import { spawnSync } from "node:child_process"
 import {
   addRemoteWorkspaceAccount,
+  enableRemoteWorkspaceGateway,
   generateRemoteWorkspaceFiles,
   initializeRemoteWorkspace,
   validateAccountName,
@@ -23,6 +24,7 @@ Commands:
   doctor [--output directory]
   export-ca [--output directory] [--output-file file]
   add-account --account name:ssh-port[:web-port] --pubkey /path/key.pub [--output directory]
+  enable-gateway [--output directory] [--port 8444]
 
 Options:
   --output directory  Deployment state directory (default ${DEFAULT_OUTPUT})
@@ -171,10 +173,21 @@ try {
     const generated = await generateRemoteWorkspaceFiles(output)
     console.log(`Generated Compose, Caddy, account configs and known_hosts in ${output}`)
     console.log(`Configured ${generated.manifest.accounts.length} isolated account${generated.manifest.accounts.length === 1 ? "" : "s"}`)
+  } else if (command === "enable-gateway") {
+    const port = Number(single(options, "port", "8444"))
+    const enabled = await enableRemoteWorkspaceGateway(output, port)
+    console.log(`Enabled single-port HTTP gateway on ${enabled.manifest.publicHostname}:${enabled.manifest.gateway!.publicPort}`)
+    console.log(`Administrator initial password file: ${enabled.adminPasswordPath}`)
+    console.log("Existing workspace passwords, account data, SSH keys, and credentials were preserved")
+    console.log("Next: bun run remote-workspace -- generate")
   } else if (command === "up") {
     let status = 1
+    withOutputDir(output, () => {})
+    const manifest = JSON.parse(await Bun.file(path.join(output, "manifest.json")).text()) as { gateway?: { enabled?: boolean } }
+    const composeArgs = ["compose", "-f", path.join(output, "compose.yaml"), "up", "-d", "--build"]
+    if (manifest.gateway?.enabled) composeArgs.push("--remove-orphans")
     withOutputDir(output, () => {
-      status = run("docker", ["compose", "-f", path.join(output, "compose.yaml"), "up", "-d", "--build"])
+      status = run("docker", composeArgs)
     })
     process.exit(status)
   } else if (command === "export-ca") {

@@ -55,6 +55,12 @@ unset OPENAI_API_KEY
 
 截图通过临时 mock gateway 和浏览器生成，admin、elim、zzx 及 Codex/Claude 登录状态均为合成 fixture。它展示界面布局、native 连接状态和用户分配控件；没有使用真实 CLI、OAuth 登录或凭据，也不代表真实模型调用已验证。
 
+下面两张手机截图展示 320px 宽度下管理页的顶部和滚动到底部状态；用户名、连接名和 provider 状态均为合成 fixture，没有使用真实账号或授权凭据。
+
+![手机管理页顶部](images/gateway-admin-mobile-top.png)
+
+![手机管理页底部](images/gateway-admin-mobile-bottom.png)
+
 ## 纯 HTTP 的限制
 
 本次部署使用纯 HTTP。网页、密码、会话令牌、工作区数据和请求内容会以明文经过网络；只应在用户到服务器之间网络路径可信且入口访问范围受控时使用。浏览器会把网页登录令牌保存在当前 origin 的会话存储中；不要在共享设备上保留登录页面。HTTP 下浏览器媒体与大文件传输有额外限制，见远程工作区指南。

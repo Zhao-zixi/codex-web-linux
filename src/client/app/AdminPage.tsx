@@ -88,7 +88,7 @@ export function AdminPage() {
     }
   }
 
-  return <main className="min-h-[100dvh] bg-background px-5 py-8 md:px-10">
+  return <main className="h-[100dvh] overflow-y-auto overscroll-y-contain bg-background px-5 py-8 md:px-10">
     <div className="mx-auto max-w-6xl space-y-7">
       <header className="flex flex-wrap items-center justify-between gap-4">
         <div><p className="text-sm font-medium text-primary">Kanna · 管理后台</p><h1 className="mt-1 text-3xl font-semibold tracking-tight">连接与用户</h1><p className="mt-2 text-sm text-muted-foreground">授权官方账号连接，或添加可选 API 连接，再分配给用户。</p></div>
@@ -145,8 +145,8 @@ function UserControl({ user, connections, busy, onChange }: { user: UserRow; con
   function toggle(id: string) {
     setSelectedIds(selected.has(id) ? selectedIds.filter((value) => value !== id) : [...selectedIds, id])
   }
-  return <div className="rounded-2xl border border-border p-4"><div className="flex items-center justify-between gap-3"><div><p className="font-medium">{user.username} <span className="text-xs text-muted-foreground">{user.role === "admin" ? "管理员" : "用户"}</span></p></div><Button size="sm" variant="outline" disabled={busy || user.role === "admin"} onClick={() => onChange(`/api/admin/users/${user.id}`, "PATCH", { enabled: !user.enabled })}>{user.enabled ? "停用" : "启用"}</Button></div>
-    <div className="mt-3 space-y-2">{connections.map((connection) => <label key={connection.id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={selected.has(connection.id)} onChange={() => toggle(connection.id)} disabled={busy || user.role === "admin"}/>{connection.name}</label>)}</div>
+  return <div className="rounded-2xl border border-border p-4"><div className="flex items-center justify-between gap-3"><div className="min-w-0"><p className="break-all font-medium">{user.username} <span className="text-xs text-muted-foreground">{user.role === "admin" ? "管理员" : "用户"}</span></p></div><Button size="sm" variant="outline" disabled={busy || user.role === "admin"} onClick={() => onChange(`/api/admin/users/${user.id}`, "PATCH", { enabled: !user.enabled })}>{user.enabled ? "停用" : "启用"}</Button></div>
+    <div className="mt-3 space-y-2">{connections.map((connection) => <label key={connection.id} className="flex min-w-0 items-start gap-2 text-sm"><input className="mt-1 shrink-0" type="checkbox" checked={selected.has(connection.id)} onChange={() => toggle(connection.id)} disabled={busy || user.role === "admin"}/><span className="min-w-0 break-all">{connection.name}</span></label>)}</div>
     {user.role !== "admin" && <div className="mt-3 flex justify-end"><Button size="sm" variant="outline" disabled={busy || selectedIds.length === user.connectionIds.length && selectedIds.every((id) => user.connectionIds.includes(id))} onClick={() => onChange(`/api/admin/users/${user.id}/grants`, "PUT", { connectionIds: selectedIds })}>保存分配</Button></div>}
     {user.role !== "admin" && <form className="mt-3 flex gap-2" onSubmit={(e) => { e.preventDefault(); if (password) { onChange(`/api/admin/users/${user.id}`, "PATCH", { password }); setPassword("") } }}><Input aria-label={`${user.username} 新密码`} type="password" autoComplete="new-password" placeholder="新密码至少 12 位" value={password} onChange={(e) => setPassword(e.target.value)}/><Button size="sm" variant="outline" disabled={busy || password.length < 12}>重置</Button></form>}
   </div>
@@ -159,8 +159,8 @@ function ConnectionControl({ connection, busy, onChange }: { connection: Connect
   return (
     <div className="rounded-2xl border border-border p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <p className="font-medium">{connection.name}</p>
+        <div className="min-w-0">
+          <p className="break-all font-medium">{connection.name}</p>
           <p className="text-xs text-muted-foreground">
             {connection.kind === "native" ? `${connection.provider === "codex" ? "Codex" : "Claude Code"} 官方账号` : connection.provider === "codex" ? "OpenAI API" : "Anthropic API"} · {connection.enabled ? "可用" : "已停用"}
           </p>

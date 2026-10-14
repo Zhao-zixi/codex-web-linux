@@ -88,8 +88,8 @@ function PasswordScreen({
   }
 
   return (
-    <div className="flex min-h-[100dvh] items-center justify-center bg-background px-6 py-10">
-      <Card className="w-full max-w-md rounded-3xl border border-border bg-card shadow-sm">
+    <div className="flex h-[100dvh] min-h-0 items-center justify-center overflow-y-auto overscroll-y-contain bg-background px-6 py-10">
+      <Card className="my-auto w-full max-w-md rounded-3xl border border-border bg-card shadow-sm">
         <CardHeader className="flex flex-col p-2 space-y-3 px-6 pt-6 pb-5 pl-[28px]">
           <div className="flex items-center gap-3">
             <Flower className="h-5 w-5 text-logo" />

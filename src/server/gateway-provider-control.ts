@@ -37,7 +37,15 @@ export function createNativeProviderTokenSingleflight<T>() {
 }
 
 /** Keeps administrator CLI OAuth state under a gateway-owned, isolated HOME. */
-export function createAdminProviderControl({ homeDir }: { homeDir: string }) {
+export function createAdminProviderControl({
+  homeDir,
+  createAuthDeps = createProcessAuthDeps,
+  resolveCommandPath: resolveCommandPathImpl = resolveCommandPath,
+}: {
+  homeDir: string
+  createAuthDeps?: typeof createProcessAuthDeps
+  resolveCommandPath?: typeof resolveCommandPath
+}) {
   const env = {
     HOME: homeDir,
     CODEX_HOME: path.join(homeDir, ".codex"),
@@ -81,13 +89,17 @@ export function createAdminProviderControl({ homeDir }: { homeDir: string }) {
     if (manager) return manager
     if (managerPromise) return managerPromise
     managerPromise = (async () => {
-    await mkdir(homeDir, { recursive: true, mode: 0o700 })
-    const deps = createProcessAuthDeps()
+    // Codex and Claude expect their config roots to exist before the first
+    // status probe. mkdir leaves existing directories and credentials intact.
+    for (const directory of [homeDir, env.CODEX_HOME, env.CLAUDE_CONFIG_DIR]) {
+      await mkdir(directory, { recursive: true, mode: 0o700 })
+    }
+    const deps = createAuthDeps()
     const baseExec = deps.exec
     const baseSpawn = deps.spawnStreaming
     const created = new ProviderAuthManager({
       ...deps,
-      resolveCommandPath: (command) => resolveCommandPath(command, homeDir),
+      resolveCommandPath: (command) => resolveCommandPathImpl(command, homeDir),
       exec: (argv, opts) => baseExec(argv, { ...opts, env: { ...env, ...opts?.env } }),
       spawnStreaming: (argv, opts) => baseSpawn(argv, { ...opts, env: { ...env, ...opts?.env } }),
       spawnPty: (argv) => {
@@ -160,7 +172,7 @@ export function createAdminProviderControl({ homeDir }: { homeDir: string }) {
     async install(provider: AdminProviderId) {
       const current = await getManager()
       if (provider === "codex") return current.install("codex")
-      const deps = createProcessAuthDeps()
+      const deps = createAuthDeps()
       const result = await deps.exec(["bun", "add", "--global", `@anthropic-ai/claude-code@${claudeCodeMinimumVersion()}`], { env, timeoutMs: 10 * 60_000 })
       if (result.code !== 0) throw new Error(result.stderr.trim() || result.stdout.trim() || "Claude Code installation failed.")
       await current.probeService("claude")
@@ -170,7 +182,7 @@ export function createAdminProviderControl({ homeDir }: { homeDir: string }) {
       const current = await getManager()
       await withProviderLock(provider, async () => {
         await current.cancelLoginAndWait(service(provider))
-        const result = await createProcessAuthDeps().exec(
+        const result = await createAuthDeps().exec(
           provider === "codex" ? ["codex", "logout"] : ["claude", "auth", "logout"],
           { env },
         )

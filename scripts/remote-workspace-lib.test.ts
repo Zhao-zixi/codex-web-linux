@@ -104,6 +104,17 @@ describe("remote workspace generation", () => {
     expect(generated.caddyfile).toContain("alice.localhost")
     expect(generated.compose).toContain('127.0.0.1:8080:80')
     expect(generated.compose).toContain('127.0.0.1:8443:443')
+    expect(await readFile(path.join(outputDir, ".env"), "utf8")).toContain("KANNA_OUTBOUND_PROXY=\nKANNA_OUTBOUND_NO_PROXY=\n")
+    if (spawnSync("docker", ["compose", "version"], { stdio: "ignore" }).status === 0) {
+      const config = spawnSync("docker", ["compose", "--env-file", path.join(outputDir, ".env"), "-f", path.join(outputDir, "compose.yaml"), "config", "--format", "json"], { encoding: "utf8" })
+      expect(config.status).toBe(0)
+      const parsed = JSON.parse(config.stdout) as { services: Record<string, { environment: Record<string, string> }> }
+      expect(parsed.services.kanna_alice!.environment.HTTP_PROXY).toBe("")
+      expect(parsed.services.kanna_alice!.environment.HTTPS_PROXY).toBe("")
+      expect(parsed.services.kanna_alice!.environment.http_proxy).toBe("")
+      expect(parsed.services.kanna_alice!.environment.https_proxy).toBe("")
+      expect(parsed.services.kanna_alice!.environment.NO_PROXY).toBe("localhost,127.0.0.1,::1,kanna_alice,ssh_alice")
+    }
     expect(() => validateDomain("localhost")).toThrow()
   })
 
@@ -202,6 +213,78 @@ describe("remote workspace generation", () => {
     expect(await stat(path.join(outputDir, "state/alice/ssh-host-ed25519")).then((value) => value.mode & 0o077)).toBe(0)
     expect(await stat(path.join(outputDir, "sync.sh")).then((value) => value.mode & 0o777)).toBe(0o755)
     expect(await Bun.file(path.join(outputDir, "secrets/alice/client-ed25519")).exists()).toBe(false)
+  })
+
+  test("keeps outbound proxy opt-in, scoped to gateway and apps, and preserves existing private env on generation", async () => {
+    const root = await tempDir()
+    const outputDir = path.join(root, "deployment")
+    await seedRootOwnedFixture(outputDir, {
+      alice: await publicKey(root, "alice"),
+      bob: await publicKey(root, "bob"),
+    })
+    const manifestPath = path.join(outputDir, "manifest.json")
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as Record<string, any>
+    manifest.hostnameMode = "shared"
+    manifest.publicHostname = "fnos.example.test"
+    manifest.domain = "fnos.example.test"
+    manifest.tls = { mode: "none" }
+    manifest.accounts[0].webPort = 8444
+    manifest.accounts[1].webPort = 8445
+    manifest.gateway = { enabled: true, publicPort: 8446 }
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+    await mkdir(path.join(outputDir, "state/gateway-admin-home"), { recursive: true, mode: 0o700 })
+    const token = "a".repeat(43)
+    for (const name of ["alice", "bob"]) {
+      await writeFile(path.join(outputDir, `config/${name}.gateway.env`), `KANNA_GATEWAY_URL=http://gateway:3210\nKANNA_GATEWAY_ACCOUNT_TOKEN=${token}\n`, { mode: 0o600 })
+    }
+    const privateEnv = "REMOTE_UID=1000\nREMOTE_GID=1000\nKANNA_OUTBOUND_PROXY=http://proxy.example.test:7890\nKANNA_OUTBOUND_NO_PROXY=internal.example.test\n"
+    const privateEnvPath = path.join(outputDir, ".env")
+    await writeFile(privateEnvPath, privateEnv, { mode: 0o600 })
+    const privateEnvStat = await stat(privateEnvPath)
+    const gatewayEnv = await readFile(path.join(outputDir, "config/alice.gateway.env"), "utf8")
+
+    const generated = await generateRemoteWorkspaceFiles(outputDir)
+    expect(await readFile(privateEnvPath, "utf8")).toBe(privateEnv)
+    const afterPrivateEnvStat = await stat(privateEnvPath)
+    expect(afterPrivateEnvStat.uid).toBe(privateEnvStat.uid)
+    expect(afterPrivateEnvStat.gid).toBe(privateEnvStat.gid)
+    expect(afterPrivateEnvStat.mode & 0o777).toBe(privateEnvStat.mode & 0o777)
+    expect(await readFile(path.join(outputDir, "config/alice.gateway.env"), "utf8")).toBe(gatewayEnv)
+    expect(generated.compose.match(/HTTP_PROXY: "\$\{KANNA_OUTBOUND_PROXY:-\}"/g)).toHaveLength(3)
+    expect(generated.compose.match(/HTTPS_PROXY: "\$\{KANNA_OUTBOUND_PROXY:-\}"/g)).toHaveLength(3)
+    expect(generated.compose.match(/http_proxy: "\$\{KANNA_OUTBOUND_PROXY:-\}"/g)).toHaveLength(3)
+    expect(generated.compose.match(/https_proxy: "\$\{KANNA_OUTBOUND_PROXY:-\}"/g)).toHaveLength(3)
+    expect(generated.compose).toContain('NO_PROXY: "localhost,127.0.0.1,::1,gateway,kanna_alice,ssh_alice,kanna_bob,ssh_bob${KANNA_OUTBOUND_NO_PROXY:+,${KANNA_OUTBOUND_NO_PROXY}}"')
+    expect(generated.compose).toContain('no_proxy: "localhost,127.0.0.1,::1,gateway,kanna_alice,ssh_alice,kanna_bob,ssh_bob${KANNA_OUTBOUND_NO_PROXY:+,${KANNA_OUTBOUND_NO_PROXY}}"')
+
+    const services = generated.compose.split("services:\n")[1]!
+    const gateway = services.split("  gateway:\n")[1]!.split("  kanna_alice:\n")[0]!
+    const alice = services.split("  kanna_alice:\n")[1]!.split("  ssh_alice:\n")[0]!
+    const aliceSsh = services.split("  ssh_alice:\n")[1]!.split("  kanna_bob:\n")[0]!
+    expect(gateway).toContain("host.docker.internal:host-gateway")
+    expect(alice).toContain("host.docker.internal:host-gateway")
+    expect(gateway).toContain("HTTP_PROXY:")
+    expect(alice).toContain("HTTP_PROXY:")
+    expect(aliceSsh).not.toContain("HTTP_PROXY:")
+    expect(aliceSsh).not.toContain("host.docker.internal")
+    expect(services).not.toContain("  caddy:")
+    expect(generated.compose).toContain('"8446:3210"')
+    expect(generated.compose).toContain("./state/alice/workspace:/workspace")
+
+    if (spawnSync("docker", ["compose", "version"], { stdio: "ignore" }).status === 0) {
+      const composePath = path.join(outputDir, "compose.yaml")
+      const config = spawnSync("docker", ["compose", "--env-file", privateEnvPath, "-f", composePath, "config", "--format", "json"], { encoding: "utf8" })
+      expect(config.status).toBe(0)
+      const parsed = JSON.parse(config.stdout) as { services: Record<string, { environment: Record<string, string> }> }
+      expect(parsed.services.gateway!.environment.NO_PROXY).toBe("localhost,127.0.0.1,::1,gateway,kanna_alice,ssh_alice,kanna_bob,ssh_bob,internal.example.test")
+      expect(parsed.services.kanna_alice!.environment.HTTP_PROXY).toBe("http://proxy.example.test:7890")
+      expect(parsed.services.kanna_bob!.environment.HTTP_PROXY).toBe("http://proxy.example.test:7890")
+      expect(parsed.services.kanna_bob!.environment.HTTPS_PROXY).toBe("http://proxy.example.test:7890")
+      expect(parsed.services.kanna_bob!.environment.http_proxy).toBe("http://proxy.example.test:7890")
+      expect(parsed.services.kanna_bob!.environment.https_proxy).toBe("http://proxy.example.test:7890")
+      expect(parsed.services.kanna_bob!.environment.NO_PROXY).toBe("localhost,127.0.0.1,::1,gateway,kanna_alice,ssh_alice,kanna_bob,ssh_bob,internal.example.test")
+      expect(parsed.services.ssh_bob!.environment).toBeUndefined()
+    }
   })
 
   test("generates shared-hostname HTTPS ports with external TLS mounted only into Caddy", async () => {

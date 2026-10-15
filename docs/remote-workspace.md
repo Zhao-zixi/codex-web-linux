@@ -24,6 +24,12 @@ bun run remote-workspace -- generate
 bun run remote-workspace -- up
 ```
 
+### 可选：为 gateway 和 app 配置出站代理
+
+初始化会在私有 `.remote-workspace/.env` 中写入空的 `KANNA_OUTBOUND_PROXY` 与 `KANNA_OUTBOUND_NO_PROXY`。默认不启用出站代理。需要代理时，在该文件中将 `KANNA_OUTBOUND_PROXY` 设为容器可访问的 HTTP 代理地址；Docker 主机上的代理通常可使用 `http://host.docker.internal:7890`。生成的 gateway 和每个 `kanna_<账号>` app 会同时设置大小写的 HTTP/HTTPS 代理变量，并提供 `host.docker.internal` 主机映射。SSH sidecar 和 Caddy 不使用此代理。
+
+`NO_PROXY`/`no_proxy` 会始终包含容器内回环地址及生成的服务名；可将额外域名追加到 `KANNA_OUTBOUND_NO_PROXY`。不要在此字段填写 `*` 或 `auth.openai.com` 等需要经过代理访问的认证域名。修改 `.env` 后重新运行 `generate` 并检查 Compose 配置，再按正常流程更新服务。`generate` 和升级会保留已有 `.env` 的内容、所有权与权限；请备份该私有文件，不要提交它或粘贴其内容到日志、聊天或 issue。
+
 `enable-gateway` 可重复运行；已经存在的网关用户、管理员密码、连接授权和账号令牌不会被重置。启用前先备份 `.remote-workspace/`，并检查生成的 Compose 配置后再执行 `up`。
 
 网关模式的 `up` 会使用 Compose `--remove-orphans` 清理同一 `kanna-remote-workspace` 项目中不再声明的旧服务（例如此前占用 8444/8445 的 Caddy），以释放统一入口端口。清理范围仅限这套 Compose 项目，不会重建 fnOS 服务或其他独立 Compose 项目。

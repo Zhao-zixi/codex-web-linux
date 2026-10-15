@@ -270,7 +270,7 @@ export async function initializeRemoteWorkspace(options: InitRemoteWorkspaceOpti
     await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { flag: "wx", mode: 0o600 })
     await chmod(manifestPath, 0o600)
     if (typeof process.getuid === "function" && process.getuid() === 0) await chown(manifestPath, options.runtimeUid, options.runtimeGid)
-    await writeFile(path.join(outputDir, ".env"), `REMOTE_UID=${options.runtimeUid}\nREMOTE_GID=${options.runtimeGid}\n`, { flag: "wx", mode: 0o600 })
+    await writeFile(path.join(outputDir, ".env"), `REMOTE_UID=${options.runtimeUid}\nREMOTE_GID=${options.runtimeGid}\nKANNA_OUTBOUND_PROXY=\nKANNA_OUTBOUND_NO_PROXY=\n`, { flag: "wx", mode: 0o600 })
     await chmod(path.join(outputDir, ".env"), 0o600)
     if (typeof process.getuid === "function" && process.getuid() === 0) await chown(path.join(outputDir, ".env"), options.runtimeUid, options.runtimeGid)
     await rename(stagingDir, finalOutputDir)
@@ -287,6 +287,18 @@ export async function initializeRemoteWorkspace(options: InitRemoteWorkspaceOpti
 
 function quoteYaml(value: string) {
   return JSON.stringify(value)
+}
+
+function renderOutboundProxyEnvironment(serviceNames: string[]) {
+  const noProxy = ["localhost", "127.0.0.1", "::1", ...serviceNames].join(",")
+  return [
+    `      HTTP_PROXY: "\${KANNA_OUTBOUND_PROXY:-}"`,
+    `      HTTPS_PROXY: "\${KANNA_OUTBOUND_PROXY:-}"`,
+    `      http_proxy: "\${KANNA_OUTBOUND_PROXY:-}"`,
+    `      https_proxy: "\${KANNA_OUTBOUND_PROXY:-}"`,
+    `      NO_PROXY: "${noProxy}\${KANNA_OUTBOUND_NO_PROXY:+,\${KANNA_OUTBOUND_NO_PROXY}}"`,
+    `      no_proxy: "${noProxy}\${KANNA_OUTBOUND_NO_PROXY:+,\${KANNA_OUTBOUND_NO_PROXY}}"`,
+  ].join("\n")
 }
 
 export function renderHostedWorkspaceConfig(manifest: RemoteWorkspaceManifest, account: RemoteWorkspaceAccount) {
@@ -511,6 +523,11 @@ export async function generateRemoteWorkspaceFiles(outputDirInput: string) {
     ? manifest.accounts.map((account) => `      - ${quoteYaml(`${account.webPort}:${account.webPort}`)}`).join("\n")
     : localPorts
   const services: string[] = []
+  const internalNoProxyServices = [
+    ...(gatewayMode ? ["gateway"] : []),
+    ...manifest.accounts.flatMap((account) => [`kanna_${account.name}`, `ssh_${account.name}`]),
+  ]
+  const outboundProxyEnvironment = renderOutboundProxyEnvironment(internalNoProxyServices)
   for (const account of manifest.accounts) {
     const network = `account_${account.name}`
     const state = `./state/${account.name}`
@@ -535,8 +552,11 @@ export async function generateRemoteWorkspaceFiles(outputDirInput: string) {
       KANNA_TRUST_PROXY: "1"
       KANNA_HOSTED_WORKSPACE_CONFIG: /run/hosted-workspace.json${gatewayMode ? `
       KANNA_GATEWAY_URL: http://gateway:3210` : ""}
+${outboundProxyEnvironment}
     ${gatewayMode ? `env_file:
       - ./config/${account.name}.gateway.env` : ""}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ${state}/home:/home/kanna
       - ${state}/codex:/home/kanna/.codex
@@ -642,8 +662,11 @@ ${caddyNetworks}
       HOME: /var/lib/kanna-gateway/admin-home
       BUN_INSTALL: /var/lib/kanna-gateway/admin-home/.bun
       PATH: /var/lib/kanna-gateway/admin-home/.bun/bin:/opt/bun/bin:/usr/local/sbin:/usr/sbin:/sbin:/usr/local/bin:/usr/bin:/bin:/usr/local/bun-node-fallback-bin
+${outboundProxyEnvironment}
     ports:
       - ${quoteYaml(`${manifest.gateway!.publicPort}:3210`)}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./config/gateway.json:/run/gateway-config.json:ro
       - ./state/gateway:/var/lib/kanna-gateway/state

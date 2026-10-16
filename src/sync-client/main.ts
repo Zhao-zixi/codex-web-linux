@@ -5,6 +5,8 @@ import { readConnectionFile, RemoteWorkspaceSyncHelper, startLocalSyncServer, ge
 function dispatchOpenSsh() {
   const invocationNames = [process.argv[0], process.execPath].filter(Boolean).map((value) => path.basename(value!).toLowerCase())
   const kind = invocationNames.find((name) => name === "ssh" || name === "ssh.exe" || name === "scp" || name === "scp.exe")
+  if (process.env.KANNA_SYNC_DISPATCHER_DIAGNOSTICS === "1") process.stderr.write(`${JSON.stringify({ argv: process.argv.slice(0, 4), execPath: process.execPath, invocationNames, kind })}\n`)
+  if (!kind && process.env.KANNA_SYNC_DISPATCHER_DIAGNOSTICS === "1") process.exit(125)
   if (!kind) return false
   const isScp = kind.startsWith("scp")
   const executable = process.env[isScp ? "KANNA_SYNC_REAL_SCP_PATH" : "KANNA_SYNC_REAL_SSH_PATH"]

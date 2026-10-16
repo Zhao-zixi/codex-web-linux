@@ -27,7 +27,7 @@ export function renderLocalSyncUi({ serverOrigin }: { serverOrigin: string }) {
       <div id="origin-label" class="subtle" style="margin-top:12px"></div>
       <div class="divider"></div>
       <div id="ready-view" class="stack">
-        <div class="stack" style="gap:9px"><div style="font-size:14px;font-weight:650">1 · 选择本机项目文件夹</div><p class="subtle">助手只会同步你选中的文件夹。选择一个 Kanna 可用的项目目录；不会上传其他个人文件。</p></div>
+        <div class="stack" style="gap:9px"><div style="font-size:14px;font-weight:650">1 · 选择本机项目文件夹</div><p class="subtle">助手只会同步你选中的文件夹。每个账号在这台电脑上使用一个同步根目录；可选择包含多个项目的工作区文件夹。不会上传其他个人文件。</p></div>
         <div class="directory"><div class="directory-head"><input id="browse-path" class="path-input" aria-label="当前浏览路径"><button id="go-path" class="button" type="button">打开</button><button id="select-directory" class="button" type="button">使用此文件夹</button></div><div id="entries" class="entries" role="listbox" aria-label="文件夹列表"></div></div>
         <div id="selected-path" class="message info hidden"></div>
         <div class="divider" style="margin:2px 0"></div>
@@ -96,6 +96,7 @@ export function renderLocalSyncUi({ serverOrigin }: { serverOrigin: string }) {
       ssh_connection_failed: "无法连接工作区 SSH 服务。请检查网络，并确认此设备仍在网页的已授权设备列表中。",
       sync_failed: "同步启动或控制失败。请检查网络和本机依赖后重试。",
       mutagen_status_unavailable: "无法读取同步状态。请尝试重新连接；若仍失败，请联系管理员。",
+      mutagen_path_too_long: "本机数据目录路径过长，Mutagen 无法创建本地套接字。请将助手数据目录移到较短的本机路径后重试。",
       session_not_found: "找不到此助手管理的同步会话。请尝试重新连接。",
       operation_in_progress: "正在进行其他连接操作，请稍后重试。",
       another_project_active: "此账号已配置另一个本地项目。请返回该项目文件夹重新连接。",

@@ -202,6 +202,46 @@ describe("local sync helper server", () => {
     }
   })
 
+  test("does not query Mutagen concurrently while a new connection is starting", async () => {
+    const { helper } = await createHelper()
+    const operations = helper as unknown as {
+      phase: string
+      state: Record<string, unknown> | null
+      hasMutagen: () => Promise<boolean>
+      readMutagenStatus: () => Promise<unknown>
+    }
+    let statusReads = 0
+    operations.state = { serverOrigin: helper.origin, localDirectory: "/tmp/test-project", remotePath: "/workspace/test-project", sessionName: "kanna-test", keyPath: "/tmp/key" }
+    operations.phase = "starting"
+    operations.hasMutagen = async () => true
+    operations.readMutagenStatus = async () => { statusReads++; throw new Error("should not read Mutagen during start") }
+    const status = await helper.getStatus()
+    expect(status.phase).toBe("starting")
+    expect(statusReads).toBe(0)
+  })
+
+  test("keeps Mutagen's Unix daemon socket short and reports paths that exceed the platform limit", async () => {
+    if (process.platform === "win32") return
+    const { helper, root } = await createHelper()
+    const operations = helper as unknown as {
+      accountDataDirectory: string
+      mutagenDataDirectory: () => string
+      mutagenSessions: () => Promise<unknown[]>
+    }
+    operations.accountDataDirectory = path.join(root, "data", "accounts", "a".repeat(64))
+    const socketPath = path.join(operations.mutagenDataDirectory(), "daemon", "daemon.sock")
+    expect(Buffer.byteLength(socketPath)).toBeLessThan(108)
+
+    const deepDataDirectory = `${path.join(root, "data")}/${"deep/".repeat(16)}`
+    const deepHelper = new RemoteWorkspaceSyncHelper("https://workspace.example.test", deepDataDirectory)
+    const deepOperations = deepHelper as unknown as {
+      accountDataDirectory: string
+      mutagenSessions: () => Promise<unknown[]>
+    }
+    deepOperations.accountDataDirectory = path.join(deepDataDirectory, "accounts", "b".repeat(64))
+    await expect(deepOperations.mutagenSessions()).rejects.toThrow("mutagen_path_too_long")
+  })
+
   test("lists directories without following symlinks and requires same-origin POSTs", async () => {
     const { helper, server, url, root } = await createHelper()
     try {

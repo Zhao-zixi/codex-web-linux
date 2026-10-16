@@ -323,12 +323,18 @@ export class RemoteWorkspaceSyncHelper {
 
   private get gitBinDirectory() { return path.dirname(this.sshPath) }
 
+  private mutagenDataDirectory() {
+    const accountHash = path.basename(this.accountDataDirectory)
+    const accountSuffix = /^[a-f0-9]{64}$/.test(accountHash) ? accountHash.slice(0, 24) : "unassigned"
+    return path.join(this.dataDirectory, "m", accountSuffix)
+  }
+
   private commandEnvironment(): NodeJS.ProcessEnv {
     const sshHome = path.join(this.accountDataDirectory, "ssh-home")
     const dispatcherDirectory = path.join(this.dataDirectory, "tools", "ssh-dispatcher")
     const env: NodeJS.ProcessEnv = {
       ...process.env,
-      MUTAGEN_DATA_DIRECTORY: path.join(this.accountDataDirectory, "mutagen-data"),
+      MUTAGEN_DATA_DIRECTORY: this.mutagenDataDirectory(),
       MUTAGEN_SSH_PATH: dispatcherDirectory,
       KANNA_SYNC_SSH_CONFIG: path.join(sshHome, ".ssh", "config"),
       KANNA_SYNC_REAL_SSH_PATH: this.sshPath,
@@ -349,7 +355,12 @@ export class RemoteWorkspaceSyncHelper {
   }
 
   private async mutagenSessions(): Promise<MutagenSession[]> {
-    const result = await runCommand(this.mutagenPath, ["sync", "list", "--template", "{{json .}}"], { env: this.commandEnvironment(), timeoutMs: 20_000 })
+    if (process.platform !== "win32" && Buffer.byteLength(path.join(this.mutagenDataDirectory(), "daemon", "daemon.sock")) >= 108) throw new HelperError("mutagen_path_too_long")
+    const result = await runCommand(this.mutagenPath, ["sync", "list", "--template", "{{json .}}"], { env: this.commandEnvironment(), timeoutMs: 20_000, allowFailure: true })
+    if (result.status !== 0) {
+      if (process.env.KANNA_SYNC_DIAGNOSTICS === "1") process.stderr.write(`Mutagen session listing failed (${result.status}): ${result.stderr.slice(-1200)}\n`)
+      throw new HelperError("mutagen_status_unavailable")
+    }
     const sessions: unknown = JSON.parse(result.stdout.trim() || "[]")
     if (!Array.isArray(sessions)) throw new HelperError("mutagen_status_unavailable")
     return sessions.filter((session): session is MutagenSession => isRecord(session) && typeof session.name === "string")
@@ -389,7 +400,7 @@ export class RemoteWorkspaceSyncHelper {
   }
 
   async getStatus(): Promise<LocalSyncStatus> {
-    if (this.state && await this.hasMutagen()) {
+    if (this.phase !== "starting" && this.state && await this.hasMutagen()) {
       try {
         this.sync = await this.readMutagenStatus()
         if (this.phase !== "starting") {

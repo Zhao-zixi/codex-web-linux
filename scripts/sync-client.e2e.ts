@@ -15,7 +15,6 @@ const root = await mkdtemp(path.join(os.tmpdir(), "kanna sync helper e2e-"))
 const outputDir = path.join(root, "deployment")
 const clientRoot = path.join(root, "client bundle")
 const helperData = path.join(root, "helper private data")
-const clientHome = path.join(root, "client home with spaces")
 const localProject = path.join(root, "local projects", "project with spaces")
 const legacyKey = path.join(root, "legacy-device")
 const gatewayPort = await unusedPort()
@@ -146,7 +145,6 @@ try {
   }
   run("docker", ["info"], { timeout: 20_000 })
   await mkdir(localProject, { recursive: true })
-  await mkdir(clientHome, { recursive: true })
   await writeFile(path.join(localProject, "from-local.txt"), "local initial\n")
   await writeFile(path.join(localProject, ".env"), "must remain local\n")
   run("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", legacyKey])
@@ -213,9 +211,10 @@ try {
   const bobHostKey = (await readFile(path.join(outputDir, "state", "bob", "ssh-host-ed25519.pub"), "utf8")).trim()
   const legacyKnownHosts = path.join(root, "legacy-known_hosts")
   await writeFile(legacyKnownHosts, `[127.0.0.1]:${aliceSshPort} ${aliceHostKey}\n`)
-  const legacySshArgs = ["-F", "/dev/null", "-i", legacyKey, "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", `UserKnownHostsFile=${legacyKnownHosts}`, "-p", String(aliceSshPort), "workspace@127.0.0.1"]
+  const legacySshArgs = ["-F", "/dev/null", "-i", legacyKey, "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", `UserKnownHostsFile=${JSON.stringify(legacyKnownHosts)}`, "-p", String(aliceSshPort), "workspace@127.0.0.1"]
   const remoteProject = `/workspace/${projectName}`
-  run("ssh", [...legacySshArgs, `mkdir -p -- ${quote(remoteProject)} && printf '%s\\n' 'remote initial' > ${quote(`${remoteProject}/from-remote.txt`)}`], { timeout: 15_000 })
+  const initialRemote = run("ssh", [...legacySshArgs, `mkdir -p -- ${quote(remoteProject)} && printf '%s\\n' 'remote initial' > ${quote(`${remoteProject}/from-remote.txt`)}`], { timeout: 15_000, allowFailure: true })
+  if (initialRemote.status !== 0) throw new Error(`Fixture legacy SSH setup failed: ${initialRemote.stderr.slice(-1200)}`)
   const oldAuthorizedKeys = await readFile(path.join(outputDir, "secrets", "alice", "authorized_keys"), "utf8")
 
   const bundleOutput = path.join(root, "public clients")
@@ -269,7 +268,7 @@ try {
   finally { await writeFile(wrongKnownHosts, realKnownHosts, { mode: 0o600 }) }
   if (wrongHostResult.status === 0) throw new Error("SSH accepted a mismatched pinned host key")
 
-  const helperMutagenDirectory = path.join(accountData, "mutagen-data")
+  const helperMutagenDirectory = path.join(helperData, "m", path.basename(accountData).slice(0, 24))
   const installedMutagen = path.join(helperData, "tools", "mutagen")
   const mutagenEnv = { ...helperEnv, MUTAGEN_DATA_DIRECTORY: helperMutagenDirectory, MUTAGEN_SSH_PATH: path.join(helperData, "tools", "ssh-dispatcher"), SSH_AUTH_SOCK: "" }
   const sessions = run(installedMutagen, ["sync", "list", "--long", sessionName], { env: mutagenEnv, timeout: 20_000 }).stdout
@@ -315,7 +314,9 @@ try {
 
   const bobKnownHosts = path.join(root, "bob-known_hosts")
   await writeFile(bobKnownHosts, `[127.0.0.1]:${bobSshPort} ${bobHostKey}\n`)
-  const crossAccount = run("ssh", ["-F", "/dev/null", "-i", devicePrivateKey, "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", `UserKnownHostsFile=${bobKnownHosts}`, "-p", String(bobSshPort), "workspace@127.0.0.1", "true"], { env: isolatedSshEnv, allowFailure: true, timeout: 10_000 })
+  const bobLegacyProbe = run("ssh", ["-F", "/dev/null", "-i", legacyKey, "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", `UserKnownHostsFile=${JSON.stringify(bobKnownHosts)}`, "-p", String(bobSshPort), "workspace@127.0.0.1", "printf bob-legacy-ok"], { env: isolatedSshEnv, allowFailure: true, timeout: 10_000 })
+  if (bobLegacyProbe.status !== 0 || bobLegacyProbe.stdout.trim() !== "bob-legacy-ok") throw new Error(`Fixture Bob legacy SSH positive control failed: ${bobLegacyProbe.stderr.slice(-1200)}`)
+  const crossAccount = run("ssh", ["-F", "/dev/null", "-i", devicePrivateKey, "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", `UserKnownHostsFile=${JSON.stringify(bobKnownHosts)}`, "-p", String(bobSshPort), "workspace@127.0.0.1", "true"], { env: isolatedSshEnv, allowFailure: true, timeout: 10_000 })
   if (crossAccount.status === 0) throw new Error("Alice's registered device key was accepted by Bob's SSH sidecar")
   const legacyStillWorks = run("ssh", [...legacySshArgs, "true"], { timeout: 10_000, allowFailure: true })
   if (legacyStillWorks.status !== 0) throw new Error("The pre-existing account SSH key stopped working")
@@ -338,7 +339,7 @@ try {
   })
   if (helperData && accountData && sessionName) {
     const mutagen = path.join(helperData, "tools", "mutagen", "mutagen")
-    const isolated = { ...helperEnv, MUTAGEN_DATA_DIRECTORY: path.join(accountData, "mutagen-data"), MUTAGEN_SSH_PATH: path.join(helperData, "tools", "ssh-dispatcher") }
+    const isolated = { ...helperEnv, MUTAGEN_DATA_DIRECTORY: path.join(helperData, "m", path.basename(accountData).slice(0, 24)), MUTAGEN_SSH_PATH: path.join(helperData, "tools", "ssh-dispatcher") }
     if (await Bun.file(mutagen).exists()) {
       spawnSync(mutagen, ["sync", "terminate", sessionName], { env: isolated, stdio: "ignore", timeout: 10_000 })
       spawnSync(mutagen, ["daemon", "stop"], { env: isolated, stdio: "ignore", timeout: 10_000 })

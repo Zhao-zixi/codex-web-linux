@@ -98,7 +98,7 @@ const gateway = Bun.serve({
 })
 
 const origin = `http://127.0.0.1:${gateway.port}`
-const helperData = { KANNA_SYNC_DATA_DIRECTORY: stateDirectory, KANNA_SYNC_NO_OPEN: "1", KANNA_SYNC_STARTUP_FILE: path.join(temporaryRoot, "startup.json") }
+const helperData = { KANNA_SYNC_DATA_DIRECTORY: stateDirectory, KANNA_SYNC_NO_OPEN: "1", KANNA_SYNC_DIAGNOSTICS: "1", KANNA_SYNC_STARTUP_FILE: path.join(temporaryRoot, "startup.json") }
 let helper: ReturnType<typeof spawn> | null = null
 let helperOutput = ""
 let helperExit: Promise<{ code: number | null; signal: NodeJS.Signals | null }> | null = null
@@ -137,6 +137,7 @@ async function verifyDispatcher(dataDirectory: string, accountDirectory: string)
     KANNA_SYNC_SSH_CONFIG: configPath,
     KANNA_SYNC_REAL_SSH_PATH: process.platform === "win32" ? path.join(dataDirectory, "tools", "git", "usr", "bin", "ssh.exe") : "ssh",
     KANNA_SYNC_REAL_SCP_PATH: process.platform === "win32" ? path.join(dataDirectory, "tools", "git", "usr", "bin", "scp.exe") : "scp",
+    KANNA_SYNC_DISPATCHER_DIAGNOSTICS: "1",
     PATH: process.platform === "win32" ? `${path.join(dataDirectory, "tools", "git", "usr", "bin")};${process.env.PATH ?? ""}` : process.env.PATH,
   }
   const sshVersion = run(dispatcherEnv.KANNA_SYNC_REAL_SSH_PATH!, ["-V"], { env: dispatcherEnv })
@@ -148,25 +149,32 @@ async function verifyDispatcher(dataDirectory: string, accountDirectory: string)
   assert(/usage: ssh-keygen/i.test(`${keygenVersion.stdout}\n${keygenVersion.stderr}`), "real ssh-keygen executable failed to load")
   const keyCheck = runOk(sshKeygenPath, ["-lf", `${state.keyPath}.pub`], { env: dispatcherEnv })
   assert(keyCheck.includes("SHA256:"), "generated device key is not readable by ssh-keygen")
+  const derivedPublicKey = runOk(sshKeygenPath, ["-y", "-f", state.keyPath], { env: dispatcherEnv }).trim().split(/\s+/).slice(0, 2).join(" ")
+  assert(derivedPublicKey === registeredPublicKey.split(/\s+/).slice(0, 2).join(" "), "real ssh-keygen could not load the generated private key or it did not match the registered public key")
   if (process.platform !== "win32") {
     const keyMode = (await stat(state.keyPath)).mode & 0o777
     assert(keyMode === 0o600, `generated device private key mode was ${keyMode.toString(8)}, expected 600`)
     assert(((await stat(configPath)).mode & 0o777) === 0o600, "SSH config is not private")
   }
-  const dispatcher = run(sshDispatcher, ["-G", "kanna-sync"], { env: dispatcherEnv })
+  const dispatcher = run(sshDispatcher, ["-G", "kanna-sync"], { env: dispatcherEnv, timeoutMs: 10_000 })
   assert(dispatcher.status === 0, `SSH dispatcher did not start: ${dispatcher.stderr.slice(-2000)}`)
   const outputLines = dispatcher.stdout.split(/\r?\n/)
   const settings = new Map(outputLines.map((line) => {
     const split = line.indexOf(" ")
     return split < 0 ? [line, ""] : [line.slice(0, split), line.slice(split + 1)]
   }))
-  assert(settings.get("hostname") === "127.0.0.1" && settings.get("port") === "1", "dispatcher did not force the generated SSH config")
+  assert(settings.get("hostname") === "127.0.0.1" && settings.get("port") === "1", `dispatcher did not force the generated SSH config (hostname=${settings.get("hostname")}, port=${settings.get("port")}; ${dispatcher.stderr.slice(-1000)})`)
   assert(settings.get("stricthostkeychecking") === "true", "dispatcher did not pass strict host-key policy")
   const expectedIdentity = state.keyPath.replaceAll("\\", "/").toLowerCase()
   assert(outputLines.some((line) => line.startsWith("identityfile ") && line.replaceAll("\\", "/").toLowerCase().includes(expectedIdentity)), "dispatcher did not use the generated account key")
   const knownHostSetting = (settings.get("userknownhostsfile") ?? "").replaceAll("\\", "/").toLowerCase()
   assert(knownHostSetting.includes("known_hosts"), "dispatcher did not use the dedicated known_hosts file")
   assert(await realpath(scpDispatcher).then(() => true, () => false), "scp dispatcher was not installed")
+  const scpProbeFile = path.join(temporaryRoot, "scp-probe.txt")
+  await writeFile(scpProbeFile, "native smoke\n")
+  const scpProbe = run(scpDispatcher, ["-v", "-P", "1", scpProbeFile, "kanna-sync:/tmp/kanna-sync-smoke-probe"], { env: dispatcherEnv, timeoutMs: 10_000 })
+  const scpOutput = `${scpProbe.stdout}\n${scpProbe.stderr}`
+  assert(scpProbe.status !== 0 && scpOutput.includes("127.0.0.1") && !scpOutput.includes("Could not resolve hostname kanna-sync"), `SCP dispatcher did not force the generated SSH config (${scpOutput.slice(-800)})`)
 }
 
 async function verifyMutagen(mutagenArchiveName: string) {
@@ -275,7 +283,7 @@ async function verifyClientFlow() {
     if (status.phase === "error") return status
     return null
   }, 180_000)
-  assert(terminalStatus.error === "ssh_connection_failed", `expected closed-port SSH failure after setup, received ${terminalStatus.error}`)
+  assert(terminalStatus.error === "ssh_connection_failed", `expected closed-port SSH failure after setup, received ${terminalStatus.error}; helper output: ${helperOutput.slice(-1600)}`)
   assert(terminalStatus.dependencies.ssh && terminalStatus.dependencies.sshKeygen && terminalStatus.dependencies.mutagen, "the helper did not prepare all declared dependencies")
   await verifyMutagen(expectedMutagen)
   assert(registeredPublicKey.startsWith("ssh-ed25519 "), "fake gateway did not receive a generated device public key")
@@ -317,7 +325,7 @@ async function main() {
       if (mutagenSessionCreated) run(candidate, ["sync", "terminate", "kanna-native-smoke"], { env: mutagenEnv, timeoutMs: 20_000 })
       run(candidate, ["daemon", "stop"], { env: mutagenEnv, timeoutMs: 20_000 })
       const accountHash = createHash("sha256").update(`${origin}\0${accountId}`).digest("hex")
-      const helperMutagenEnv = { ...process.env, MUTAGEN_DATA_DIRECTORY: path.join(stateDirectory, "accounts", accountHash, "mutagen-data") }
+      const helperMutagenEnv = { ...process.env, MUTAGEN_DATA_DIRECTORY: path.join(stateDirectory, "m", accountHash.slice(0, 24)) }
       run(candidate, ["daemon", "stop"], { env: helperMutagenEnv, timeoutMs: 20_000 })
     }
     gateway.stop(true)

@@ -16,7 +16,7 @@ function dispatchOpenSsh() {
     process.exit(126)
   }
   const forwardedArguments = process.argv.slice(1)
-  if (forwardedArguments[0]?.includes("$bunfs")) forwardedArguments.shift()
+  if (forwardedArguments[0] && (forwardedArguments[0].includes("$bunfs") || /^[A-Za-z]:[\\/]~BUN[\\/]/i.test(forwardedArguments[0]))) forwardedArguments.shift()
   const result = spawnSync(executable, ["-F", config, ...forwardedArguments], {
     env: process.env,
     stdio: "inherit",

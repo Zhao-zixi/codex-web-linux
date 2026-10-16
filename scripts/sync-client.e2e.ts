@@ -272,12 +272,14 @@ try {
   const installedMutagen = path.join(helperData, "tools", "mutagen")
   const mutagenEnv = { ...helperEnv, MUTAGEN_DATA_DIRECTORY: helperMutagenDirectory, MUTAGEN_SSH_PATH: path.join(helperData, "tools", "ssh-dispatcher"), SSH_AUTH_SOCK: "" }
   const sessions = run(installedMutagen, ["sync", "list", "--long", sessionName], { env: mutagenEnv, timeout: 20_000 }).stdout
-  if (!sessions.includes("Two Way Safe") || !sessions.includes("127.0.0.1")) throw new Error("Compiled helper Mutagen session did not use the isolated SSH transport")
+  if (!sessions.includes("Two Way Safe") || !sessions.includes("kanna-sync")) throw new Error(`Compiled helper Mutagen session did not use the isolated SSH alias (${sessions.slice(0, 2_000)})`)
   await writeFile(path.join(localProject, "later-local.txt"), "later local\n")
   await waitForSyncFile(path.join(localProject, "later-local.txt"), `${remoteProject}/later-local.txt`, "later local", "subsequent local-to-remote sync")
   await run("ssh", ["-F", helperSshConfig, "kanna-sync", `printf '%s\\n' 'later remote' > ${quote(`${remoteProject}/later-remote.txt`)}`], { env: isolatedSshEnv })
   await waitForSyncFile(path.join(localProject, "later-remote.txt"), `${remoteProject}/later-remote.txt`, "later remote", "subsequent remote-to-local sync")
 
+  await writeFile(path.join(localProject, "conflict.txt"), "shared conflict baseline\n")
+  await waitForSyncFile(path.join(localProject, "conflict.txt"), `${remoteProject}/conflict.txt`, "shared conflict baseline", "conflict baseline sync")
   await postControl("pause")
   const paused = await waitFor("Mutagen pause", async () => {
     const response = await api("/api/status")
@@ -285,6 +287,25 @@ try {
     return value?.sync?.state === "paused" ? value : null
   })
   if (!paused) throw new Error("Compiled helper did not pause its Mutagen session")
+  await writeFile(path.join(localProject, "conflict.txt"), "local conflict version\n")
+  await run("ssh", ["-F", helperSshConfig, "kanna-sync", `printf '%s\\n' 'remote conflict version' > ${quote(`${remoteProject}/conflict.txt`)}`], { env: isolatedSshEnv })
+  await postControl("resume")
+  const conflictStatus = await waitFor("helper status to report a real Mutagen conflict", async () => {
+    const response = await api("/api/status")
+    const value = await response.json().catch(() => null) as { sync?: { state?: string; conflictCount?: number; conflicts?: Array<{ path?: string; alpha?: string; beta?: string }> } } | null
+    if ((value?.sync?.conflictCount ?? 0) > 0 && value?.sync?.conflicts?.some((conflict) => `${conflict.path} ${conflict.alpha} ${conflict.beta}`.includes("conflict.txt"))) return value
+    return null
+  }, 45_000)
+  if (!conflictStatus.sync || conflictStatus.sync.conflictCount < 1) throw new Error("Compiled helper did not expose a positive conflict count")
+  const localConflict = await readFile(path.join(localProject, "conflict.txt"), "utf8")
+  const remoteConflict = run("ssh", ["-F", helperSshConfig, "kanna-sync", `cat -- ${quote(`${remoteProject}/conflict.txt`)}`], { env: isolatedSshEnv }).stdout
+  if (localConflict !== "local conflict version\n" || remoteConflict !== "remote conflict version\n") throw new Error("Two Way Safe conflict did not preserve both local and remote contents")
+  await postControl("pause")
+  await waitFor("Mutagen pause after conflict inspection", async () => {
+    const response = await api("/api/status")
+    const value = await response.json().catch(() => null) as { sync?: { state?: string } } | null
+    return value?.sync?.state === "paused" ? value : null
+  })
   await writeFile(path.join(localProject, "paused-local.txt"), "after resume\n")
   stopCompiledHelper()
   await new Promise<void>((resolve) => helperProcess?.once("exit", () => resolve()))
@@ -338,7 +359,7 @@ try {
     processToStop.once("exit", () => { clearTimeout(timer); resolve() })
   })
   if (helperData && accountData && sessionName) {
-    const mutagen = path.join(helperData, "tools", "mutagen", "mutagen")
+    const mutagen = path.join(helperData, "tools", "mutagen")
     const isolated = { ...helperEnv, MUTAGEN_DATA_DIRECTORY: path.join(helperData, "m", path.basename(accountData).slice(0, 24)), MUTAGEN_SSH_PATH: path.join(helperData, "tools", "ssh-dispatcher") }
     if (await Bun.file(mutagen).exists()) {
       spawnSync(mutagen, ["sync", "terminate", sessionName], { env: isolated, stdio: "ignore", timeout: 10_000 })

@@ -200,7 +200,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   const shellPathReady = inheritShellPath()
   const hostedWorkspace = options.hostedWorkspace ?? await readHostedWorkspaceConfig(process.env.KANNA_HOSTED_WORKSPACE_CONFIG)
   const remoteWorkspaceDeviceKeysDir = options.remoteWorkspaceDeviceKeysDir ?? process.env.KANNA_REMOTE_WORKSPACE_DEVICE_KEYS_DIR
-  const remoteWorkspaceClientDirectory = options.remoteWorkspaceClientDirectory ?? path.join(import.meta.dir, "../../dist/client/remote-workspace-clients")
+  const remoteWorkspaceClientDirectory = options.remoteWorkspaceClientDirectory ?? process.env.KANNA_REMOTE_WORKSPACE_CLIENT_DIRECTORY ?? path.join(import.meta.dir, "../../dist/client/remote-workspace-clients")
   const hostedWorkspaceDeviceKeys = remoteWorkspaceDeviceKeysDir ? new HostedWorkspaceDeviceKeys(remoteWorkspaceDeviceKeysDir) : null
   const hostedBearerAuth = !("enabled" in hostedWorkspace) && hostedWorkspace.authMode === "bearer"
   const hostedWebOrigin = !("enabled" in hostedWorkspace) ? hostedWorkspace.webOrigin : undefined
@@ -838,7 +838,10 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
               try {
                 const { deviceId } = await hostedWorkspaceDeviceKeys.register(body.publicKey, body.label)
                 return withOriginAgentCluster(Response.json({ deviceId, authorized: true }, { headers: { "Cache-Control": "no-store" } }))
-              } catch {
+              } catch (error) {
+                if (error instanceof Error && error.message === "device_limit_reached") {
+                  return withOriginAgentCluster(Response.json({ error: "device_limit_reached" }, { status: 409, headers: { "Cache-Control": "no-store" } }))
+                }
                 return withOriginAgentCluster(Response.json({ error: "device_enrollment_unavailable" }, { status: 503, headers: { "Cache-Control": "no-store" } }))
               }
             }

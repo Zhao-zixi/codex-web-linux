@@ -1,13 +1,11 @@
 import { createHash, randomBytes } from "node:crypto"
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
+import type { HostedWorkspaceDevice } from "../shared/remote-workspace"
 
-export interface HostedWorkspaceDevice {
-  id: string
-  label: string
-  fingerprint: string
-  createdAt: string
-}
+export type { HostedWorkspaceDevice } from "../shared/remote-workspace"
+
+export const MAX_HOSTED_WORKSPACE_DEVICES = 64
 
 interface StoredHostedWorkspaceDevice extends HostedWorkspaceDevice {
   publicKey: string
@@ -102,6 +100,7 @@ export class HostedWorkspaceDeviceKeys {
       const devices = await this.readDevices()
       const existing = devices.find((device) => device.fingerprint === key.fingerprint)
       if (existing) return { deviceId: existing.id }
+      if (devices.length >= MAX_HOSTED_WORKSPACE_DEVICES) throw new Error("device_limit_reached")
       const device: StoredHostedWorkspaceDevice = {
         id: randomBytes(16).toString("hex"),
         label,

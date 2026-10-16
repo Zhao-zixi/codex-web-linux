@@ -934,12 +934,14 @@ export async function startGatewayServer(configInput?: GatewayConfig) {
     }
     if (url.pathname === "/auth/logout" && request.method === "POST") {
       if (!requestHasExpectedOrigin(request, publicOrigin)) return jsonError("Forbidden", 403)
+      const scope = url.searchParams.get("scope")
+      if (scope !== null && scope !== "session") return jsonError("Invalid logout scope", 400)
       const auth = await authorize(request)
       if ("error" in auth) return auth.error
       const resolved = await store.resolveSession(auth.token)
       await store.revokeSession(auth.token)
       if (resolved) closeSessionSockets(resolved.session.tokenHash)
-      abortProviderRequests(undefined, auth.user.id)
+      if (scope !== "session") abortProviderRequests(undefined, auth.user.id)
       return Response.json({ ok: true }, { headers: { "Cache-Control": "no-store" } })
     }
     if (url.pathname === "/auth/ws-ticket" && request.method === "POST") {

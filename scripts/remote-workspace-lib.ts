@@ -496,7 +496,24 @@ export async function generateRemoteWorkspaceFiles(outputDirInput: string) {
   if (sharedHostname) await validateSharedTls(manifest.tls)
   validateAccounts(manifest.accounts)
   const hostKeyByAccount = new Map<string, string>()
+  const clientArtifactsDir = path.join(outputDir, "clients")
+  await mkdir(clientArtifactsDir, { recursive: true, mode: 0o755 })
+  await chmod(clientArtifactsDir, 0o755)
   for (const account of manifest.accounts) {
+    const deviceKeysDir = path.join(outputDir, "state", account.name, "device-keys")
+    await ensureOwnedPrivateDir(deviceKeysDir, manifest.runtimeUid, manifest.runtimeGid)
+    const deviceAuthorizedKeysPath = path.join(deviceKeysDir, "authorized_keys")
+    try {
+      const existing = await lstat(deviceAuthorizedKeysPath)
+      if (existing.isSymbolicLink() || !existing.isFile()) throw new Error("Invalid hosted workspace device key registry")
+      await chmod(deviceAuthorizedKeysPath, 0o600)
+      if (typeof process.getuid === "function" && process.getuid() === 0 && (existing.uid !== manifest.runtimeUid || existing.gid !== manifest.runtimeGid)) {
+        await chown(deviceAuthorizedKeysPath, manifest.runtimeUid, manifest.runtimeGid)
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+      await writeSecret(deviceAuthorizedKeysPath, "", manifest.runtimeUid, manifest.runtimeGid)
+    }
     const publicKey = parseOpenSshPublicKey(await readFile(path.join(outputDir, "state", account.name, "ssh-host-ed25519.pub"), "utf8"))
     hostKeyByAccount.set(account.name, publicKey)
     const config = { ...renderHostedWorkspaceConfig(manifest, account), publicHostKey: publicKey }
@@ -557,6 +574,7 @@ export async function generateRemoteWorkspaceFiles(outputDirInput: string) {
       KANNA_HOSTED_WORKSPACE_CONFIG: /run/hosted-workspace.json${gatewayMode ? `
       KANNA_GATEWAY_URL: http://gateway:3210` : ""}
       KANNA_REMOTE_WORKSPACE_DEVICE_KEYS_DIR: /run/remote-workspace-device-keys
+      KANNA_REMOTE_WORKSPACE_CLIENT_DIRECTORY: /run/remote-workspace-clients
 ${outboundProxyEnvironment}
     ${gatewayMode ? `env_file:
       - ./config/${account.name}.gateway.env` : ""}
@@ -567,6 +585,7 @@ ${outboundProxyEnvironment}
       - ${state}/codex:/home/kanna/.codex
       - ${state}/workspace:/workspace
       - ${deviceKeys}:/run/remote-workspace-device-keys:rw
+      - ./clients:/run/remote-workspace-clients:ro
       - ./config/${account.name}.json:/run/hosted-workspace.json:ro
       - ${secrets}/app-password:/run/secrets/kanna_password:ro
     expose:

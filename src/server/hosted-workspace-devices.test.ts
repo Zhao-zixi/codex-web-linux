@@ -67,4 +67,19 @@ describe("hosted workspace device keys", () => {
       await rm(root, { recursive: true, force: true })
     }
   })
+
+  test("caps the registry at 64 distinct devices while keeping duplicates idempotent", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kanna-workspace-device-limit-"))
+    try {
+      const store = new HostedWorkspaceDeviceKeys(path.join(root, "device-keys"))
+      const keys = Array.from({ length: 65 }, (_, index) => testPublicKey(index + 1))
+      const first = await store.register(keys[0]!, "Device 1")
+      for (let index = 1; index < 64; index++) await store.register(keys[index]!, `Device ${index + 1}`)
+      expect(await store.register(keys[0]!, "Device 1 renamed")).toEqual(first)
+      await expect(store.register(keys[64]!, "Device 65")).rejects.toThrow("device_limit_reached")
+      expect(await store.list()).toHaveLength(64)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
 })

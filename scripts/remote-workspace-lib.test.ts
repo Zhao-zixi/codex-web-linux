@@ -87,6 +87,29 @@ describe("remote workspace input validation", () => {
 })
 
 describe("remote workspace generation", () => {
+  test("migrates device key storage without replacing existing registry entries", async () => {
+    const root = await tempDir()
+    const outputDir = path.join(root, "deployment")
+    const keyPath = await publicKey(root, "alice")
+    await seedRootOwnedFixture(outputDir, { alice: keyPath, bob: keyPath })
+    const deviceKeysDir = path.join(outputDir, "state", "alice", "device-keys")
+    await rm(deviceKeysDir, { recursive: true, force: true })
+
+    await generateRemoteWorkspaceFiles(outputDir)
+    const authorizedKeysPath = path.join(deviceKeysDir, "authorized_keys")
+    expect(await readFile(authorizedKeysPath, "utf8")).toBe("")
+    expect(await stat(deviceKeysDir).then((value) => value.mode & 0o777)).toBe(0o700)
+    expect(await stat(authorizedKeysPath).then((value) => value.mode & 0o777)).toBe(0o600)
+    if (typeof process.getuid === "function" && process.getuid() === 0) {
+      expect(await stat(deviceKeysDir).then((value) => [value.uid, value.gid])).toEqual([1000, 1000])
+    }
+
+    const managedLine = `${(await readFile(keyPath, "utf8")).trim()} kanna-device:id=test\n`
+    await writeFile(authorizedKeysPath, managedLine, { mode: 0o600 })
+    await generateRemoteWorkspaceFiles(outputDir)
+    expect(await readFile(authorizedKeysPath, "utf8")).toBe(managedLine)
+  })
+
   test("initializes and generates localhost deployments while rejecting localhost as a production domain", async () => {
     const root = await tempDir()
     const outputDir = path.join(root, "deployment")
@@ -191,6 +214,9 @@ describe("remote workspace generation", () => {
     expect(generated.compose).toContain("./state/alice/device-keys:/run/remote-workspace-device-keys:rw")
     expect(generated.compose).toContain("./state/alice/device-keys:/run/remote-workspace-device-keys:ro")
     expect(generated.compose).toContain("KANNA_REMOTE_WORKSPACE_DEVICE_KEYS_DIR: /run/remote-workspace-device-keys")
+    expect(generated.compose).toContain("KANNA_REMOTE_WORKSPACE_CLIENT_DIRECTORY: /run/remote-workspace-clients")
+    expect(generated.compose).toContain("./clients:/run/remote-workspace-clients:ro")
+    expect(await stat(path.join(outputDir, "clients")).then((value) => value.mode & 0o777)).toBe(0o755)
     expect(generated.compose).toContain("DAC_READ_SEARCH")
     expect(generated.compose).toContain("    init: true")
     expect(generated.compose).toContain('command: ["--host", "0.0.0.0", "--no-open", "--password-file", "/run/secrets/kanna_password", "--trust-proxy"]')

@@ -34,3 +34,16 @@ jobs:
         env:
           KANNA_SYNC_NATIVE_SMOKE_TARGET: ${{ matrix.target }}
         run: bun run scripts/sync-client.native-smoke.ts
+      - name: Cross-build Windows distribution on Linux
+        if: matrix.target == 'linux-x64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          output_dir="$RUNNER_TEMP/kanna-sync-windows-cross"
+          bun run build:sync-client -- --origin http://sync-client.example.test:8444 --output-dir "$output_dir" --target windows-x64
+          archive="$output_dir/kanna-sync-windows-x64.zip"
+          unzip -Z1 "$archive" | grep -Fx 'kanna-sync.exe'
+          unzip -Z1 "$archive" | grep -Fx 'connection.json'
+          unzip -Z1 "$archive" | grep -Fx 'mutagen-windows-x64.zip'
+          unzip -Z1 "$archive" | grep -Fx 'PortableGit-2.56.0.2-64-bit.7z.exe'
+          unzip -p "$archive" connection.json | grep -Fx '{"serverOrigin":"http://sync-client.example.test:8444"}'

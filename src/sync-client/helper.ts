@@ -373,7 +373,7 @@ export class RemoteWorkspaceSyncHelper {
 
   private async ensureMutagenSession() {
     if (!this.state) throw new HelperError("session_not_found")
-    const sessions = await this.mutagenSessions().catch(() => [])
+    const sessions = await this.mutagenSessions()
     if (sessions.some((session) => session.name === this.state!.sessionName)) return
     this.step = "creating_remote_directory"
     const directoryExists = await runCommand(this.sshPath, ["-F", path.join(this.accountDataDirectory, "ssh-home", ".ssh", "config"), "kanna-sync", `test -d ${quotePosix(this.state.remotePath)}`], { env: this.commandEnvironment(), timeoutMs: 15_000, allowFailure: true })
@@ -457,7 +457,8 @@ export class RemoteWorkspaceSyncHelper {
       const relative = path.relative(parent, child)
       return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
     }
-    return selected === home || contains(selected, data) || contains(data, selected)
+    const root = path.parse(selected).root
+    return path.relative(home, selected) === "" || selected === root || contains(selected, data) || contains(data, selected)
   }
 
   private async saveState() {
@@ -650,6 +651,7 @@ export class RemoteWorkspaceSyncHelper {
       await chmod(this.accountDataDirectory, 0o700)
       this.state = null
       await this.loadState()
+      if (this.state && this.state.localDirectory !== selected) throw new HelperError("another_project_active")
       await writeFile(path.join(this.dataDirectory, "active-account"), `${accountHash}\n`, { mode: 0o600 })
       await chmod(path.join(this.dataDirectory, "active-account"), 0o600)
       this.step = "loading_connection"
@@ -731,7 +733,7 @@ export class RemoteWorkspaceSyncHelper {
     else {
       this.step = "reconnecting"
       await this.writeSshConfig()
-      const sessions = await this.mutagenSessions().catch(() => [])
+      const sessions = await this.mutagenSessions()
       if (sessions.some((session) => session.name === this.state!.sessionName)) await this.mutagen(["sync", "resume", this.state.sessionName])
       else await this.ensureMutagenSession()
       this.step = null

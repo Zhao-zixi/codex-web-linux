@@ -48,7 +48,7 @@ export function renderLocalSyncUi({ serverOrigin }: { serverOrigin: string }) {
       </div>
       <div id="error-view" class="stack hidden"><p class="subtle">检查网络后可以重新连接。重新连接会使用已保存的设备授权。</p><div class="actions"><button class="button primary" type="button" data-action="restart">重新连接</button><button class="button" type="button" data-action="open-kanna">打开 Kanna</button></div><details class="environment-details"><summary>查看准备详情</summary><div class="dependencies" id="error-dependencies" aria-label="本机依赖状态"></div></details></div>
     </section>
-    <footer class="footer">需要管理设备授权？请返回 Kanna 网页，在“设置 → 常规 → 同步助手”查看已授权设备。撤销后会阻止新连接；正在进行的同步可能继续，请先在本地助手中暂停或退出。</footer>
+    <footer class="footer">需要管理设备授权？请返回 Kanna 网页，在“设置 → 常规 → 同步助手”查看已授权设备。撤销后会阻止新连接；正在进行的同步可能继续，请先在本地助手中暂停同步。</footer>
   </main>
   <script>
   (() => {
@@ -98,6 +98,7 @@ export function renderLocalSyncUi({ serverOrigin }: { serverOrigin: string }) {
       mutagen_status_unavailable: "无法读取同步状态。请尝试重新连接；若仍失败，请联系管理员。",
       session_not_found: "找不到此助手管理的同步会话。请尝试重新连接。",
       operation_in_progress: "正在进行其他连接操作，请稍后重试。",
+      another_project_active: "此账号已有另一个项目正在由助手管理。请先暂停当前同步，再重试。",
       unsafe_local_directory: "不能同步用户主目录或助手数据所在位置。请选择其中的项目文件夹。",
     }
     async function request(path, options = {}) {

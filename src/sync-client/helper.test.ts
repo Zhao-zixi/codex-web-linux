@@ -236,6 +236,7 @@ describe("local sync helper server", () => {
     const data = path.join(root, "data")
     await mkdir(path.join(data, "nested-project"), { recursive: true })
     expect(await operations.isUnsafeLocalDirectory(await realpath(os.homedir()))).toBe(true)
+    expect(await operations.isUnsafeLocalDirectory(await realpath(path.parse(root).root))).toBe(true)
     expect(await operations.isUnsafeLocalDirectory(root)).toBe(true)
     expect(await operations.isUnsafeLocalDirectory(data)).toBe(true)
     expect(await operations.isUnsafeLocalDirectory(path.join(data, "nested-project"))).toBe(true)

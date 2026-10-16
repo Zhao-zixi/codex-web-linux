@@ -37,8 +37,8 @@ function parseArguments(args: string[]) {
   if (target !== "windows-x64" && target !== "linux-x64") throw new Error("--target must be windows-x64 or linux-x64")
   let origin: URL
   try { origin = new URL(options.origin ?? "") } catch { throw new Error("--origin must be an absolute HTTP(S) origin") }
-  if (!["https:", "http:"].includes(origin.protocol) || origin.origin !== options.origin || (origin.protocol !== "https:" && !["localhost", "127.0.0.1"].includes(origin.hostname))) {
-    throw new Error("--origin must be a secure HTTP(S) origin (HTTP is allowed only on localhost)")
+  if (!["https:", "http:"].includes(origin.protocol) || origin.origin !== options.origin) {
+    throw new Error("--origin must be an exact HTTP(S) origin without credentials, path, query, or fragment")
   }
   if (!options["output-dir"]) throw new Error("--output-dir is required")
   return { origin: origin.origin, outputDirectory: path.resolve(options["output-dir"]), target: target as Target }

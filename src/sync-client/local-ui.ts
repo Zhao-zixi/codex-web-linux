@@ -97,6 +97,8 @@ export function renderLocalSyncUi({ serverOrigin }: { serverOrigin: string }) {
       sync_failed: "同步启动或控制失败。请检查网络和本机依赖后重试。",
       mutagen_status_unavailable: "无法读取同步状态。请尝试重新连接；若仍失败，请联系管理员。",
       session_not_found: "找不到此助手管理的同步会话。请尝试重新连接。",
+      operation_in_progress: "正在进行其他连接操作，请稍后重试。",
+      unsafe_local_directory: "不能同步用户主目录或助手数据所在位置。请选择其中的项目文件夹。",
     }
     async function request(path, options = {}) {
       const headers = new Headers(options.headers || {})

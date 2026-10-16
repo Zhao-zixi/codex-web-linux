@@ -1,5 +1,6 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
 import { spawn, spawnSync } from "node:child_process"
+import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs"
 import { chmod, copyFile, link, lstat, mkdir, opendir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises"
 import { inflateRawSync } from "node:zlib"
 import os from "node:os"
@@ -118,22 +119,35 @@ function executableSuffix() {
   return process.platform === "win32" ? ".exe" : ""
 }
 
-async function extractZipEntries(archive: Buffer, directory: string) {
-  let offset = 0
+export async function extractMutagenZipEntries(archive: Buffer, directory: string) {
+  let endOffset = -1
+  for (let index = archive.length - 22; index >= Math.max(0, archive.length - 22 - 0xffff); index--) {
+    if (archive.readUInt32LE(index) === 0x06054b50) { endOffset = index; break }
+  }
+  if (endOffset < 0) throw new HelperError("mutagen_install_failed")
+  const count = archive.readUInt16LE(endOffset + 10)
+  const centralOffset = archive.readUInt32LE(endOffset + 16)
+  let offset = centralOffset
   const extracted: string[] = []
-  while (offset + 30 <= archive.length && archive.readUInt32LE(offset) === 0x04034b50) {
-    const flags = archive.readUInt16LE(offset + 6)
-    const method = archive.readUInt16LE(offset + 8)
-    const compressedSize = archive.readUInt32LE(offset + 18)
-    const uncompressedSize = archive.readUInt32LE(offset + 22)
-    const filenameLength = archive.readUInt16LE(offset + 26)
-    const extraLength = archive.readUInt16LE(offset + 28)
-    if (flags & 0x08) throw new HelperError("mutagen_install_failed")
-    const nameStart = offset + 30
-    const filename = archive.toString("utf8", nameStart, nameStart + filenameLength)
-    const dataStart = nameStart + filenameLength + extraLength
+  for (let index = 0; index < count; index++) {
+    if (offset + 46 > archive.length || archive.readUInt32LE(offset) !== 0x02014b50) throw new HelperError("mutagen_install_failed")
+    const flags = archive.readUInt16LE(offset + 8)
+    const method = archive.readUInt16LE(offset + 10)
+    const compressedSize = archive.readUInt32LE(offset + 20)
+    const uncompressedSize = archive.readUInt32LE(offset + 24)
+    const filenameLength = archive.readUInt16LE(offset + 28)
+    const extraLength = archive.readUInt16LE(offset + 30)
+    const commentLength = archive.readUInt16LE(offset + 32)
+    const localOffset = archive.readUInt32LE(offset + 42)
+    const filename = archive.toString("utf8", offset + 46, offset + 46 + filenameLength)
+    if (localOffset + 30 > archive.length || archive.readUInt32LE(localOffset) !== 0x04034b50) throw new HelperError("mutagen_install_failed")
+    const localNameLength = archive.readUInt16LE(localOffset + 26)
+    const localExtraLength = archive.readUInt16LE(localOffset + 28)
+    const localName = archive.toString("utf8", localOffset + 30, localOffset + 30 + localNameLength)
+    if (localName !== filename) throw new HelperError("mutagen_install_failed")
+    const dataStart = localOffset + 30 + localNameLength + localExtraLength
     const dataEnd = dataStart + compressedSize
-    if (dataEnd > archive.length || filename.includes("/") || filename.includes("\\") || (filename !== "mutagen.exe" && filename !== "mutagen-agents.tar.gz")) {
+    if (flags & ~0x0808 || dataEnd > archive.length || filename.includes("/") || filename.includes("\\") || (filename !== "mutagen.exe" && filename !== "mutagen-agents.tar.gz")) {
       throw new HelperError("mutagen_install_failed")
     }
     const compressed = archive.subarray(dataStart, dataEnd)
@@ -144,7 +158,7 @@ async function extractZipEntries(archive: Buffer, directory: string) {
     if (contents.length !== uncompressedSize) throw new HelperError("mutagen_install_failed")
     extracted.push(filename)
     await writeFile(path.join(directory, filename), contents, { mode: 0o700 })
-    offset = dataEnd
+    offset += 46 + filenameLength + extraLength + commentLength
   }
   return extracted
 }
@@ -229,6 +243,7 @@ export class RemoteWorkspaceSyncHelper {
   private state: LocalState | null = null
   private selectedDirectory: string | null = null
   private phase: LocalSyncStatus["phase"] = "ready"
+  private operationBusy = false
   private step: string | null = null
   private error: string | null = null
   private sync = statusFromMutagen(undefined)
@@ -238,7 +253,7 @@ export class RemoteWorkspaceSyncHelper {
 
   constructor(origin: string, dataDirectory = defaultDataDirectory()) {
     const parsed = new URL(origin)
-    if (parsed.origin !== origin || !["https:", "http:"].includes(parsed.protocol) || (parsed.protocol !== "https:" && !["localhost", "127.0.0.1"].includes(parsed.hostname))) throw new HelperError("invalid_server_origin")
+    if (parsed.origin !== origin || !["https:", "http:"].includes(parsed.protocol)) throw new HelperError("invalid_server_origin")
     this.origin = origin
     this.dataDirectory = dataDirectory
     this.accountDataDirectory = dataDirectory
@@ -269,10 +284,11 @@ export class RemoteWorkspaceSyncHelper {
       if (await this.hasMutagen()) {
         try { this.sync = await this.readMutagenStatus() }
         catch { this.error = "mutagen_status_unavailable" }
+        if (this.sync.state === "stopped") { this.phase = "error"; this.error = "session_not_found" }
+        else if (this.sync.state === "paused") this.phase = "paused"
+        else if (this.sync.state === "error") this.phase = "error"
+        else this.phase = "active"
       }
-      if (this.sync.state === "paused") this.phase = "paused"
-      else if (this.sync.state === "error") this.phase = "error"
-      else if (this.sync.state !== "stopped") this.phase = "active"
     }
   }
 
@@ -312,8 +328,6 @@ export class RemoteWorkspaceSyncHelper {
     const dispatcherDirectory = path.join(this.dataDirectory, "tools", "ssh-dispatcher")
     const env: NodeJS.ProcessEnv = {
       ...process.env,
-      HOME: sshHome,
-      USERPROFILE: sshHome,
       MUTAGEN_DATA_DIRECTORY: path.join(this.accountDataDirectory, "mutagen-data"),
       MUTAGEN_SSH_PATH: dispatcherDirectory,
       KANNA_SYNC_SSH_CONFIG: path.join(sshHome, ".ssh", "config"),
@@ -341,6 +355,33 @@ export class RemoteWorkspaceSyncHelper {
     return sessions.filter((session): session is MutagenSession => isRecord(session) && typeof session.name === "string")
   }
 
+  private async createMutagenSession() {
+    if (!this.state) throw new HelperError("session_not_found")
+    const selected = this.state.localDirectory
+    const endpoint = `kanna-sync:${this.state.remotePath}`
+    await this.mutagen([
+      "sync", "create", "--no-global-configuration", "--name", this.state.sessionName,
+      "--mode", "two-way-safe", "--ignore-vcs",
+      "--ignore", ".kanna", "--ignore", ".codex", "--ignore", ".remote-workspace", "--ignore", ".ssh",
+      "--ignore", "node_modules", "--ignore", "vendor", "--ignore", ".venv", "--ignore", "venv",
+      "--ignore", "target", "--ignore", "dist", "--ignore", "build", "--ignore", ".next", "--ignore", ".turbo",
+      "--ignore", ".cache", "--ignore", ".pytest_cache", "--ignore", "__pycache__", "--ignore", ".env",
+      "--ignore", ".env.*", "--ignore", "secrets", "--ignore", "*.pem", "--ignore", "*.key", "--ignore", ".aws/credentials",
+      selected, endpoint,
+    ])
+  }
+
+  private async ensureMutagenSession() {
+    if (!this.state) throw new HelperError("session_not_found")
+    const sessions = await this.mutagenSessions().catch(() => [])
+    if (sessions.some((session) => session.name === this.state!.sessionName)) return
+    this.step = "creating_remote_directory"
+    const directoryExists = await runCommand(this.sshPath, ["-F", path.join(this.accountDataDirectory, "ssh-home", ".ssh", "config"), "kanna-sync", `test -d ${quotePosix(this.state.remotePath)}`], { env: this.commandEnvironment(), timeoutMs: 15_000, allowFailure: true })
+    if (directoryExists.status !== 0) await this.sshRemote(`mkdir -p -- ${quotePosix(this.state.remotePath)}`)
+    this.step = "connecting_mutagen"
+    await this.createMutagenSession()
+  }
+
   private async readMutagenStatus() {
     if (!this.state) return statusFromMutagen(undefined)
     const session = (await this.mutagenSessions()).find((item) => item.name === this.state!.sessionName)
@@ -351,10 +392,12 @@ export class RemoteWorkspaceSyncHelper {
     if (this.state && await this.hasMutagen()) {
       try {
         this.sync = await this.readMutagenStatus()
-        if (this.sync.state === "paused") this.phase = "paused"
-        else if (this.sync.state === "error") this.phase = "error"
-        else if (this.sync.state !== "stopped") this.phase = "active"
-        else if (this.phase !== "starting") this.phase = "error"
+        if (this.phase !== "starting") {
+          if (this.sync.state === "paused") this.phase = "paused"
+          else if (this.sync.state === "error") this.phase = "error"
+          else if (this.sync.state !== "stopped") this.phase = "active"
+          else this.phase = "error"
+        }
       } catch { this.sync = { ...this.sync, state: "error", summary: "无法读取 Mutagen 状态" } }
     }
     return {
@@ -402,8 +445,19 @@ export class RemoteWorkspaceSyncHelper {
       selected = await realpath(inputPath)
     } catch { throw new HelperError("directory_unavailable") }
     if (!(await stat(selected)).isDirectory()) throw new HelperError("directory_unavailable")
+    if (await this.isUnsafeLocalDirectory(selected)) throw new HelperError("unsafe_local_directory")
     this.selectedDirectory = selected
     return { localDirectory: selected }
+  }
+
+  private async isUnsafeLocalDirectory(selected: string) {
+    const home = await realpath(os.homedir()).catch(() => path.resolve(os.homedir()))
+    const data = await realpath(this.dataDirectory).catch(() => path.resolve(this.dataDirectory))
+    const contains = (parent: string, child: string) => {
+      const relative = path.relative(parent, child)
+      return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
+    }
+    return selected === home || contains(selected, data) || contains(data, selected)
   }
 
   private async saveState() {
@@ -428,7 +482,7 @@ export class RemoteWorkspaceSyncHelper {
     const archive = bundled ? await readFile(archivePath) : await downloadVerified(release.url, release.sha256, archivePath)
     this.step = "installing_mutagen"
     if (process.platform === "win32") {
-      const names = await extractZipEntries(archive, toolsDirectory)
+      const names = await extractMutagenZipEntries(archive, toolsDirectory)
       await Promise.all(names.map(async (name) => {
         const file = path.join(toolsDirectory, name)
         if (!(await Bun.file(file).exists())) throw new HelperError("mutagen_install_failed")
@@ -455,8 +509,8 @@ export class RemoteWorkspaceSyncHelper {
     if (!hasBundledGit) await downloadVerified(PORTABLE_GIT.url, PORTABLE_GIT.sha256, installer)
     this.step = "installing_ssh"
     const destination = path.join(toolsDirectory, "git")
-    const result = spawnSync(installer, [`-o${destination}`, "-y"], { encoding: "utf8", windowsHide: true, timeout: 120_000 })
-    if (result.error || result.status !== 0 || !(await Bun.file(this.sshPath).exists()) || !(await Bun.file(this.sshKeygenPath).exists() && await Bun.file(path.join(this.gitBinDirectory, "scp.exe")).exists())) {
+    const result = await runCommand(installer, [`-o${destination}`, "-y"], { env: process.env, timeoutMs: 120_000, allowFailure: true }).catch(() => ({ status: 1, stdout: "", stderr: "" }))
+    if (result.status !== 0 || !(await Bun.file(this.sshPath).exists()) || !(await Bun.file(this.sshKeygenPath).exists() && await Bun.file(path.join(this.gitBinDirectory, "scp.exe")).exists())) {
       throw new HelperError("ssh_install_failed")
     }
     await rm(installer, { force: true })
@@ -520,7 +574,7 @@ export class RemoteWorkspaceSyncHelper {
     await mkdir(sshDirectory, { recursive: true, mode: 0o700 })
     if (process.platform !== "win32") await chmod(sshDirectory, 0o700)
     const knownHosts = path.join(sshDirectory, "known_hosts")
-    const knownHostKey = this.state.sshHost.includes(":") ? `[${this.state.sshHost}]:${this.state.sshPort}` : `[${this.state.sshHost}]:${this.state.sshPort}`
+    const knownHostKey = this.state.sshPort === 22 ? this.state.sshHost : `[${this.state.sshHost}]:${this.state.sshPort}`
     await writeFile(knownHosts, `${knownHostKey} ${this.state.publicHostKey}\n`, { mode: 0o600 })
     const config = [
       "Host kanna-sync",
@@ -553,10 +607,27 @@ export class RemoteWorkspaceSyncHelper {
   }
 
   async start(input: unknown) {
+    if (this.operationBusy) throw new HelperError("operation_in_progress")
+    this.operationBusy = true
+    try { return await this.runStart(input) }
+    catch (error) {
+      this.error = safeError(error)
+      this.phase = "error"
+      this.step = null
+      throw error
+    }
+    finally {
+      if (isRecord(input) && typeof input.password === "string") input.password = ""
+      this.operationBusy = false
+    }
+  }
+
+  private async runStart(input: unknown) {
     if (!isRecord(input) || typeof input.username !== "string" || typeof input.password !== "string" || typeof input.localDirectory !== "string") throw new HelperError("invalid_request")
     if (input.username.trim().length < 1 || input.username.length > 128 || input.password.length < 1 || input.password.length > 1024) throw new HelperError("invalid_request")
     const selected = await realpath(input.localDirectory).catch(() => "")
     if (!selected || !(await stat(selected).catch(() => null))?.isDirectory()) throw new HelperError("directory_unavailable")
+    if (await this.isUnsafeLocalDirectory(selected)) throw new HelperError("unsafe_local_directory")
     const projectName = path.basename(selected).trim()
     if (!projectName || projectName === "." || projectName === ".." || projectName.includes("/") || /[\0-\x1f\x7f]/.test(projectName) || projectName.length > 120) throw new HelperError("invalid_project_directory")
 
@@ -620,28 +691,7 @@ export class RemoteWorkspaceSyncHelper {
       await this.saveState()
       this.step = "verifying_host_key"
       await this.writeSshConfig()
-      this.step = "creating_remote_directory"
-      const directoryExists = await runCommand(this.sshPath, ["-F", path.join(this.accountDataDirectory, "ssh-home", ".ssh", "config"), "kanna-sync", `test -d ${quotePosix(this.state.remotePath)}`], { env: this.commandEnvironment(), timeoutMs: 15_000, allowFailure: true })
-      if (directoryExists.status !== 0) {
-        await this.sshRemote(`mkdir -p -- ${quotePosix(this.state.remotePath)}`)
-        this.state.remoteDirectoryCreated = true
-        await this.saveState()
-      }
-      const sessions = await this.mutagenSessions().catch(() => [])
-      if (!sessions.some((session) => session.name === this.state!.sessionName)) {
-        this.step = "connecting_mutagen"
-        const endpoint = `kanna-sync:${this.state.remotePath}`
-        await this.mutagen([
-          "sync", "create", "--no-global-configuration", "--name", this.state.sessionName,
-          "--mode", "two-way-safe", "--ignore-vcs",
-          "--ignore", ".kanna", "--ignore", ".codex", "--ignore", ".remote-workspace", "--ignore", ".ssh",
-          "--ignore", "node_modules", "--ignore", "vendor", "--ignore", ".venv", "--ignore", "venv",
-          "--ignore", "target", "--ignore", "dist", "--ignore", "build", "--ignore", ".next", "--ignore", ".turbo",
-          "--ignore", ".cache", "--ignore", ".pytest_cache", "--ignore", "__pycache__", "--ignore", ".env",
-          "--ignore", ".env.*", "--ignore", "secrets", "--ignore", "*.pem", "--ignore", "*.key",
-          selected, endpoint,
-        ])
-      }
+      await this.ensureMutagenSession()
       await this.saveState()
       this.step = null
       this.sync = await this.readMutagenStatus()
@@ -664,6 +714,13 @@ export class RemoteWorkspaceSyncHelper {
   }
 
   async control(action: "pause" | "resume" | "restart" | "open-kanna") {
+    if (this.operationBusy) throw new HelperError("operation_in_progress")
+    this.operationBusy = true
+    try { return await this.runControl(action) }
+    finally { this.operationBusy = false }
+  }
+
+  private async runControl(action: "pause" | "resume" | "restart" | "open-kanna") {
     if (action === "open-kanna") {
       openInBrowser(this.origin)
       return await this.getStatus()
@@ -672,14 +729,16 @@ export class RemoteWorkspaceSyncHelper {
     if (action === "pause") await this.mutagen(["sync", "pause", this.state.sessionName])
     else if (action === "resume") await this.mutagen(["sync", "resume", this.state.sessionName])
     else {
-      await this.mutagen(["sync", "resume", this.state.sessionName]).catch(() => undefined)
       this.step = "reconnecting"
       await this.writeSshConfig()
-      await this.mutagen(["sync", "resume", this.state.sessionName])
+      const sessions = await this.mutagenSessions().catch(() => [])
+      if (sessions.some((session) => session.name === this.state!.sessionName)) await this.mutagen(["sync", "resume", this.state.sessionName])
+      else await this.ensureMutagenSession()
       this.step = null
     }
     this.sync = await this.readMutagenStatus()
     this.phase = this.sync.state === "paused" ? "paused" : this.sync.state === "error" ? "error" : "active"
+    this.error = null
     return await this.getStatus()
   }
 
@@ -705,14 +764,24 @@ export class RemoteWorkspaceSyncHelper {
       catch (error) { return Response.json({ error: safeError(error) }, { status: 400, headers: { "Cache-Control": "no-store" } }) }
     }
     if (request.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "GET, POST" } })
+    if (["pause", "resume", "restart", "open-kanna"].some((action) => url.pathname === `/api/${action}`)) {
+      try {
+        const action = url.pathname.slice("/api/".length) as "pause" | "resume" | "restart" | "open-kanna"
+        return Response.json(await this.control(action), { headers: { "Cache-Control": "no-store" } })
+      } catch (error) {
+        const code = safeError(error)
+        this.error = code
+        return Response.json({ error: code }, { status: code === "invalid_request" ? 400 : 409, headers: { "Cache-Control": "no-store" } })
+      }
+    }
     const body = await readJsonBody(request)
     if (!body) return Response.json({ error: "invalid_request" }, { status: 400, headers: { "Cache-Control": "no-store" } })
     try {
       if (url.pathname === "/api/select-directory") return Response.json(await this.selectDirectory(body.path), { headers: { "Cache-Control": "no-store" } })
-      if (url.pathname === "/api/start") return Response.json(await this.start(body), { headers: { "Cache-Control": "no-store" } })
-      if (["pause", "resume", "restart", "open-kanna"].some((action) => url.pathname === `/api/${action}`)) {
-        const action = url.pathname.slice("/api/".length) as "pause" | "resume" | "restart" | "open-kanna"
-        return Response.json(await this.control(action), { headers: { "Cache-Control": "no-store" } })
+      if (url.pathname === "/api/start") {
+        if (this.operationBusy) return Response.json({ error: "operation_in_progress" }, { status: 409, headers: { "Cache-Control": "no-store" } })
+        void this.start(body).catch(() => undefined)
+        return Response.json(await this.getStatus(), { status: 202, headers: { "Cache-Control": "no-store" } })
       }
       return new Response("Not found", { status: 404, headers: LOCAL_UI_HEADERS })
     } catch (error) {
@@ -724,6 +793,7 @@ export class RemoteWorkspaceSyncHelper {
 }
 
 export function defaultDataDirectory() {
+  if (process.env.KANNA_SYNC_DATA_DIRECTORY) return path.resolve(process.env.KANNA_SYNC_DATA_DIRECTORY)
   if (process.platform === "win32") return path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "KannaSync")
   return path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), ".local", "share"), "kanna-sync")
 }
@@ -746,7 +816,17 @@ export function startLocalSyncServer(helper: RemoteWorkspaceSyncHelper) {
     fetch: (request) => helper.handle(request, server.port, server.requestIP(request)?.address),
   })
   const localUrl = `http://127.0.0.1:${server.port}/#${helper.token}`
-  openInBrowser(localUrl)
+  const startupFile = process.env.KANNA_SYNC_STARTUP_FILE
+  if (startupFile) {
+    const resolvedStartupFile = path.resolve(startupFile)
+    mkdirSync(path.dirname(resolvedStartupFile), { recursive: true, mode: 0o700 })
+    const temporary = `${resolvedStartupFile}.${randomBytes(6).toString("hex")}.tmp`
+    writeFileSync(temporary, `${JSON.stringify({ localUrl })}\n`, { flag: "wx", mode: 0o600 })
+    chmodSync(temporary, 0o600)
+    renameSync(temporary, resolvedStartupFile)
+    chmodSync(resolvedStartupFile, 0o600)
+  }
+  if (process.env.KANNA_SYNC_NO_OPEN !== "1") openInBrowser(localUrl)
   return { server, localUrl }
 }
 

@@ -114,7 +114,7 @@ export function RemoteWorkspaceSection() {
   }
 
   async function revokeDevice(device: AuthorizedDevice) {
-    if (!window.confirm(`撤销“${device.label}”的授权？撤销后会阻止新连接；正在进行的同步可能继续，请先在本地助手中暂停或退出。`)) return
+    if (!window.confirm(`撤销“${device.label}”的授权？撤销后会阻止新连接；正在进行的同步可能继续，请先在本地助手中暂停同步。`)) return
     setRevokingId(device.id)
     setDeviceError(null)
     try {
@@ -174,7 +174,7 @@ export function RemoteWorkspaceSection() {
               </li>)}
             </ul> : <p className="rounded-xl border border-border/70 px-3 py-4 text-sm text-muted-foreground">还没有授权设备。第一次在同步助手登录时会登记这台电脑。</p>}
             {deviceError ? <SettingsNotice>{deviceError}</SettingsNotice> : null}
-            <p className="text-xs leading-relaxed text-muted-foreground">撤销后会阻止新连接；正在进行的同步可能继续，请先在本地助手中暂停或退出。</p>
+            <p className="text-xs leading-relaxed text-muted-foreground">撤销后会阻止新连接；正在进行的同步可能继续，请先在本地助手中暂停同步。</p>
           </section>
 
           <details className="group border-t border-border/70 pt-4">

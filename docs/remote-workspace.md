@@ -261,7 +261,7 @@ Windows ZIP 解压后启动 `kanna-sync.exe`；Linux ZIP 解压后直接双击 `
 - **重新启动助手：**再次打开助手可读取本机已保存的设备配置并接管已有 session；同一台电脑通常不需再次授权。此说明不代表助手会随 Windows/Linux 开机自动启动。若助手显示连接失败，先确认网页入口可达、账号仍能登录、设备没有被撤销，再在助手中重试。
 - **发生冲突：**助手会提示冲突文件。先暂停该项目同步，复制备份双方文件，比较内容并手工合并；确认要保留的版本后再恢复同步。不要在没有备份时删除冲突副本，也不要同时在两边对同一文件作出互相覆盖的修改。
 - **更换电脑或重装：**在新电脑上按首次安装流程重新授权。旧电脑可在网页“已授权设备”中单独撤销。
-- **撤销设备：**在“已授权设备”找到对应标签和指纹并选择“撤销”。撤销只阻止该设备建立新的 SSH 连接；已建立的 SSH 连接或传输可能继续保持，直到自行断开。要立即结束现有连接，还需让该设备上的助手退出或由管理员停止对应服务端连接。
+- **撤销设备：**在“已授权设备”找到对应标签和指纹并选择“撤销”。撤销只阻止该设备建立新的 SSH 连接；已建立的 SSH 连接或传输可能继续保持。要立即停止同步，请先在该设备的本地助手中暂停同步；关闭窗口不会停止 Mutagen daemon。
 
 助手出现工具准备失败时，保持应用打开并按提示重试；它会在界面显示准备进度。助手优先使用 ZIP 内随附的 Mutagen/PortableGit 工具，并校验 SHA-256；随包工具不可用时才会按固定版本从官方发行站点获取。若网络策略阻止下载，请确认客户端可访问 `github.com` 的相关发行资源，或联系管理员检查出站访问。不要从不可信站点单独下载可执行文件，也不要跳过 SHA-256 校验。
 
@@ -279,14 +279,14 @@ Windows ZIP 解压后启动 `kanna-sync.exe`；Linux ZIP 解压后直接双击 `
 
 ```sh
 bun install --frozen-lockfile
-bun run build:sync-client -- --origin http://fnos.zixizhao.top:8444 --output-dir dist/client/remote-workspace-clients --target windows-x64
-bun run build:sync-client -- --origin http://fnos.zixizhao.top:8444 --output-dir dist/client/remote-workspace-clients --target linux-x64
-sha256sum dist/client/remote-workspace-clients/kanna-sync-windows-x64.zip dist/client/remote-workspace-clients/kanna-sync-linux-x64.zip
+bun run build:sync-client -- --origin http://fnos.zixizhao.top:8444 --output-dir .remote-workspace/clients --target windows-x64
+bun run build:sync-client -- --origin http://fnos.zixizhao.top:8444 --output-dir .remote-workspace/clients --target linux-x64
+sha256sum .remote-workspace/clients/kanna-sync-windows-x64.zip .remote-workspace/clients/kanna-sync-linux-x64.zip
 ```
 
 预期文件名分别为 `kanna-sync-windows-x64.zip` 和 `kanna-sync-linux-x64.zip`。Windows ZIP 包含 `kanna-sync.exe`、`connection.json`、`mutagen-windows-x64.zip` 和 `PortableGit-2.56.0.2-64-bit.7z.exe`；Linux ZIP 包含 `kanna-sync`、`connection.json` 和 `mutagen-linux-x64.tar.gz`。`connection.json` 仅含服务端 origin。构建包不应含账号凭据、设备私钥、`.remote-workspace/` 运行状态或 `.env`。核对 zip 列表、目标架构和 SHA-256，将实际哈希、版本与构建 revision 记录在发布记录中。
 
-部署时将真实生成的 ZIP 放在 app 的 `dist/client/remote-workspace-clients/` 路径，并重建/更新 gateway 与 app 服务，使已认证用户可以通过“设置 → 常规 → 同步助手”读取下载清单。接口仅列出实际存在的 ZIP；未安装包时页面显示“暂不可用”，不得建立匿名下载路由或把私有文件系统路径写到网页。确认两个目标的文件名、`application/zip` 内容类型和归档完整性后，再用用户登录会话实际下载验证。升级客户端时保留既有的每账号设备目录与旧 `authorized_keys` 内容；不要用发布包覆盖任何账号运行数据。
+部署前将 `.remote-workspace/clients` 作为持久发布目录保留，并挂载到 app 容器 `/run/remote-workspace-clients:ro`，同时设置 `KANNA_REMOTE_WORKSPACE_CLIENT_DIRECTORY=/run/remote-workspace-clients`。生成部署后再重启对应服务，使已认证用户可以通过“设置 → 常规 → 同步助手”读取下载清单。接口仅列出实际存在的 ZIP；未安装包时页面显示“暂不可用”，不得建立匿名下载路由或把私有文件系统路径写到网页。确认两个目标的文件名、`application/zip` 内容类型和归档完整性后，再用用户登录会话实际下载验证。升级客户端时保留既有的每账号设备目录与旧 `authorized_keys` 内容；不要用发布包覆盖任何账号运行数据。
 
 | 目标 | 发布文件 | SHA-256 | 状态 |
 | --- | --- | --- | --- |

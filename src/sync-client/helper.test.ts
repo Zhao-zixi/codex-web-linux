@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, symlink } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { RemoteWorkspaceSyncHelper } from "./helper"
+import { defaultDataDirectory, RemoteWorkspaceSyncHelper, startLocalSyncServer } from "./helper"
 
 const roots: string[] = []
 
@@ -29,6 +29,45 @@ afterEach(async () => {
 })
 
 describe("local sync helper server", () => {
+  test("accepts the configured public HTTP origin as an exact origin", async () => {
+    const helper = new RemoteWorkspaceSyncHelper("http://fnos.zixizhao.top:8444", path.join(os.tmpdir(), "kanna-sync-http-origin-test"))
+    expect(helper.origin).toBe("http://fnos.zixizhao.top:8444")
+    expect(() => new RemoteWorkspaceSyncHelper("http://fnos.zixizhao.top:8444/path")).toThrow("invalid_server_origin")
+    expect(() => new RemoteWorkspaceSyncHelper("http://user@fnos.zixizhao.top:8444")).toThrow("invalid_server_origin")
+  })
+
+  test("supports isolated native smoke data and a private startup handoff without opening a browser", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kanna-sync-startup-test-"))
+    roots.push(root)
+    const original = {
+      data: process.env.KANNA_SYNC_DATA_DIRECTORY,
+      startup: process.env.KANNA_SYNC_STARTUP_FILE,
+      noOpen: process.env.KANNA_SYNC_NO_OPEN,
+    }
+    const startupFile = path.join(root, "startup", "local.json")
+    process.env.KANNA_SYNC_DATA_DIRECTORY = path.join(root, "isolated-data")
+    process.env.KANNA_SYNC_STARTUP_FILE = startupFile
+    process.env.KANNA_SYNC_NO_OPEN = "1"
+    const helper = new RemoteWorkspaceSyncHelper("https://workspace.example.test", defaultDataDirectory())
+    await helper.initialize()
+    const { server, localUrl } = startLocalSyncServer(helper)
+    try {
+      const handoff = JSON.parse(await readFile(startupFile, "utf8")) as { localUrl: string }
+      expect(defaultDataDirectory()).toBe(path.join(root, "isolated-data"))
+      expect(handoff.localUrl).toBe(localUrl)
+      expect(new URL(handoff.localUrl).hash.length).toBeGreaterThan(1)
+      expect((await stat(startupFile)).mode & 0o077).toBe(0)
+    } finally {
+      server.stop(true)
+      if (original.data === undefined) delete process.env.KANNA_SYNC_DATA_DIRECTORY
+      else process.env.KANNA_SYNC_DATA_DIRECTORY = original.data
+      if (original.startup === undefined) delete process.env.KANNA_SYNC_STARTUP_FILE
+      else process.env.KANNA_SYNC_STARTUP_FILE = original.startup
+      if (original.noOpen === undefined) delete process.env.KANNA_SYNC_NO_OPEN
+      else process.env.KANNA_SYNC_NO_OPEN = original.noOpen
+    }
+  })
+
   test("binds authenticated API calls to the exact loopback host and origin", async () => {
     const { helper, server, url } = await createHelper()
     try {
@@ -50,6 +89,88 @@ describe("local sync helper server", () => {
       expect(await status.json()).toMatchObject({ phase: "ready", sync: { state: "stopped" } })
       const foreignHost = await helper.handle(new Request(`${url}/api/status`, { headers: headers(url, helper.token, { Host: "localhost" }) }), server.port)
       expect(foreignHost.status).toBe(400)
+    } finally {
+      server.stop(true)
+    }
+  })
+
+  test("accepts bodyless control POSTs through the real HTTP handler", async () => {
+    const { helper, server, url } = await createHelper()
+    const actions: string[] = []
+    ;(helper as unknown as { control: (action: string) => Promise<unknown> }).control = async (action) => {
+      actions.push(action)
+      return { phase: "ready" }
+    }
+    try {
+      for (const action of ["pause", "resume", "restart", "open-kanna"]) {
+        const response = await fetch(`${url}/api/${action}`, { method: "POST", headers: headers(url, helper.token, { Origin: url }) })
+        expect(response.status).toBe(200)
+      }
+      expect(actions).toEqual(["pause", "resume", "restart", "open-kanna"])
+    } finally {
+      server.stop(true)
+    }
+  })
+
+  test("returns accepted while a long-running start continues for status polling", async () => {
+    const { helper, server, url, root } = await createHelper()
+    let finish!: () => void
+    const pending = new Promise<void>((resolve) => { finish = resolve })
+    ;(helper as unknown as { start: (input: unknown) => Promise<unknown> }).start = async () => {
+      await pending
+      return { phase: "active" }
+    }
+    try {
+      const response = await fetch(`${url}/api/start`, {
+        method: "POST",
+        headers: headers(url, helper.token, { Origin: url, "Content-Type": "application/json" }),
+        body: JSON.stringify({ username: "user", password: "test-only", localDirectory: root }),
+      })
+      expect(response.status).toBe(202)
+      expect((await response.json()).phase).toBe("ready")
+    } finally {
+      finish()
+      server.stop(true)
+    }
+  })
+
+  test("rejects overlapping account starts instead of mixing their state", async () => {
+    const { helper, server } = await createHelper()
+    let finish!: () => void
+    const pending = new Promise<void>((resolve) => { finish = resolve })
+    ;(helper as unknown as { runStart: (input: unknown) => Promise<unknown> }).runStart = async () => pending
+    try {
+      const first = helper.start({})
+      await expect(helper.start({})).rejects.toThrow("operation_in_progress")
+      finish()
+      await first
+    } finally {
+      server.stop(true)
+    }
+  })
+
+  test("restart recreates a missing owned Mutagen session and clears stale errors", async () => {
+    const { helper, server } = await createHelper()
+    const operations = helper as unknown as {
+      state: Record<string, unknown> | null
+      writeSshConfig: () => Promise<void>
+      mutagenSessions: () => Promise<unknown[]>
+      ensureMutagenSession: () => Promise<void>
+      readMutagenStatus: () => Promise<{ state: "connected"; summary: string; conflictCount: number; conflicts: []; raw: null }>
+      error: string | null
+    }
+    operations.state = { sessionName: "owned-session", localDirectory: "/tmp/project", remotePath: "/workspace/project" }
+    operations.writeSshConfig = async () => undefined
+    operations.mutagenSessions = async () => []
+    let created = 0
+    operations.ensureMutagenSession = async () => { created++ }
+    operations.readMutagenStatus = async () => ({ state: "connected", summary: "已连接", conflictCount: 0, conflicts: [], raw: null })
+    operations.error = "ssh_connection_failed"
+    try {
+      const status = await helper.control("restart")
+      expect(created).toBe(1)
+      expect(status.phase).toBe("active")
+      expect(status.error).toBeNull()
     } finally {
       server.stop(true)
     }
@@ -83,6 +204,23 @@ describe("local sync helper server", () => {
     }
   })
 
+  test("rejects HOME and any local sync data directory overlap", async () => {
+    const { helper, root } = await createHelper()
+    const operations = helper as unknown as { isUnsafeLocalDirectory: (directory: string) => Promise<boolean> }
+    const data = path.join(root, "data")
+    await mkdir(path.join(data, "nested-project"), { recursive: true })
+    expect(await operations.isUnsafeLocalDirectory(await realpath(os.homedir()))).toBe(true)
+    expect(await operations.isUnsafeLocalDirectory(root)).toBe(true)
+    expect(await operations.isUnsafeLocalDirectory(data)).toBe(true)
+    expect(await operations.isUnsafeLocalDirectory(path.join(data, "nested-project"))).toBe(true)
+    const unsafeStart = { username: "fixture-user", password: "fixture-password", localDirectory: path.join(data, "nested-project") }
+    await expect(helper.start(unsafeStart)).rejects.toThrow("unsafe_local_directory")
+    expect(unsafeStart.password).toBe("")
+    const project = path.join(root, "projects", "safe-project")
+    await mkdir(project, { recursive: true })
+    expect(await operations.isUnsafeLocalDirectory(project)).toBe(false)
+  })
+
   test("logs out a Gateway admin token before rejecting its missing account and never persists credentials", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "kanna-sync-helper-auth-test-"))
     roots.push(root)
@@ -101,6 +239,8 @@ describe("local sync helper server", () => {
     const tokenFixture = "test-gateway-bearer-token-that-is-only-in-memory"
     const passwordFixture = "fixture-password-not-a-real-credential"
     const usernameFixture = "fixture-admin"
+    const project = path.join(root, "project")
+    await mkdir(project)
     const calls: Array<{ path: string; authorization?: string; body?: string }> = []
     globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
       const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url)
@@ -111,7 +251,7 @@ describe("local sync helper server", () => {
       if (url.pathname === "/auth/logout") return Response.json({ ok: true })
       throw new Error("Unexpected fixture request")
     }) as typeof fetch
-    const input = { username: usernameFixture, password: passwordFixture, localDirectory: root }
+    const input = { username: usernameFixture, password: passwordFixture, localDirectory: project }
     try {
       await expect(helper.start(input)).rejects.toThrow("workspace_unavailable")
       expect(input.password).toBe("")
@@ -148,13 +288,15 @@ describe("local sync helper server", () => {
     operations.dependencies = async () => ({ ssh: true, sshKeygen: true, mutagen: true })
     const originalFetch = globalThis.fetch
     const passwordFixture = "fixture-wrong-password-not-real"
+    const project = path.join(root, "project")
+    await mkdir(project)
     const calls: string[] = []
     globalThis.fetch = (async (input: string | URL | Request) => {
       const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url)
       calls.push(url.pathname)
       return Response.json({ error: "Invalid username or password" }, { status: 401 })
     }) as typeof fetch
-    const input = { username: "fixture-user", password: passwordFixture, localDirectory: root }
+    const input = { username: "fixture-user", password: passwordFixture, localDirectory: project }
     try {
       await expect(helper.start(input)).rejects.toThrow("invalid_credentials")
       expect(input.password).toBe("")

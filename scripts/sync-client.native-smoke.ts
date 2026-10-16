@@ -257,7 +257,13 @@ async function verifyClientFlow() {
   const browseResponse = await requestLocal(localOrigin, localToken, `/api/browse?path=${encodeURIComponent(temporaryRoot)}`)
   assert(browseResponse.ok, `compiled helper browse failed (${browseResponse.status})`)
   const browse = await browseResponse.json() as { entries: Array<{ path: string }> }
-  assert(browse.entries.some((entry) => entry.path === selectedDirectory), "compiled helper directory browser did not list the selected fixture")
+  const normalizePath = (value: string) => {
+    const resolved = path.resolve(value)
+    return process.platform === "win32" ? resolved.toLocaleLowerCase("en-US") : resolved
+  }
+  const selectedCanonical = normalizePath(await realpath(selectedDirectory))
+  const listedDirectories = await Promise.all(browse.entries.map(async (entry) => normalizePath(await realpath(entry.path).catch(() => entry.path))))
+  assert(listedDirectories.includes(selectedCanonical), `compiled helper directory browser did not list selected fixture ${selectedCanonical}; listed: ${listedDirectories.join(", ")}`)
   const selectResponse = await requestLocal(localOrigin, localToken, "/api/select-directory", { method: "POST", body: { path: selectedDirectory } })
   assert(selectResponse.ok, `compiled helper directory selection failed (${selectResponse.status})`)
   const startResponse = await requestLocal(localOrigin, localToken, "/api/start", { method: "POST", body: { username: "smoke-user", password: "smoke-password", localDirectory: selectedDirectory } })

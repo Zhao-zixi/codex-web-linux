@@ -91,10 +91,10 @@ async function waitFor<T>(label: string, operation: () => Promise<T | null>, tim
   throw new Error(`${label}: timed out`)
 }
 
-async function startCompiledHelper() {
+async function startCompiledHelper(expectedPhase = "ready") {
   const startupFile = path.join(root, "startup", "helper.json")
   await rm(startupFile, { force: true })
-  helperEnv = { ...process.env, HOME: clientHome, USERPROFILE: clientHome, KANNA_SYNC_DATA_DIRECTORY: helperData, KANNA_SYNC_NO_OPEN: "1", KANNA_SYNC_STARTUP_FILE: startupFile }
+  helperEnv = { ...process.env, KANNA_SYNC_DATA_DIRECTORY: helperData, KANNA_SYNC_NO_OPEN: "1", KANNA_SYNC_STARTUP_FILE: startupFile }
   delete helperEnv.SSH_AUTH_SOCK
   delete helperEnv.MUTAGEN_DATA_DIRECTORY
   helperProcess = spawn(path.join(clientRoot, "kanna-sync"), [], { cwd: clientRoot, env: helperEnv, stdio: "ignore", windowsHide: true })
@@ -112,7 +112,7 @@ async function startCompiledHelper() {
     if (!response.ok) return null
     return await response.json() as { phase: string }
   })
-  if (ready.phase !== "ready") throw new Error("Compiled helper did not begin in ready phase")
+  if (ready.phase !== expectedPhase) throw new Error(`Compiled helper began in unexpected phase (${ready.phase})`)
 }
 
 function stopCompiledHelper() {
@@ -173,18 +173,29 @@ try {
   gatewayConfig.publicOrigin = gatewayOrigin
   await writeFile(gatewayConfigPath, `${JSON.stringify(gatewayConfig, null, 2)}\n`, { mode: 0o644 })
   const aliceConfigPath = path.join(outputDir, "config", "alice.json")
-  const aliceConfig = JSON.parse(await readFile(aliceConfigPath, "utf8")) as { sshHost: string }
+  const aliceConfig = JSON.parse(await readFile(aliceConfigPath, "utf8")) as { sshHost: string; webHost?: string; webPort?: number; webOrigin?: string }
   aliceConfig.sshHost = "127.0.0.1"
+  aliceConfig.webHost = "127.0.0.1"
+  aliceConfig.webPort = gatewayPort
+  aliceConfig.webOrigin = gatewayOrigin
   await writeFile(aliceConfigPath, `${JSON.stringify(aliceConfig, null, 2)}\n`, { mode: 0o644 })
+  const bobConfigPath = path.join(outputDir, "config", "bob.json")
+  const bobConfig = JSON.parse(await readFile(bobConfigPath, "utf8")) as { webHost?: string; webPort?: number; webOrigin?: string }
+  bobConfig.webHost = "127.0.0.1"
+  bobConfig.webPort = gatewayPort
+  bobConfig.webOrigin = gatewayOrigin
+  await writeFile(bobConfigPath, `${JSON.stringify(bobConfig, null, 2)}\n`, { mode: 0o644 })
   const composePath = path.join(outputDir, "compose.yaml")
   let composeText = await readFile(composePath, "utf8")
   for (const port of [aliceSshPort, bobSshPort]) composeText = composeText.replace(`"${port}:2222"`, `"127.0.0.1:${port}:2222"`)
   composeText = composeText.replace(`"${gatewayPort}:3210"`, `"127.0.0.1:${gatewayPort}:3210"`)
   await writeFile(composePath, composeText)
   if (!composeText.includes(`"127.0.0.1:${gatewayPort}:3210"`)) throw new Error("Gateway mapping is not loopback-only")
+  console.log("Building and starting isolated Gateway/app/SSH Docker fixture")
   run("docker", ["compose", "-p", projectId, "-f", composePath, "up", "-d", "--build"], { cwd: outputDir, timeout: 900_000 })
   composeStarted = true
 
+  console.log("Waiting for fixture Gateway account login")
   const gatewayPassword = (await readFile(path.join(outputDir, "secrets", "alice", "app-password"), "utf8")).trim()
   await waitFor("Gateway-to-app login", async () => {
     const response = await fetch(`${gatewayOrigin}/auth/login`, {
@@ -208,6 +219,7 @@ try {
   const oldAuthorizedKeys = await readFile(path.join(outputDir, "secrets", "alice", "authorized_keys"), "utf8")
 
   const bundleOutput = path.join(root, "public clients")
+  console.log("Building and extracting the compiled Linux helper bundle")
   run(process.execPath, ["run", "build:sync-client", "--", "--origin", gatewayOrigin, "--output-dir", bundleOutput, "--target", "linux-x64"], { cwd: process.cwd(), timeout: 600_000 })
   const archive = path.join(bundleOutput, "kanna-sync-linux-x64.zip")
   await mkdir(clientRoot, { recursive: true })
@@ -219,6 +231,7 @@ try {
 
   const accountHash = createHash("sha256").update(`${gatewayOrigin}\0alice`).digest("hex")
   accountData = path.join(helperData, "accounts", accountHash)
+  console.log("Starting helper and registering its isolated device key")
   await startCompiledHelper()
   const startResponse = await api("/api/start", {
     method: "POST",
@@ -257,7 +270,7 @@ try {
   if (wrongHostResult.status === 0) throw new Error("SSH accepted a mismatched pinned host key")
 
   const helperMutagenDirectory = path.join(accountData, "mutagen-data")
-  const installedMutagen = path.join(helperData, "tools", "mutagen", "mutagen")
+  const installedMutagen = path.join(helperData, "tools", "mutagen")
   const mutagenEnv = { ...helperEnv, MUTAGEN_DATA_DIRECTORY: helperMutagenDirectory, MUTAGEN_SSH_PATH: path.join(helperData, "tools", "ssh-dispatcher"), SSH_AUTH_SOCK: "" }
   const sessions = run(installedMutagen, ["sync", "list", "--long", sessionName], { env: mutagenEnv, timeout: 20_000 }).stdout
   if (!sessions.includes("Two Way Safe") || !sessions.includes("127.0.0.1")) throw new Error("Compiled helper Mutagen session did not use the isolated SSH transport")
@@ -276,7 +289,7 @@ try {
   await writeFile(path.join(localProject, "paused-local.txt"), "after resume\n")
   stopCompiledHelper()
   await new Promise<void>((resolve) => helperProcess?.once("exit", () => resolve()))
-  await startCompiledHelper()
+  await startCompiledHelper("paused")
   const reopened = await api("/api/status").then((response) => response.json()) as { phase: string; sync: { state: string } }
   if (reopened.phase !== "paused" || reopened.sync.state !== "paused") throw new Error("Reopened compiled helper did not recover its existing paused session")
   await postControl("resume")

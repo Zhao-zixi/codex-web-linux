@@ -126,7 +126,12 @@ else {
       "build", "--compile", `--target=${bunTarget}`, `--outfile=${executablePath}`,
       "--no-compile-autoload-dotenv", "--no-compile-autoload-bunfig",
       "--define", define,
-      ...(options.target === "windows-x64" ? ["--windows-hide-console", "--windows-title=Kanna Sync", "--windows-description=Kanna remote workspace sync helper"] : []),
+      ...(options.target === "windows-x64"
+        ? [
+          "--windows-hide-console",
+          ...(process.platform === "win32" ? ["--windows-title=Kanna Sync", "--windows-description=Kanna remote workspace sync helper"] : []),
+        ]
+        : []),
       entrypoint,
     ]
     const compiled = spawnSync(process.execPath, compileArgs, { cwd: repositoryRoot, stdio: "inherit", windowsHide: true })

@@ -58,12 +58,17 @@ import { deleteProjectUpload, inferAttachmentContentType, inferProjectFileConten
 import { getProjectUploadDir } from "./paths"
 import { inheritShellPath } from "./process-utils"
 import { readHostedWorkspaceConfig, type HostedWorkspaceSnapshot } from "./hosted-workspace"
+import { HostedWorkspaceDeviceKeys, isHostedWorkspaceDeviceKey } from "./hosted-workspace-devices"
 
 const MAX_UPLOAD_FILES = 50
 const MAX_UPLOAD_SIZE_BYTES = 100 * 1024 * 1024
 const STALE_EMPTY_CHAT_PRUNE_INTERVAL_MS = 60 * 1000
 const STALE_CHAT_AUTO_ARCHIVE_INTERVAL_MS = 6 * 60 * 60 * 1000
 const STALE_CHAT_DELETE_INTERVAL_MS = 24 * 60 * 60 * 1000
+const REMOTE_WORKSPACE_CLIENTS: Record<string, { label: string; filename: string }> = {
+  "linux-x64": { label: "Linux x64", filename: "kanna-sync-linux-x64.zip" },
+  "windows-x64": { label: "Windows x64", filename: "kanna-sync-windows-x64.zip" },
+}
 
 async function withOriginAgentCluster(response: Response | Promise<Response> | undefined) {
   const resolved = await response
@@ -71,6 +76,34 @@ async function withOriginAgentCluster(response: Response | Promise<Response> | u
   // chance that a busy preview shares Kanna's renderer.
   resolved?.headers.set("Origin-Agent-Cluster", "?1")
   return resolved
+}
+
+async function readJsonRequest<T>(request: Request, maxBytes: number): Promise<T | null> {
+  if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) return null
+  const contentLength = Number(request.headers.get("content-length") ?? 0)
+  if (contentLength > maxBytes || !request.body) return null
+  const reader = request.body.getReader()
+  const chunks: Uint8Array[] = []
+  let size = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      size += value.byteLength
+      if (size > maxBytes) {
+        await reader.cancel()
+        return null
+      }
+      chunks.push(value)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(Buffer.concat(chunks, size))) as T
+  } catch {
+    return null
+  }
 }
 
 export async function persistUploadedFiles(args: {
@@ -124,6 +157,9 @@ export interface StartKannaServerOptions {
   trustProxy?: boolean
   /** Deployment-provided SSH sync details; omitted to load KANNA_HOSTED_WORKSPACE_CONFIG. */
   hostedWorkspace?: HostedWorkspaceSnapshot
+  /** Shared per-account public-key directory; omitted to load KANNA_REMOTE_WORKSPACE_DEVICE_KEYS_DIR. */
+  remoteWorkspaceDeviceKeysDir?: string
+  remoteWorkspaceClientDirectory?: string
   /** Isolated keybindings file path for embedded server tests/runtime. */
   keybindingsPath?: string
   /**
@@ -163,6 +199,9 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   // awaited before anything can start an agent.
   const shellPathReady = inheritShellPath()
   const hostedWorkspace = options.hostedWorkspace ?? await readHostedWorkspaceConfig(process.env.KANNA_HOSTED_WORKSPACE_CONFIG)
+  const remoteWorkspaceDeviceKeysDir = options.remoteWorkspaceDeviceKeysDir ?? process.env.KANNA_REMOTE_WORKSPACE_DEVICE_KEYS_DIR
+  const remoteWorkspaceClientDirectory = options.remoteWorkspaceClientDirectory ?? process.env.KANNA_REMOTE_WORKSPACE_CLIENT_DIRECTORY ?? path.join(import.meta.dir, "../../dist/client/remote-workspace-clients")
+  const hostedWorkspaceDeviceKeys = remoteWorkspaceDeviceKeysDir ? new HostedWorkspaceDeviceKeys(remoteWorkspaceDeviceKeysDir) : null
   const hostedBearerAuth = !("enabled" in hostedWorkspace) && hostedWorkspace.authMode === "bearer"
   const hostedWebOrigin = !("enabled" in hostedWorkspace) ? hostedWorkspace.webOrigin : undefined
   if (hostedBearerAuth && !hostedWebOrigin) throw new Error("Bearer hosted workspace mode requires a configured web origin")
@@ -741,6 +780,88 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
           if (url.pathname === "/api/hosted-workspace") {
             if (req.method !== "GET") return withOriginAgentCluster(new Response(null, { status: 405, headers: { Allow: "GET" } }))
             return withOriginAgentCluster(Response.json(hostedWorkspace, { headers: { "Cache-Control": "no-store" } }))
+          }
+
+          if (url.pathname === "/api/hosted-workspace/client") {
+            if (req.method !== "GET") return withOriginAgentCluster(new Response(null, { status: 405, headers: { Allow: "GET" } }))
+            if ("enabled" in hostedWorkspace || !hostedWebOrigin) {
+              return withOriginAgentCluster(Response.json({ serverOrigin: "", downloads: [] }, { headers: { "Cache-Control": "no-store" } }))
+            }
+            const downloads = await Promise.all(Object.entries(REMOTE_WORKSPACE_CLIENTS).map(async ([target, artifact]) => {
+              try {
+                if (!(await stat(path.join(remoteWorkspaceClientDirectory, artifact.filename))).isFile()) return null
+                return { target, ...artifact, url: `/api/hosted-workspace/client/download/${target}` }
+              } catch {
+                return null
+              }
+            }))
+            return withOriginAgentCluster(Response.json({ serverOrigin: hostedWebOrigin, downloads: downloads.filter((download) => download !== null) }, { headers: { "Cache-Control": "no-store" } }))
+          }
+
+          const hostedWorkspaceClientMatch = /^\/api\/hosted-workspace\/client\/download\/([a-z0-9-]+)$/.exec(url.pathname)
+          if (hostedWorkspaceClientMatch) {
+            if (req.method !== "GET") return withOriginAgentCluster(new Response(null, { status: 405, headers: { Allow: "GET" } }))
+            const artifact = REMOTE_WORKSPACE_CLIENTS[hostedWorkspaceClientMatch[1]!]
+            if (artifact) {
+              const filename = path.join(remoteWorkspaceClientDirectory, artifact.filename)
+              try {
+                if ((await stat(filename)).isFile()) {
+                  return withOriginAgentCluster(new Response(Bun.file(filename), {
+                    headers: {
+                      "Cache-Control": "no-store",
+                      "Content-Type": "application/zip",
+                      "Content-Disposition": `attachment; filename="${artifact.filename}"`,
+                    },
+                  }))
+                }
+              } catch { /* missing artifacts are an expected pre-build state */ }
+            }
+            return withOriginAgentCluster(Response.json({ error: "sync_client_unavailable" }, { status: 404, headers: { "Cache-Control": "no-store" } }))
+          }
+
+          if (url.pathname === "/api/hosted-workspace/devices") {
+            if (!hostedWorkspaceDeviceKeys || "enabled" in hostedWorkspace) {
+              return withOriginAgentCluster(Response.json({ error: "device_enrollment_unavailable" }, { status: 404, headers: { "Cache-Control": "no-store" } }))
+            }
+            if (req.method === "GET") {
+              try {
+                return withOriginAgentCluster(Response.json({ devices: await hostedWorkspaceDeviceKeys.list() }, { headers: { "Cache-Control": "no-store" } }))
+              } catch {
+                return withOriginAgentCluster(Response.json({ error: "device_enrollment_unavailable" }, { status: 503, headers: { "Cache-Control": "no-store" } }))
+              }
+            }
+            if (req.method === "POST") {
+              const body = await readJsonRequest<{ publicKey?: unknown; label?: unknown }>(req, 4096)
+              if (!body || !isHostedWorkspaceDeviceKey(body.publicKey) || typeof body.label !== "string" || !body.label.trim() || body.label.length > 80 || /[\x00-\x1f\x7f]/.test(body.label)) {
+                return withOriginAgentCluster(Response.json({ error: "invalid_device" }, { status: 400, headers: { "Cache-Control": "no-store" } }))
+              }
+              try {
+                const { deviceId } = await hostedWorkspaceDeviceKeys.register(body.publicKey, body.label)
+                return withOriginAgentCluster(Response.json({ deviceId, authorized: true }, { headers: { "Cache-Control": "no-store" } }))
+              } catch (error) {
+                if (error instanceof Error && error.message === "device_limit_reached") {
+                  return withOriginAgentCluster(Response.json({ error: "device_limit_reached" }, { status: 409, headers: { "Cache-Control": "no-store" } }))
+                }
+                return withOriginAgentCluster(Response.json({ error: "device_enrollment_unavailable" }, { status: 503, headers: { "Cache-Control": "no-store" } }))
+              }
+            }
+            return withOriginAgentCluster(new Response(null, { status: 405, headers: { Allow: "GET, POST" } }))
+          }
+
+          const hostedWorkspaceDeviceMatch = /^\/api\/hosted-workspace\/devices\/([a-f0-9]{32})$/.exec(url.pathname)
+          if (hostedWorkspaceDeviceMatch) {
+            if (!hostedWorkspaceDeviceKeys || "enabled" in hostedWorkspace) {
+              return withOriginAgentCluster(Response.json({ error: "device_enrollment_unavailable" }, { status: 404, headers: { "Cache-Control": "no-store" } }))
+            }
+            if (req.method !== "DELETE") return withOriginAgentCluster(new Response(null, { status: 405, headers: { Allow: "DELETE" } }))
+            try {
+              if (!await hostedWorkspaceDeviceKeys.revoke(hostedWorkspaceDeviceMatch[1]!)) {
+                return withOriginAgentCluster(Response.json({ error: "device_not_found" }, { status: 404, headers: { "Cache-Control": "no-store" } }))
+              }
+              return withOriginAgentCluster(new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } }))
+            } catch {
+              return withOriginAgentCluster(Response.json({ error: "device_enrollment_unavailable" }, { status: 503, headers: { "Cache-Control": "no-store" } }))
+            }
           }
 
           if (url.pathname === CLOUD_PAIR_SESSION_PATH) {

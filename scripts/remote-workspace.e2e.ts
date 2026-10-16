@@ -658,6 +658,7 @@ run("docker", ["info"], { timeout: 15_000 })
 const root = await mkdtemp(path.join(os.tmpdir(), "kanna-remote-workspace-e2e-"))
 const outputDir = path.join(root, "deployment")
 const clientKeys = { alice: path.join(root, "alice-client-ed25519"), bob: path.join(root, "bob-client-ed25519") }
+const enrolledDeviceKey = path.join(root, "alice-enrolled-device-ed25519")
 const sharedMode = process.env.REMOTE_WORKSPACE_E2E_SHARED === "1" || process.argv.includes("--shared")
 const sharedHostname = "fnos.zixizhao.top"
 const alicePort = await unusedPort()
@@ -779,6 +780,8 @@ try {
   await writeFile(path.join(bobLocal, "from-local.txt"), "bob-local\n")
   run("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", clientKeys.alice])
   run("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-f", clientKeys.bob])
+  const deviceKeygen = spawnSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", "remote-workspace-device-e2e", "-f", enrolledDeviceKey], { stdio: "ignore" })
+  if (deviceKeygen.error || deviceKeygen.status !== 0) throw new Error("Unable to create the temporary device key for E2E")
 
   await initializeRemoteWorkspace({
     outputDir,
@@ -1040,6 +1043,39 @@ try {
     headers: { Origin: aliceOrigin, "Content-Type": "application/json" }, body: diagnosticsBody,
   })
   assertEqual(String(unauthApi.status), "401", "unauthenticated API rejection")
+
+  const enrolledPublicKey = (await readFile(`${enrolledDeviceKey}.pub`, "utf8")).trim()
+  const registerDevice = await hostedHttpsRequest({
+    host: aliceWebHost, port: aliceWebPort, ca: localCa, path: "/api/hosted-workspace/devices", method: "POST",
+    headers: { Origin: aliceOrigin, Cookie: aliceCookie, "Content-Type": "application/json" },
+    body: JSON.stringify({ publicKey: enrolledPublicKey, label: "E2E laptop" }),
+  })
+  assertEqual(String(registerDevice.status), "200", "Alice device key enrollment")
+  const enrolledDevice = JSON.parse(registerDevice.body) as { deviceId?: string; authorized?: boolean }
+  if (!enrolledDevice.deviceId || enrolledDevice.authorized !== true) throw new Error("Alice device enrollment response was invalid")
+  assertEqual(ssh("alice", alicePort, "id -u", enrolledDeviceKey).trim(), String(uid), "newly enrolled key reaches Alice SSH")
+  const crossAccountAttempt = spawnSync("ssh", [
+    "-F", "/dev/null", "-i", enrolledDeviceKey, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3",
+    "-o", "StrictHostKeyChecking=yes", "-o", `UserKnownHostsFile=${path.join(outputDir, "config", "bob.known_hosts")}`,
+    "-p", String(bobPort), ...(sharedMode ? ["-o", `ProxyCommand=${localPortProxyCommand(bobPort)}`] : []),
+    sharedMode ? `workspace@${sharedHostname}` : "workspace@127.0.0.1", "id -u",
+  ], { env, encoding: "utf8", timeout: 10_000, stdio: "ignore" })
+  if (crossAccountAttempt.error || crossAccountAttempt.status === 0) throw new Error("Alice enrolled device key was accepted by Bob SSH")
+  const revokeDevice = await hostedHttpsRequest({
+    host: aliceWebHost, port: aliceWebPort, ca: localCa, path: `/api/hosted-workspace/devices/${enrolledDevice.deviceId}`, method: "DELETE",
+    headers: { Origin: aliceOrigin, Cookie: aliceCookie },
+  })
+  assertEqual(String(revokeDevice.status), "204", "Alice device key revocation")
+  const revokedAttempt = spawnSync("ssh", [
+    "-F", "/dev/null", "-i", enrolledDeviceKey, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3",
+    "-o", "StrictHostKeyChecking=yes", "-o", `UserKnownHostsFile=${path.join(outputDir, "config", "alice.known_hosts")}`,
+    "-p", String(alicePort), ...(sharedMode ? ["-o", `ProxyCommand=${localPortProxyCommand(alicePort)}`] : []),
+    sharedMode ? `workspace@${sharedHostname}` : "workspace@127.0.0.1", "id -u",
+  ], { env, encoding: "utf8", timeout: 10_000, stdio: "ignore" })
+  if (revokedAttempt.error || revokedAttempt.status === 0) throw new Error("Revoked Alice device key remained authorized")
+  assertEqual(ssh("alice", alicePort, "id -u").trim(), String(uid), "legacy Alice key remains authorized after device revocation")
+  diagnosticFacts.push("Device key E2E: enrollment connected to Alice SSH without restart; Bob rejected it; revocation stopped it while Alice's legacy SSH key remained valid")
+
   assertEqual(String(await websocketUpgrade("alice.localhost", aliceOrigin, "", localCa, httpsPort)), "401", "unauthenticated WebSocket rejection")
   assertEqual(String(await websocketUpgrade("alice.localhost", aliceOrigin, aliceCookie, localCa, httpsPort)), "101", "same-origin authenticated WebSocket upgrade")
   assertEqual(String(await websocketUpgrade("alice.localhost", `https://bob.localhost:${httpsPort}`, aliceCookie, localCa, httpsPort)), "403", "sibling-origin authenticated WebSocket rejection")

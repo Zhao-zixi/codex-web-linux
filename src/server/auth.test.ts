@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { createRequire } from "node:module"
@@ -24,7 +24,7 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })))
 })
 
-async function startPasswordServer(options: { trustProxy?: boolean; port?: number; hostedWorkspace?: HostedWorkspaceSnapshot } = {}) {
+async function startPasswordServer(options: { trustProxy?: boolean; port?: number; hostedWorkspace?: HostedWorkspaceSnapshot; remoteWorkspaceDeviceKeysDir?: string; remoteWorkspaceClientDirectory?: string } = {}) {
   const projectDir = await mkdtemp(path.join(tmpdir(), "kanna-auth-test-"))
   const dataDir = await mkdtemp(path.join(tmpdir(), "kanna-auth-data-"))
   tempDirs.push(projectDir)
@@ -37,6 +37,8 @@ async function startPasswordServer(options: { trustProxy?: boolean; port?: numbe
     keybindingsPath: path.join(dataDir, "keybindings.json"),
     trustProxy: options.trustProxy ?? false,
     hostedWorkspace: options.hostedWorkspace ?? { enabled: false },
+    remoteWorkspaceDeviceKeysDir: options.remoteWorkspaceDeviceKeysDir,
+    remoteWorkspaceClientDirectory: options.remoteWorkspaceClientDirectory,
   })
   expect(server.port).toBeGreaterThan(0)
   const project = await server.store.openProject(projectDir, "Project")
@@ -137,6 +139,136 @@ describe("password auth", () => {
         sshUser: "kanna",
         workspaceRoot: "/workspace",
       })
+    } finally {
+      await server.stop()
+    }
+  })
+
+  test("registers, lists, and revokes hosted workspace devices behind the app auth session", async () => {
+    const deviceKeysDir = await mkdtemp(path.join(tmpdir(), "kanna-auth-device-keys-"))
+    tempDirs.push(deviceKeysDir)
+    const { server } = await startPasswordServer({
+      remoteWorkspaceDeviceKeysDir: deviceKeysDir,
+      hostedWorkspace: {
+        displayName: "Remote",
+        sshHost: "sync.example.test",
+        sshPort: 2222,
+        sshUser: "workspace",
+        workspaceRoot: "/workspace",
+      },
+    })
+    const url = `http://localhost:${server.port}`
+    const login = await fetch(`${url}/auth/login`, {
+      method: "POST",
+      body: JSON.stringify({ password: "secret" }),
+      headers: { "Content-Type": "application/json", Origin: url },
+    })
+    const cookie = extractCookie(login)
+    const algorithm = Buffer.from("ssh-ed25519")
+    const blob = Buffer.alloc(4 + algorithm.length + 4 + 32)
+    blob.writeUInt32BE(algorithm.length, 0)
+    algorithm.copy(blob, 4)
+    blob.writeUInt32BE(32, 4 + algorithm.length)
+    blob.fill(4, 8 + algorithm.length)
+    const publicKey = `ssh-ed25519 ${blob.toString("base64")}`
+
+    try {
+      const unauthorized = await fetch(`${url}/api/hosted-workspace/devices`)
+      expect(unauthorized.status).toBe(401)
+
+      const register = () => fetch(`${url}/api/hosted-workspace/devices`, {
+        method: "POST",
+        headers: { Cookie: cookie, Origin: url, "Content-Type": "application/json" },
+        body: JSON.stringify({ publicKey, label: "Laptop" }),
+      })
+      const created = await register()
+      expect(created.status).toBe(200)
+      expect(await created.json()).toMatchObject({ authorized: true })
+      const duplicate = await register()
+      expect(await duplicate.json()).toEqual(await (async () => {
+        const first = await fetch(`${url}/api/hosted-workspace/devices`, { headers: { Cookie: cookie } })
+        const { devices } = await first.json() as { devices: Array<{ id: string }> }
+        return { deviceId: devices[0]!.id, authorized: true }
+      })())
+
+      const listed = await fetch(`${url}/api/hosted-workspace/devices`, { headers: { Cookie: cookie } })
+      expect(listed.status).toBe(200)
+      const { devices } = await listed.json() as { devices: Array<{ id: string; label: string; fingerprint: string; createdAt: string }> }
+      expect(devices).toHaveLength(1)
+      expect(devices[0]).toMatchObject({ label: "Laptop" })
+      expect(devices[0]!.fingerprint).toMatch(/^SHA256:/)
+      expect(Number.isNaN(Date.parse(devices[0]!.createdAt))).toBe(false)
+
+      const revoked = await fetch(`${url}/api/hosted-workspace/devices/${devices[0]!.id}`, {
+        method: "DELETE",
+        headers: { Cookie: cookie, Origin: url },
+      })
+      expect(revoked.status).toBe(204)
+      expect(await (await fetch(`${url}/api/hosted-workspace/devices`, { headers: { Cookie: cookie } })).json()).toEqual({ devices: [] })
+    } finally {
+      await server.stop()
+    }
+  })
+
+  test("lists only available remote workspace clients and streams downloads behind app auth", async () => {
+    const clientDir = await mkdtemp(path.join(tmpdir(), "kanna-auth-client-artifacts-"))
+    tempDirs.push(clientDir)
+    await mkdir(clientDir, { recursive: true })
+    const linuxZip = Buffer.from("synthetic-linux-zip")
+    await writeFile(path.join(clientDir, "kanna-sync-linux-x64.zip"), linuxZip)
+    const { server } = await startPasswordServer({
+      trustProxy: true,
+      remoteWorkspaceClientDirectory: clientDir,
+      hostedWorkspace: {
+        displayName: "Remote",
+        sshHost: "sync.example.test",
+        sshPort: 2222,
+        sshUser: "workspace",
+        workspaceRoot: "/workspace",
+        authMode: "bearer",
+        webHost: "alice.example.test",
+        webPort: 443,
+        webOrigin: "https://alice.example.test",
+      },
+    })
+    const url = `http://localhost:${server.port}`
+    const origin = "https://alice.example.test"
+    const hostedFetch = (pathname: string, init: RequestInit = {}) => {
+      const headers = new Headers(init.headers)
+      headers.set("Host", "alice.example.test")
+      headers.set("X-Forwarded-Proto", "https")
+      return fetch(`${url}${pathname}`, { ...init, headers })
+    }
+
+    try {
+      const denied = await hostedFetch("/api/hosted-workspace/client")
+      expect(denied.status).toBe(401)
+      const login = await hostedFetch("/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ password: "secret" }),
+        headers: { "Content-Type": "application/json", Origin: origin },
+      })
+      const { token } = await login.json() as { token: string }
+      const authorization = { Authorization: `Bearer ${token}`, Origin: origin }
+      const metadataResponse = await hostedFetch("/api/hosted-workspace/client", { headers: authorization })
+      expect(metadataResponse.status).toBe(200)
+      expect(await metadataResponse.json()).toEqual({
+        serverOrigin: "https://alice.example.test",
+        downloads: [{
+          target: "linux-x64",
+          label: "Linux x64",
+          filename: "kanna-sync-linux-x64.zip",
+          url: "/api/hosted-workspace/client/download/linux-x64",
+        }],
+      })
+      const download = await hostedFetch("/api/hosted-workspace/client/download/linux-x64", { headers: authorization })
+      expect(download.status).toBe(200)
+      expect(download.headers.get("content-type")).toBe("application/zip")
+      expect(download.headers.get("content-disposition")).toContain("kanna-sync-linux-x64.zip")
+      expect(Buffer.from(await download.arrayBuffer())).toEqual(linuxZip)
+      const missing = await hostedFetch("/api/hosted-workspace/client/download/windows-x64", { headers: authorization })
+      expect(missing.status).toBe(404)
+      expect(await missing.json()).toEqual({ error: "sync_client_unavailable" })
     } finally {
       await server.stop()
     }

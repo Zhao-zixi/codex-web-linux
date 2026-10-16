@@ -237,15 +237,65 @@ docker compose -f .remote-workspace/compose.yaml exec kanna_elim codex login --d
 
 托管模式下，新建项目默认使用 `/workspace`，但会尊重用户已经保存的 `New Projects Directory` 设置。已有账号若保存了其他目录，请在设置中将新项目目录改为 `/workspace`，然后从 Projects 页面新建项目；也可直接打开或创建 `/workspace/<项目名>`。Mutagen 同步只准备远端目录，不会自动替 Kanna 选择项目；要让会话在同步目录工作，请从 Kanna 打开对应项目目录。
 
-## 设置界面截图
+## 同步助手（推荐）
 
-以下截图来自本地启动的真实 Kanna 服务和 Chromium 浏览器。测试使用临时数据目录及 `sync.example.test` 等演示 SSH 元数据，验证 Settings → General 中的远程工作区界面、命令生成和窄屏布局；它们不连接公网，也不代表任何域名或服务已部署。
+用户日常不需要手工填写主机、端口、SSH key 或终端命令。在网关页面打开“设置 → 常规 → 同步助手”，按顺序下载、解压并双击启动助手；先选择本机项目目录，再输入自己的 Kanna 用户名和密码并点击“连接并开始同步”。助手会记住该账号授权的设备和所选目录，并负责后续连接。用户名、密码只在助手中登录，不要交给管理员以外的人，也不要写进项目文件。
 
-![桌面端远程工作区设置](assets/remote-workspace-desktop.png)
+页面只提供服务器实际发布的客户端包：目前目标平台为 Windows x64 和 Linux x64。若某个平台没有显示下载按钮，说明该平台的包尚未发布；不要用其它平台的包代替。macOS 包尚未交付。下载包时，浏览器会使用当前 Kanna 登录凭据访问受保护的下载接口；不要复制下载 URL 给未登录用户。
 
-![窄屏远程工作区设置](assets/remote-workspace-mobile.png)
+### 安装和连接
 
-## 客户端同步
+1. 在 Kanna 的“设置 → 常规 → 同步助手”下载与你的电脑匹配的 ZIP。
+2. 将 ZIP 解压到自己有写入权限的目录，并双击解压目录中的“同步助手”启动文件。首次启动若操作系统询问是否允许运行，请确认文件来自你登录的 Kanna 站点后继续；不要把包内文件移入项目仓库。
+3. 在助手中选择本机项目目录。每个账号在同一台电脑上由助手管理一个本地同步根目录；可选择包含多个项目子目录的工作区文件夹，对应 Kanna 中 `/workspace/<工作区>/<项目>`。暂停同步不会释放或切换已配置目录。
+4. 输入本人用户名与密码并点击“连接并开始同步”。助手会为这台电脑登记一把独立设备密钥；网页“已授权设备”会显示设备标签、SHA-256 指纹和授权时间。网页不会读取本机目录，也不会显示设备在线状态；是否已连接以本机助手状态为准。
+
+Windows ZIP 解压后启动 `kanna-sync.exe`；Linux ZIP 解压后直接双击 `kanna-sync`，或在终端运行 `./kanna-sync`。每个 ZIP 还包含 `connection.json` 和对应平台的 Mutagen 0.18.1 归档；Windows 另含 `PortableGit-2.56.0.2-64-bit.7z.exe`。这些工具由助手在本机数据目录准备并校验，界面会显示准备进度。`connection.json` 仅保存网关 origin，勿移动到项目目录或编辑为其它账号地址。Linux 需要本机已有 `ssh`、`ssh-keygen`、`scp`；缺失时请安装发行版提供的 OpenSSH 客户端后重试，助手不会提权安装系统包。
+
+每个网关账号的设备密钥和 SSH 授权彼此隔离。elim 和 zzx 继续使用各自的工作区、密码、SSH 端口（分别是 TCP 2222、2223）和项目目录；不要把一方的助手数据目录、设备密钥或账号密码复制给另一方。远程 HTTP 页面会明文传输网页、登录凭据和会话内容，请只在可信网络中使用；此入口仍是 `http://fnos.zixizhao.top:8444`，不要求、不支持在本次部署中增加域名或 TLS 证书。fnOS 使用的 80、443、8443 端口和转发规则保持不变。
+
+如需使用该账号原来配置的目录，请重新选择原目录；暂停同步不会释放或切换已配置目录。
+
+### 暂停、重启和冲突
+
+- **暂时停止传输：**在本机助手中暂停当前项目同步。暂停期间两边文件可能继续变化；恢复前先让助手重新检查两端差异。
+- **关闭网页：**关闭 Kanna 网页不会主动停止本机的同步传输。若本机 Mutagen daemon 仍运行，既有 session 可继续同步；网页不显示它是否在线。
+- **重新启动助手：**再次打开助手可读取本机已保存的设备配置并接管已有 session；同一台电脑通常不需再次授权。此说明不代表助手会随 Windows/Linux 开机自动启动。若助手显示连接失败，先确认网页入口可达、账号仍能登录、设备没有被撤销，再在助手中重试。
+- **发生冲突：**助手会提示冲突文件。先暂停该项目同步，复制备份双方文件，比较内容并手工合并；确认要保留的版本后再恢复同步。不要在没有备份时删除冲突副本，也不要同时在两边对同一文件作出互相覆盖的修改。
+- **更换电脑或重装：**在新电脑上按首次安装流程重新授权。旧电脑可在网页“已授权设备”中单独撤销。
+- **撤销设备：**在“已授权设备”找到对应标签和指纹并选择“撤销”。撤销只阻止该设备建立新的 SSH 连接；已建立的 SSH 连接或传输可能继续保持。要立即停止同步，请先在该设备的本地助手中暂停同步；关闭窗口不会停止 Mutagen daemon。
+
+助手出现工具准备失败时，保持应用打开并按提示重试；它会在界面显示准备进度。助手优先使用 ZIP 内随附的 Mutagen/PortableGit 工具，并校验 SHA-256；随包工具不可用时才会按固定版本从官方发行站点获取。若网络策略阻止下载，请确认客户端可访问 `github.com` 的相关发行资源，或联系管理员检查出站访问。不要从不可信站点单独下载可执行文件，也不要跳过 SHA-256 校验。
+
+## 同步助手界面预览
+
+截图使用 1440 像素桌面视口和 390 像素移动视口的 Chromium 1248。为了不接触部署账号或公网，演示 API 返回的是虚构设备和客户端清单；截图展示真实 React 设置卡片，不代表示例设备在线或实际 ZIP 已在部署中发布。
+
+![桌面端同步助手设置卡片](images/sync-assistant-desktop.png)
+
+![移动端同步助手设置卡片](images/sync-assistant-mobile.png)
+
+### 部署管理员：构建和分发客户端
+
+客户端包与 Kanna 网页端分开构建、分发。发布前确认服务端代码和客户端源码来自同一 revision，并在隔离的 Linux 构建机生成 Windows x64、Linux x64 两个 ZIP。构建参数中的 origin 必须是用户实际登录的网关入口；当前值为 `http://fnos.zixizhao.top:8444`。例如在仓库根目录运行：
+
+```sh
+bun install --frozen-lockfile
+bun run build:sync-client -- --origin http://fnos.zixizhao.top:8444 --output-dir .remote-workspace/clients --target windows-x64
+bun run build:sync-client -- --origin http://fnos.zixizhao.top:8444 --output-dir .remote-workspace/clients --target linux-x64
+sha256sum .remote-workspace/clients/kanna-sync-windows-x64.zip .remote-workspace/clients/kanna-sync-linux-x64.zip
+```
+
+预期文件名分别为 `kanna-sync-windows-x64.zip` 和 `kanna-sync-linux-x64.zip`。Windows ZIP 包含 `kanna-sync.exe`、`connection.json`、`mutagen-windows-x64.zip` 和 `PortableGit-2.56.0.2-64-bit.7z.exe`；Linux ZIP 包含 `kanna-sync`、`connection.json` 和 `mutagen-linux-x64.tar.gz`。`connection.json` 仅含服务端 origin。构建包不应含账号凭据、设备私钥、`.remote-workspace/` 运行状态或 `.env`。核对 zip 列表、目标架构和 SHA-256，将实际哈希、版本与构建 revision 记录在发布记录中。
+
+部署前将 `.remote-workspace/clients` 作为持久发布目录保留，并挂载到 app 容器 `/run/remote-workspace-clients:ro`，同时设置 `KANNA_REMOTE_WORKSPACE_CLIENT_DIRECTORY=/run/remote-workspace-clients`。生成部署后再重启对应服务，使已认证用户可以通过“设置 → 常规 → 同步助手”读取下载清单。接口仅列出实际存在的 ZIP；未安装包时页面显示“暂不可用”，不得建立匿名下载路由或把私有文件系统路径写到网页。确认两个目标的文件名、`application/zip` 内容类型和归档完整性后，再用用户登录会话实际下载验证。升级客户端时保留既有的每账号设备目录与旧 `authorized_keys` 内容；不要用发布包覆盖任何账号运行数据。
+
+| 目标 | 发布文件 | SHA-256 | 状态 |
+| --- | --- | --- | --- |
+| Windows x64 | `kanna-sync-windows-x64.zip` | 部署后记录 | 待部署环境发布 |
+| Linux x64 | `kanna-sync-linux-x64.zip` | 部署后记录 | 待部署环境发布 |
+
+## 高级手动客户端同步
 
 客户端需要 Bash、OpenSSH、Mutagen 和 `jq`。管理员只需给用户该账号的公开连接 bundle：单个 `config/<账号>.json`、该账号的 known-hosts entry、同步脚本，以及网页设置中生成的 SSH config snippet。不要把 `.remote-workspace/` 整个目录、manifest、其他账号配置或 `secrets/` 发给客户端。使用自己的 SSH 私钥路径填入网页；页面只生成本地配置文本，不会读取或上传私钥。把 known-hosts entry 保存到 snippet 指定的专用文件，并将 snippet 加入客户端 `~/.ssh/config`。该 alias 固定 HostName、Port、IdentityFile、StrictHostKeyChecking 和专用 UserKnownHostsFile；ssh 和 Mutagen 重连都会使用相同 SSH alias 与 host-key pin。
 

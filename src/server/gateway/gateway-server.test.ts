@@ -20,6 +20,99 @@ describe("gateway fixed upstream URL", () => {
     expect(target.pathname).toBe("/v1/responses")
   })
 
+  test("session-scoped logout leaves another session and its provider stream alive while default logout remains account-wide", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kanna-gateway-session-logout-"))
+    const probe = Bun.serve({ port: 0, fetch: () => new Response() })
+    const port = probe.port
+    probe.stop(true)
+    const origin = `http://127.0.0.1:${port}`
+    const tokenPath = path.join(root, "account-token")
+    const passwordPath = path.join(root, "app-password")
+    await writeFile(tokenPath, "test-account-capability-value-123456", { mode: 0o600 })
+    await writeFile(passwordPath, "unused-workspace-password", { mode: 0o600 })
+    await mkdir(path.join(root, "client"), { recursive: true })
+    await writeFile(path.join(root, "client", "index.html"), "gateway")
+    let holdProvider = false
+    let releaseProvider!: (response: Response) => void
+    let signalProviderStarted!: () => void
+    let providerStarted = new Promise<void>((resolve) => { signalProviderStarted = resolve })
+    let providerAbortCount = 0
+    const gateway = await startGatewayServer({
+      publicOrigin: origin,
+      internalOrigin: origin,
+      accounts: [{ id: "elim", appUrl: "http://kanna_elim:3210", appPasswordFile: passwordPath, accountTokenFile: tokenPath }],
+      stateDirectory: path.join(root, "state"),
+      adminHomeDirectory: path.join(root, "admin-home"),
+      clientDirectory: path.join(root, "client"),
+      host: "127.0.0.1",
+      port,
+      providerControl: {
+        getStatuses: async () => [], start: async () => undefined, submit: async () => undefined,
+        cancel: async () => undefined, logout: async () => undefined, install: async () => undefined,
+      },
+      providerFetch: async (_input, init) => {
+        if (!holdProvider) return Response.json({ ok: true })
+        signalProviderStarted()
+        return await new Promise<Response>((resolve) => {
+          releaseProvider = resolve
+          init?.signal?.addEventListener("abort", () => {
+            providerAbortCount += 1
+            resolve(new Response("aborted", { status: 499 }))
+          }, { once: true })
+        })
+      },
+    })
+    try {
+      const user = await gateway.store.createUser({ username: "elim", password: "test-user-password-123", role: "user", accountId: "elim" })
+      const helperSession = await gateway.store.createSession(user.id, 60_000)
+      const browserSession = await gateway.store.createSession(user.id, 60_000)
+      const connection = await gateway.store.createConnection({ name: "test", provider: "codex", apiKey: "test-provider-key" })
+      await gateway.store.setUserConnections(user.id, [connection.id])
+
+      const invalidScope = await fetch(`${origin}/auth/logout?scope=unknown`, {
+        method: "POST", headers: { Origin: origin, Authorization: `Bearer ${helperSession.token}` },
+      })
+      expect(invalidScope.status).toBe(400)
+      const helperStatus = await fetch(`${origin}/auth/status`, { headers: { Origin: origin, Authorization: `Bearer ${helperSession.token}` } })
+      const browserStatus = await fetch(`${origin}/auth/status`, { headers: { Origin: origin, Authorization: `Bearer ${browserSession.token}` } })
+      expect((await helperStatus.json()).authenticated).toBe(true)
+      expect((await browserStatus.json()).authenticated).toBe(true)
+
+      holdProvider = true
+      const sessionStream = fetch(`${origin}/internal/providers/${connection.id}/v1/responses`, {
+        method: "POST", headers: { Authorization: "Bearer test-account-capability-value-123456", "Content-Type": "application/json" }, body: "{}",
+      })
+      await providerStarted
+      const helperLogout = await fetch(`${origin}/auth/logout?scope=session`, {
+        method: "POST", headers: { Origin: origin, Authorization: `Bearer ${helperSession.token}` },
+      })
+      expect(helperLogout.status).toBe(200)
+      expect(providerAbortCount).toBe(0)
+      expect((await (await fetch(`${origin}/auth/status`, { headers: { Origin: origin, Authorization: `Bearer ${helperSession.token}` } })).json()).authenticated).toBe(false)
+      expect((await (await fetch(`${origin}/auth/status`, { headers: { Origin: origin, Authorization: `Bearer ${browserSession.token}` } })).json()).authenticated).toBe(true)
+      holdProvider = false
+      releaseProvider(Response.json({ ok: true }))
+      expect((await sessionStream).status).toBe(200)
+
+      holdProvider = true
+      providerStarted = new Promise<void>((resolve) => { signalProviderStarted = resolve })
+      const browserStream = fetch(`${origin}/internal/providers/${connection.id}/v1/responses`, {
+        method: "POST", headers: { Authorization: "Bearer test-account-capability-value-123456", "Content-Type": "application/json" }, body: "{}",
+      })
+      await providerStarted
+      const browserLogout = await fetch(`${origin}/auth/logout`, {
+        method: "POST", headers: { Origin: origin, Authorization: `Bearer ${browserSession.token}` },
+      })
+      expect(browserLogout.status).toBe(200)
+      expect(providerAbortCount).toBe(1)
+      expect((await browserStream).status).toBe(499)
+      expect((await (await fetch(`${origin}/auth/status`, { headers: { Origin: origin, Authorization: `Bearer ${browserSession.token}` } })).json()).authenticated).toBe(false)
+    } finally {
+      gateway.server.stop(true)
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   test("requires the configured internal origin and account token; denies account users admin routes", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "kanna-gateway-http-"))
     const probe = Bun.serve({ port: 0, fetch: () => new Response() })

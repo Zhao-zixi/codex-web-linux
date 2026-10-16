@@ -248,6 +248,9 @@ export async function initializeRemoteWorkspace(options: InitRemoteWorkspaceOpti
       for (const leaf of ["home", "codex", "workspace", "ssh-home"]) {
         await ensureOwnedPrivateDir(path.join(accountState, leaf), options.runtimeUid, options.runtimeGid)
       }
+      const deviceKeysDir = path.join(accountState, "device-keys")
+      await ensureOwnedPrivateDir(deviceKeysDir, options.runtimeUid, options.runtimeGid)
+      await writeSecret(path.join(deviceKeysDir, "authorized_keys"), "", options.runtimeUid, options.runtimeGid)
 
       await writeSecret(path.join(accountSecrets, "app-password"), `${randomBytes(32).toString("base64url")}\n`, options.runtimeUid, options.runtimeGid)
       const hostKey = path.join(accountState, "ssh-host-ed25519")
@@ -493,7 +496,24 @@ export async function generateRemoteWorkspaceFiles(outputDirInput: string) {
   if (sharedHostname) await validateSharedTls(manifest.tls)
   validateAccounts(manifest.accounts)
   const hostKeyByAccount = new Map<string, string>()
+  const clientArtifactsDir = path.join(outputDir, "clients")
+  await mkdir(clientArtifactsDir, { recursive: true, mode: 0o755 })
+  await chmod(clientArtifactsDir, 0o755)
   for (const account of manifest.accounts) {
+    const deviceKeysDir = path.join(outputDir, "state", account.name, "device-keys")
+    await ensureOwnedPrivateDir(deviceKeysDir, manifest.runtimeUid, manifest.runtimeGid)
+    const deviceAuthorizedKeysPath = path.join(deviceKeysDir, "authorized_keys")
+    try {
+      const existing = await lstat(deviceAuthorizedKeysPath)
+      if (existing.isSymbolicLink() || !existing.isFile()) throw new Error("Invalid hosted workspace device key registry")
+      await chmod(deviceAuthorizedKeysPath, 0o600)
+      if (typeof process.getuid === "function" && process.getuid() === 0 && (existing.uid !== manifest.runtimeUid || existing.gid !== manifest.runtimeGid)) {
+        await chown(deviceAuthorizedKeysPath, manifest.runtimeUid, manifest.runtimeGid)
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+      await writeSecret(deviceAuthorizedKeysPath, "", manifest.runtimeUid, manifest.runtimeGid)
+    }
     const publicKey = parseOpenSshPublicKey(await readFile(path.join(outputDir, "state", account.name, "ssh-host-ed25519.pub"), "utf8"))
     hostKeyByAccount.set(account.name, publicKey)
     const config = { ...renderHostedWorkspaceConfig(manifest, account), publicHostKey: publicKey }
@@ -531,6 +551,7 @@ export async function generateRemoteWorkspaceFiles(outputDirInput: string) {
   for (const account of manifest.accounts) {
     const network = `account_${account.name}`
     const state = `./state/${account.name}`
+    const deviceKeys = `${state}/device-keys`
     const secrets = `./secrets/${account.name}`
     const app = `kanna_${account.name}`
     const ssh = `ssh_${account.name}`
@@ -552,6 +573,8 @@ export async function generateRemoteWorkspaceFiles(outputDirInput: string) {
       KANNA_TRUST_PROXY: "1"
       KANNA_HOSTED_WORKSPACE_CONFIG: /run/hosted-workspace.json${gatewayMode ? `
       KANNA_GATEWAY_URL: http://gateway:3210` : ""}
+      KANNA_REMOTE_WORKSPACE_DEVICE_KEYS_DIR: /run/remote-workspace-device-keys
+      KANNA_REMOTE_WORKSPACE_CLIENT_DIRECTORY: /run/remote-workspace-clients
 ${outboundProxyEnvironment}
     ${gatewayMode ? `env_file:
       - ./config/${account.name}.gateway.env` : ""}
@@ -561,6 +584,8 @@ ${outboundProxyEnvironment}
       - ${state}/home:/home/kanna
       - ${state}/codex:/home/kanna/.codex
       - ${state}/workspace:/workspace
+      - ${deviceKeys}:/run/remote-workspace-device-keys:rw
+      - ./clients:/run/remote-workspace-clients:ro
       - ./config/${account.name}.json:/run/hosted-workspace.json:ro
       - ${secrets}/app-password:/run/secrets/kanna_password:ro
     expose:
@@ -592,6 +617,7 @@ ${outboundProxyEnvironment}
     volumes:
       - ${state}/workspace:/workspace
       - ${state}/ssh-home:/home/workspace
+      - ${deviceKeys}:/run/remote-workspace-device-keys:ro
       - ${state}/ssh-host-ed25519:/etc/ssh/hostkeys/ssh_host_ed25519_key:ro
       - ${state}/ssh-host-ed25519.pub:/etc/ssh/hostkeys/ssh_host_ed25519_key.pub:ro
       - ${secrets}/authorized_keys:/run/authorized_keys:ro

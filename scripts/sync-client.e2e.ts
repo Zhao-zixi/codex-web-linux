@@ -296,7 +296,7 @@ try {
     if ((value?.sync?.conflictCount ?? 0) > 0 && value?.sync?.conflicts?.some((conflict) => `${conflict.path} ${conflict.alpha} ${conflict.beta}`.includes("conflict.txt"))) return value
     return null
   }, 45_000)
-  if (!conflictStatus.sync || conflictStatus.sync.conflictCount < 1) throw new Error("Compiled helper did not expose a positive conflict count")
+  if (!conflictStatus.sync || (conflictStatus.sync.conflictCount ?? 0) < 1) throw new Error("Compiled helper did not expose a positive conflict count")
   const localConflict = await readFile(path.join(localProject, "conflict.txt"), "utf8")
   const remoteConflict = run("ssh", ["-F", helperSshConfig, "kanna-sync", `cat -- ${quote(`${remoteProject}/conflict.txt`)}`], { env: isolatedSshEnv }).stdout
   if (localConflict !== "local conflict version\n" || remoteConflict !== "remote conflict version\n") throw new Error("Two Way Safe conflict did not preserve both local and remote contents")

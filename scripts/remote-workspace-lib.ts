@@ -248,6 +248,9 @@ export async function initializeRemoteWorkspace(options: InitRemoteWorkspaceOpti
       for (const leaf of ["home", "codex", "workspace", "ssh-home"]) {
         await ensureOwnedPrivateDir(path.join(accountState, leaf), options.runtimeUid, options.runtimeGid)
       }
+      const deviceKeysDir = path.join(accountState, "device-keys")
+      await ensureOwnedPrivateDir(deviceKeysDir, options.runtimeUid, options.runtimeGid)
+      await writeSecret(path.join(deviceKeysDir, "authorized_keys"), "", options.runtimeUid, options.runtimeGid)
 
       await writeSecret(path.join(accountSecrets, "app-password"), `${randomBytes(32).toString("base64url")}\n`, options.runtimeUid, options.runtimeGid)
       const hostKey = path.join(accountState, "ssh-host-ed25519")
@@ -531,6 +534,7 @@ export async function generateRemoteWorkspaceFiles(outputDirInput: string) {
   for (const account of manifest.accounts) {
     const network = `account_${account.name}`
     const state = `./state/${account.name}`
+    const deviceKeys = `${state}/device-keys`
     const secrets = `./secrets/${account.name}`
     const app = `kanna_${account.name}`
     const ssh = `ssh_${account.name}`
@@ -552,6 +556,7 @@ export async function generateRemoteWorkspaceFiles(outputDirInput: string) {
       KANNA_TRUST_PROXY: "1"
       KANNA_HOSTED_WORKSPACE_CONFIG: /run/hosted-workspace.json${gatewayMode ? `
       KANNA_GATEWAY_URL: http://gateway:3210` : ""}
+      KANNA_REMOTE_WORKSPACE_DEVICE_KEYS_DIR: /run/remote-workspace-device-keys
 ${outboundProxyEnvironment}
     ${gatewayMode ? `env_file:
       - ./config/${account.name}.gateway.env` : ""}
@@ -561,6 +566,7 @@ ${outboundProxyEnvironment}
       - ${state}/home:/home/kanna
       - ${state}/codex:/home/kanna/.codex
       - ${state}/workspace:/workspace
+      - ${deviceKeys}:/run/remote-workspace-device-keys:rw
       - ./config/${account.name}.json:/run/hosted-workspace.json:ro
       - ${secrets}/app-password:/run/secrets/kanna_password:ro
     expose:
@@ -592,6 +598,7 @@ ${outboundProxyEnvironment}
     volumes:
       - ${state}/workspace:/workspace
       - ${state}/ssh-home:/home/workspace
+      - ${deviceKeys}:/run/remote-workspace-device-keys:ro
       - ${state}/ssh-host-ed25519:/etc/ssh/hostkeys/ssh_host_ed25519_key:ro
       - ${state}/ssh-host-ed25519.pub:/etc/ssh/hostkeys/ssh_host_ed25519_key.pub:ro
       - ${secrets}/authorized_keys:/run/authorized_keys:ro

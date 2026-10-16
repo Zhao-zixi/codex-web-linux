@@ -813,6 +813,7 @@ export function startLocalSyncServer(helper: RemoteWorkspaceSyncHelper) {
   server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
+    idleTimeout: 255,
     fetch: (request) => helper.handle(request, server.port, server.requestIP(request)?.address),
   })
   const localUrl = `http://127.0.0.1:${server.port}/#${helper.token}`

@@ -68,6 +68,32 @@ describe("local sync helper server", () => {
     }
   })
 
+  test("keeps a real local control request open beyond Bun's default timeout", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "kanna-sync-timeout-test-"))
+    roots.push(root)
+    const originalNoOpen = process.env.KANNA_SYNC_NO_OPEN
+    process.env.KANNA_SYNC_NO_OPEN = "1"
+    const helper = new RemoteWorkspaceSyncHelper("https://workspace.example.test", path.join(root, "data"))
+    await helper.initialize()
+    ;(helper as unknown as { control: () => Promise<unknown> }).control = async () => {
+      await Bun.sleep(10_500)
+      return { phase: "ready" }
+    }
+    const { server, localUrl } = startLocalSyncServer(helper)
+    const url = new URL(localUrl)
+    try {
+      const response = await fetch(`${url.origin}/api/open-kanna`, {
+        method: "POST",
+        headers: { Host: url.host, Origin: url.origin, "X-Kanna-Token": url.hash.slice(1) },
+      })
+      expect(response.status).toBe(200)
+    } finally {
+      server.stop(true)
+      if (originalNoOpen === undefined) delete process.env.KANNA_SYNC_NO_OPEN
+      else process.env.KANNA_SYNC_NO_OPEN = originalNoOpen
+    }
+  }, 20_000)
+
   test("binds authenticated API calls to the exact loopback host and origin", async () => {
     const { helper, server, url } = await createHelper()
     try {
